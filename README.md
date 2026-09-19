@@ -6,8 +6,8 @@
 > (a disconnecting client could crash the whole process), and a git
 > ref/remote argument-injection fix (a workspace source ref could reach
 > git's own option parser and run a program on the control-plane host). See
-> `SECOND-REVIEW.md` and `CHANGELOG.md` for the full history, including the
-> known issues carried into this RC.
+> `docs/SECOND-REVIEW.md` and `CHANGELOG.md` for the full history, including
+> the known issues carried into this RC.
 
 
 v0.9 is the **release-hardening** release. It keeps the distributed control-plane work from v0.8 and closes the two largest correctness gaps identified by the backward code review: stale agent writers are now hard-fenced at persistence time, and PostgreSQL lease expiry is decided with the database clock rather than a worker-supplied timestamp.
@@ -139,15 +139,17 @@ npm run live:proof
 
 For the design and failure rules, read:
 
-1. `ARCHITECTURE.md`
-2. `DISTRIBUTED.md`
-3. `HARDENING.md`
-4. `POSTGRES.md`
-5. `RECOVERY.md`
-6. `CODE-REVIEW.md`
-7. `RELEASE-GATE.md`
+1. `docs/ARCHITECTURE.md`
+2. `docs/DISTRIBUTED.md`
+3. `docs/HARDENING.md`
+4. `docs/POSTGRES.md`
+5. `docs/RECOVERY.md`
+6. `docs/CODE-REVIEW.md`
+7. `docs/RELEASE-GATE.md`
 
-All prior release documentation, including the v0.8 root Markdown set, is retained under `docs/history/`. `docs/MARKDOWN-MANIFEST.md` lists every Markdown file in the package.
+`docs/` holds every other design/subsystem doc (see `docs/README.md` for the
+full index). All prior release documentation (the v0.1–v0.8 root Markdown
+sets) is retained under `docs/history/` for archival reference.
 
 ## Release status
 
@@ -156,7 +158,7 @@ independent audit passes, verified live: real PostgreSQL concurrency and
 fencing, a real pinned Pi checkout E2E, a real Kubernetes + gVisor pod-kill,
 and a full external-provider matrix (abort-survival, continuations, tool
 calls, concurrency) against a live subscription-backed gateway — see
-`RELEASE-GATE.md` for the checklist and `CHANGELOG.md` for what was fixed
+`docs/RELEASE-GATE.md` for the checklist and `CHANGELOG.md` for what was fixed
 and what remains as a known, non-blocking gap (per-process-only rate
 limiting, a chaos-testing coverage gap, and a few defense-in-depth items).
 Remaining work before a GA `1.0.0` tag is operational hardening for a
