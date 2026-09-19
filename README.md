@@ -1,4 +1,18 @@
-# Synth Agent Runtime 1.0.0-rc.1
+# Synth Agent Runtime
+
+Synth Agent Runtime is a distributed runtime for autonomous AI agents. It
+gives agent state a durable, crash-safe control plane (in-memory, JSON-file,
+PostgreSQL, or Temporal-backed) with lease-based ownership and hard
+write-fencing, a choice of execution backends (in-memory for tests,
+Kubernetes + gVisor-sandboxed pods for real untrusted workloads), and an
+OpenAI Chat Completions / Responses-compatible inference gateway with
+streaming, tool calls, and multi-turn continuations. The core guarantee: a
+stale worker, a killed pod, or a network partition can never silently
+corrupt agent state or double-execute an effect — the current lease holder
+is the only writer that can durably commit, and every other write is
+rejected, not raced.
+
+**Current version: `1.0.0-rc.1`.**
 
 > **Release-candidate status.** This tree folds together the external v0.9
 > audit fixes, the second review's cross-replica race fixes (atomic agent
@@ -10,9 +24,7 @@
 > the known issues carried into this RC.
 
 
-v0.9 is the **release-hardening** release. It keeps the distributed control-plane work from v0.8 and closes the two largest correctness gaps identified by the backward code review: stale agent writers are now hard-fenced at persistence time, and PostgreSQL lease expiry is decided with the database clock rather than a worker-supplied timestamp.
-
-The central invariant is now:
+The central invariant:
 
 ```text
 agent lease generation N
@@ -37,7 +49,7 @@ PostgresPersistence.putAgentFenced()
 
 A stale worker can still exist as a process, but it cannot publish a later terminal `AgentSnapshot` after a newer lease generation has taken ownership.
 
-## What changed in v0.9
+## Agent-state fencing
 
 ### Hard agent-state fencing
 
