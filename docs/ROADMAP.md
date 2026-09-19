@@ -12,6 +12,7 @@ The next milestone is not another broad runtime abstraction layer. It is a GA ha
 4. **Per-record task/artifact CAS.** Extend revision/compare-and-swap ownership rules to individual task/artifact records, which are currently last-write-wins bodies (project membership/decisions already have CAS).
 5. **Continuation retention/encryption policy.** Add size limits, encryption/retention policy, and cleanup scheduling for Responses continuation state; TTL already exists.
 6. **Production IAM + durable audit.** A real identity provider, scoped secret handling, and a durable audit sink to replace the reference `StaticBearerAuthenticator`.
+7. **Safe event-retention watermark.** Wire the durable event log's `pruneEvents(throughSeq)` to mailbox named-consumer ACK cursors so `throughSeq` is computed from consumers' actual read positions instead of being caller-supplied — see `docs/CODE-REVIEW.md`.
 
 ## Release criterion
 

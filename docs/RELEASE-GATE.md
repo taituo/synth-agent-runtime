@@ -31,7 +31,11 @@ The release question is no longer "can a stale replica overwrite the current age
 [ ] soak test with forced worker/provider/pod restarts
 [ ] production IAM + shared rate limiting + durable audit — tenant rate
     limiting is currently per-process only, see CHANGELOG known issues
-[x] durable named event-consumer ACK + safe retention watermark
+[ ] durable named event-consumer ACK + safe retention watermark — mailbox
+    delivery has named-consumer ACK cursors, and the event log has a
+    working `pruneEvents(throughSeq)` primitive, but the two are not wired
+    together: `throughSeq` is caller-supplied, so nothing today stops a
+    caller from pruning events a lagging named consumer hasn't read yet
 [ ] task/artifact per-record revision/CAS or equivalent ownership rule
 [ ] continuation size, encryption, retention, and cleanup policy
 ```

@@ -70,7 +70,7 @@ Terminal agent state is hard-fenced. Streaming output/tool events are still an e
 
 ### Event retention has no durable named-consumer watermark registry
 
-**Resolved, see `docs/RELEASE-GATE.md`** ("durable named event-consumer ACK + safe retention watermark" is checked off as closed for this RC). At the time this review was written, `afterSeq` reads and pruning existed but there was no global safe-prune calculation across named durable consumers.
+**Still open, see `docs/RELEASE-GATE.md`.** Mailbox delivery has named-consumer ACK cursors (`MailboxStore`/`synth_mailbox_cursors`), and the event log has a working `pruneEvents(throughSeq)` primitive, but the two are not wired together: `throughSeq` is caller-supplied, so nothing today computes a safe watermark from active named consumers' actual read positions before pruning. A caller could prune events a lagging consumer hasn't read yet.
 
 ### Task/artifact records are last-write-wins
 

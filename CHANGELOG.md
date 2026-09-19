@@ -41,6 +41,11 @@
   `InMemoryTenantRateLimitPolicy`) is per-process only; there is no
   distributed counterpart, so a tenant's effective limit scales with
   replica count in a horizontally-scaled gateway deployment.
+- The durable event log's `pruneEvents(throughSeq)` is not wired to
+  mailbox named-consumer ACK cursors: `throughSeq` is caller-supplied, so
+  nothing today computes a safe watermark from consumers' actual read
+  positions before pruning. A caller could prune events a lagging
+  consumer hasn't read yet. See `docs/RELEASE-GATE.md`.
 - Project-cell service pods (`buildProjectServicePod` in
   `src/execution/kubernetes/manifests.ts`) have no `runtimeClassName` field
   and never run under gVisor, unlike sandbox executor pods.
