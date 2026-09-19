@@ -114,10 +114,10 @@ export const FAULT_MATRIX: readonly FaultRow[] = [
     id: "worker-sigkill-mid-turn",
     category: "temporal",
     fault: "worker process SIGKILLed while a turn is in flight",
-    synthetic: "UNPROVEN (planned Track 6)",
-    real: "UNPROVEN (planned Track 6)",
+    synthetic: "activity retried after heartbeat timeout; abandoned attempt never reported success",
+    real: "activity retried after heartbeat timeout; abandoned attempt never reported success",
     differentiates: false,
-    evidence: "NOT COVERED: planned Track 6 (root process-crash.test.ts covers the runtime, not a Temporal worker restart)",
+    evidence: "EXECUTED 2026-09-19: integrations/temporal/restart-worker.ts (attempts [1,2], result recovered)",
   },
   {
     id: "two-workers-race",
