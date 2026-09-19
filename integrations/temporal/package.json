@@ -14,6 +14,7 @@
     "live:corpus": "tsx corpus-inference-driver.ts",
     "live:mailbox-property": "tsx mailbox-property-driver.ts",
     "live:replay": "tsx replay-determinism.ts",
+    "live:phases": "tsx phase-signals-driver.ts",
     "live:flaky-gateway": "tsx flaky-gateway.ts"
   },
   "dependencies": {
