@@ -12,6 +12,7 @@
     "live:swarm-inference": "tsx swarm-inference-driver.ts",
     "live:park": "tsx park-live.ts",
     "live:corpus": "tsx corpus-inference-driver.ts",
+    "live:mailbox-property": "tsx mailbox-property-driver.ts",
     "live:flaky-gateway": "tsx flaky-gateway.ts"
   },
   "dependencies": {
