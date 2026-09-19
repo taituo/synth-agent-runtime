@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ExecutionBroker, installPostgresSchema, PostgresPersistence, } from "../src/index.js";
+import { canReplaceEffect, ExecutionBroker, installPostgresSchema, PostgresPersistence, } from "../src/index.js";
 class FakePg {
     commands = new Map();
     effects = new Map();
@@ -37,7 +37,12 @@ class FakePg {
             return { rows: body ? [{ body }] : [] };
         }
         if (sql.startsWith("INSERT INTO synth_effects")) {
-            this.effects.set(String(values[0]), JSON.parse(String(values[3])));
+            const id = String(values[0]);
+            const next = JSON.parse(String(values[3]));
+            const existing = this.effects.get(id);
+            // Honor the WHERE clause on the upsert (canReplaceEffect semantics).
+            if (!existing || canReplaceEffect(existing, next))
+                this.effects.set(id, next);
             return { rows: [] };
         }
         throw new Error(`FakePg does not implement SQL: ${sql}`);
@@ -65,6 +70,16 @@ test("Postgres effect claim prevents duplicate executor calls", async () => {
     const two = await brokerB.execute(effect, context);
     assert.equal(executions, 1);
     assert.deepEqual(two, one);
+});
+test("Postgres effect upsert cannot regress a committed receipt", async () => {
+    const db = new FakePg();
+    const store = new PostgresPersistence(db);
+    await store.putEffect({ id: "e1", kind: "workflow.run", status: "started", startedAt: 1, updatedAt: 1 });
+    await store.putEffect({ id: "e1", kind: "workflow.run", status: "committed", startedAt: 1, updatedAt: 2, result: { ok: true, output: "done" } });
+    await store.putEffect({ id: "e1", kind: "workflow.run", status: "started", startedAt: 1, updatedAt: 3, error: "pending:x" });
+    const after = await store.getEffect("e1");
+    assert.equal(after?.status, "committed");
+    assert.deepEqual(after?.result, { ok: true, output: "done" });
 });
 test("schema install takes a transaction-scoped advisory lock before any DDL", async () => {
     // Regression for a real race found under 256-way concurrent bootstrap on

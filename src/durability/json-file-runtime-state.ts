@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { WorkspaceId } from "../core/ids.js";
-import { canReplaceCommand, type DurableCommandRecord,
+import { canReplaceCommand, canReplaceEffect, type DurableCommandRecord,
   DurableEffectRecord,
   DurableTurnRecord,
   DurableWorkspaceCheckpoint,
@@ -62,7 +62,9 @@ export class JsonFileRuntimeStateStore implements RuntimeStateStore {
   }
 
   async putEffect(record: DurableEffectRecord): Promise<void> {
-    await this.#mutate((state) => { state.effects[record.id] = structuredClone(record); });
+    await this.#mutate((state) => {
+      if (canReplaceEffect(state.effects[record.id], record)) state.effects[record.id] = structuredClone(record);
+    });
   }
 
   async getEffect(id: string): Promise<DurableEffectRecord | undefined> {

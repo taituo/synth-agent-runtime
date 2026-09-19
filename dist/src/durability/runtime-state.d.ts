@@ -65,3 +65,16 @@ export interface RuntimeStateStore {
 }
 /** Prevent stale lease generations or non-terminal writes from regressing committed commands. */
 export declare function canReplaceCommand(existing: DurableCommandRecord | undefined, next: DurableCommandRecord): boolean;
+/**
+ * Prevent a resolved effect receipt from being regressed by a stale or
+ * uncertain writer.
+ *
+ * Effects carry no fencing token (unlike commands), so the only ordering
+ * guarantee available is terminal-status monotonicity: a committed receipt can
+ * only be replaced by another committed receipt, and a failed receipt cannot
+ * be regressed to started. Without this, a slow reconciler that returns
+ * `pending` can overwrite a concurrent `committed` resolution, silently
+ * discarding the effect result and leaving the broker to report
+ * `EFFECT_OUTCOME_UNCERTAIN` for an effect that already succeeded.
+ */
+export declare function canReplaceEffect(existing: DurableEffectRecord | undefined, next: DurableEffectRecord): boolean;

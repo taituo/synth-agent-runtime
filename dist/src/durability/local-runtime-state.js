@@ -1,4 +1,4 @@
-import { canReplaceCommand, } from "./runtime-state.js";
+import { canReplaceCommand, canReplaceEffect, } from "./runtime-state.js";
 export class LocalRuntimeStateStore {
     #commands = new Map();
     #workspaces = new Map();
@@ -41,7 +41,9 @@ export class LocalRuntimeStateStore {
             .map((value) => structuredClone(value));
     }
     async putEffect(record) {
-        this.#effects.set(record.id, structuredClone(record));
+        const existing = this.#effects.get(record.id);
+        if (canReplaceEffect(existing, record))
+            this.#effects.set(record.id, structuredClone(record));
     }
     async getEffect(id) {
         const value = this.#effects.get(id);

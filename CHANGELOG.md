@@ -2,6 +2,33 @@
 
 ## 1.0.0-rc.1 — abort-safety fix folded in, git ref/remote argument-injection fixed
 
+### Effect receipts are now monotonic; a resolved effect can no longer be regressed
+
+- **`putEffect` had no regression guard** (`src/durability/runtime-state.ts`,
+  `src/durability/local-runtime-state.ts`,
+  `src/durability/json-file-runtime-state.ts`,
+  `src/postgres/persistence.ts`). Commands were already protected against
+  terminal-status regression by `canReplaceCommand`, but effects were not:
+  `DurableEffectRecord` carries no fencing token, so terminal-status
+  monotonicity is the only ordering guarantee available, and every store
+  wrote effect receipts last-write-wins. A slow `EffectReconciler` that
+  returns `pending`/`unknown` writes `status: "started"`, so it could
+  overwrite a concurrent `committed` resolution and silently discard the
+  effect result; `ExecutionBroker.execute` would then report
+  `EFFECT_OUTCOME_UNCERTAIN` for an effect that had already succeeded (and
+  across replicas the receipt could flap). A `failed` receipt could likewise
+  be regressed to `started`. Fixed by adding `canReplaceEffect` (a committed
+  receipt may only be replaced by another committed receipt; a failed
+  receipt may not become started) and enforcing it in the local, JSON-file,
+  and PostgreSQL stores — the PostgreSQL upsert gains the matching `WHERE`
+  clause. Verified failing-first: before the fix, a store-level
+  `committed` → `started` write and a slow-`pending` reconciler racing a
+  fast committed one both left the receipt at `started` with the result
+  lost; both are now covered by tests (plus a concurrent-reconciler race
+  test with a deterministic gated probe).
+
+Root suite: 89/89 (86 + 3 new tests).
+
 ### ProjectCellManager concurrency and cleanup fixes; gVisor + non-root user support for project-cell services
 
 - **Concurrent `ensure`/`lease`/`reap`/`destroy` for the same cell id

@@ -174,9 +174,14 @@ export class PostgresPersistence implements DurabilityProvider, RuntimeStateStor
   }
 
   async putEffect(record: DurableEffectRecord): Promise<void> {
+    // Mirrors canReplaceEffect: a committed receipt may only be replaced by
+    // another committed receipt, and a failed receipt cannot be regressed to
+    // started by a stale/uncertain writer.
     await this.db.query(
       `INSERT INTO synth_effects(id,status,kind,body,updated_at) VALUES ($1,$2,$3,$4::jsonb,now())
-       ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status, kind=EXCLUDED.kind, body=EXCLUDED.body, updated_at=now()`,
+       ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status, kind=EXCLUDED.kind, body=EXCLUDED.body, updated_at=now()
+       WHERE NOT (synth_effects.status='committed' AND EXCLUDED.status<>'committed')
+         AND NOT (synth_effects.status='failed' AND EXCLUDED.status='started')`,
       [record.id, record.status, record.kind, encode(record)],
     );
   }

@@ -1,5 +1,5 @@
 import type { WorkspaceId } from "../core/ids.js";
-import { canReplaceCommand, type DurableCommandRecord,
+import { canReplaceCommand, canReplaceEffect, type DurableCommandRecord,
   DurableEffectRecord,
   DurableTurnRecord,
   DurableWorkspaceCheckpoint,
@@ -57,7 +57,8 @@ export class LocalRuntimeStateStore implements RuntimeStateStore {
   }
 
   async putEffect(record: DurableEffectRecord): Promise<void> {
-    this.#effects.set(record.id, structuredClone(record));
+    const existing = this.#effects.get(record.id);
+    if (canReplaceEffect(existing, record)) this.#effects.set(record.id, structuredClone(record));
   }
 
   async getEffect(id: string): Promise<DurableEffectRecord | undefined> {

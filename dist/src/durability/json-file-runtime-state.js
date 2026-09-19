@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { canReplaceCommand, } from "./runtime-state.js";
+import { canReplaceCommand, canReplaceEffect, } from "./runtime-state.js";
 const EMPTY = () => ({ commands: {}, workspaces: {}, turns: {}, effects: {} });
 /**
  * Small crash-safe runtime state store for a single control-plane process.
@@ -41,7 +41,10 @@ export class JsonFileRuntimeStateStore {
             .map((record) => structuredClone(record));
     }
     async putEffect(record) {
-        await this.#mutate((state) => { state.effects[record.id] = structuredClone(record); });
+        await this.#mutate((state) => {
+            if (canReplaceEffect(state.effects[record.id], record))
+                state.effects[record.id] = structuredClone(record);
+        });
     }
     async getEffect(id) {
         const value = (await this.#read()).effects[id];

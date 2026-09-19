@@ -153,6 +153,50 @@ test("effect reconciler resolves uncertain receipt without replay", async () => 
   assert.equal((await state.getEffect(effect.id))?.status, "committed");
 });
 
+test("effect receipts are monotonic: a resolved receipt cannot be regressed", async () => {
+  const state = new LocalRuntimeStateStore();
+  await state.putEffect({ id: "e-regress", kind: "workflow.run", status: "started", startedAt: 1, updatedAt: 1 });
+  await state.putEffect({ id: "e-regress", kind: "workflow.run", status: "committed", startedAt: 1, updatedAt: 2, result: { ok: true, output: "done" } });
+  await state.putEffect({ id: "e-regress", kind: "workflow.run", status: "started", startedAt: 1, updatedAt: 3, error: "pending:x" });
+  await state.putEffect({ id: "e-regress", kind: "workflow.run", status: "failed", startedAt: 1, updatedAt: 4, error: "boom" });
+  const after = await state.getEffect("e-regress");
+  assert.equal(after?.status, "committed");
+  assert.deepEqual(after?.result, { ok: true, output: "done" });
+
+  await state.putEffect({ id: "e-failed", kind: "workflow.run", status: "failed", startedAt: 1, updatedAt: 1, error: "boom" });
+  await state.putEffect({ id: "e-failed", kind: "workflow.run", status: "started", startedAt: 1, updatedAt: 2, error: "pending:x" });
+  assert.equal((await state.getEffect("e-failed"))?.status, "failed");
+});
+
+test("concurrent effect reconcilers cannot discard a committed resolution", async () => {
+  const state = new LocalRuntimeStateStore();
+  const effect: Effect = { id: "deploy-race", kind: "workflow.run", name: "deploy", input: {} };
+  await state.putEffect({ id: effect.id, kind: effect.kind, status: "started", startedAt: 1, updatedAt: 1, error: "uncertain:connection lost" });
+
+  let releaseSlow!: () => void;
+  const slowGate = new Promise<void>((resolve) => { releaseSlow = resolve; });
+  const slow = new EffectReconciler(state, [{
+    supports: () => true,
+    async reconcile() { await slowGate; return { status: "pending", detail: "probe timed out" } as const; },
+  }]);
+  const fast = new EffectReconciler(state, [{
+    supports: () => true,
+    async reconcile() { return { status: "committed", result: { ok: true, output: { deploymentId: "d1" } } } as const; },
+  }]);
+
+  const slowRun = slow.reconcile(effect, { agentId: "a" as any, workspaceId: "w" as any });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const fastOutcome = await fast.reconcile(effect, { agentId: "a" as any, workspaceId: "w" as any });
+  releaseSlow();
+  const slowOutcome = await slowRun;
+
+  assert.equal(fastOutcome.status, "committed");
+  assert.equal(slowOutcome.status, "pending");
+  const final = await state.getEffect(effect.id);
+  assert.equal(final?.status, "committed", "a slow pending reconciler must not regress a committed receipt");
+  assert.deepEqual(final?.result, { ok: true, output: { deploymentId: "d1" } });
+});
+
 test("continuation store isolates tenant continuation ids", async () => {
   const store = new InMemoryContinuationStore<{ value: string }>();
   await store.putContinuation({ id: "r1", tenantId: "t1", value: { value: "secret" }, createdAt: Date.now(), expiresAt: Date.now() + 10000 });
