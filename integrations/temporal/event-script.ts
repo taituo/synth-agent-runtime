@@ -167,3 +167,94 @@ export function isDeterministicReplay(a: ScriptedRun, b: ScriptedRun): boolean {
     JSON.stringify(a.processed) === JSON.stringify(b.processed)
   );
 }
+
+/**
+ * Event streams for the REAL-inference swarm. Unlike `SWARM_SCRIPTS` (whose
+ * short texts are ambiguous to a real model, e.g. "status page updated"), each
+ * text here has one defensible class, so a model's answer can be scored against
+ * the planted `kind`. The kind is never shown to the model.
+ */
+export const INFERENCE_SWARM_SCRIPTS: readonly SwarmScript[] = [
+  {
+    name: "desk",
+    script: [
+      { delayMs: 0, kind: "news", text: "Reuters: central bank holds interest rates steady, citing cooling inflation." },
+      { delayMs: 250, kind: "social_post", text: "omg just saw the new phone in the store, the camera is INSANE #unboxing" },
+      { delayMs: 250, kind: "incident", text: "ALERT: checkout service returning HTTP 503 for 62% of requests since 14:02 UTC, on-call paged." },
+      { delayMs: 400, kind: "news", text: "Company confirms quarterly earnings will be released next Tuesday after market close." },
+    ],
+  },
+  {
+    name: "ops",
+    script: [
+      { delayMs: 0, kind: "incident", text: "PagerDuty: database primary failover triggered, replication lag at 90 seconds." },
+      { delayMs: 250, kind: "incident", text: "ALERT: disk usage at 98% on log-ingest-3, writes are failing." },
+      { delayMs: 250, kind: "news", text: "AP: regulators publish new guidance on data retention requirements for cloud providers." },
+      { delayMs: 300, kind: "incident", text: "ALERT: TLS certificate for api.example.com expires in 2 hours and automatic renewal is failing." },
+    ],
+  },
+  {
+    name: "feed",
+    script: [
+      { delayMs: 0, kind: "social_post", text: "lol my cat just knocked the router off the shelf again #catsofinstagram" },
+      { delayMs: 300, kind: "social_post", text: "anyone else think this new season is way better than the last one?? fight me #tvtwitter" },
+      { delayMs: 300, kind: "news", text: "BBC: storm warning issued for coastal regions ahead of the weekend." },
+      { delayMs: 300, kind: "social_post", text: "just ran my first 10k!!! so proud of myself #running" },
+    ],
+  },
+];
+
+/** Structural subset of a gateway turn record needed for scoring. */
+export interface ScorableTurn {
+  plantedKinds: ReadonlyArray<string | null>;
+  classifications: ReadonlyArray<{ classification: string }>;
+}
+
+export interface ClassificationMismatch {
+  index: number;
+  text: string;
+  planted: string;
+  got: string;
+}
+
+export interface ScriptScore {
+  /** Events the script contained. */
+  expected: number;
+  /** Events the turns actually classified. */
+  classified: number;
+  correct: number;
+  /** correct / expected (0 when the script is empty). */
+  accuracy: number;
+  mismatches: ClassificationMismatch[];
+  /**
+   * True when the turns, concatenated in order, covered exactly the script's
+   * events in order: nothing lost, duplicated or reordered by batching.
+   */
+  orderOk: boolean;
+}
+
+/** Scores an agent's turns (in completion order) against its planted script. */
+export function scoreAgainstScript(script: readonly ScriptedEvent[], turns: readonly ScorableTurn[]): ScriptScore {
+  const plantedFlat = turns.flatMap((turn) => [...turn.plantedKinds]);
+  const gotFlat = turns.flatMap((turn) => turn.classifications.map((entry) => entry.classification));
+  const orderOk =
+    plantedFlat.length === script.length &&
+    script.every((event, index) => plantedFlat[index] === event.kind) &&
+    gotFlat.length === plantedFlat.length;
+
+  const mismatches: ClassificationMismatch[] = [];
+  let correct = 0;
+  script.forEach((event, index) => {
+    const got = gotFlat[index];
+    if (got === event.kind) correct++;
+    else mismatches.push({ index, text: event.text, planted: event.kind, got: got ?? "(missing)" });
+  });
+  return {
+    expected: script.length,
+    classified: gotFlat.length,
+    correct,
+    accuracy: script.length === 0 ? 0 : correct / script.length,
+    mismatches,
+    orderOk,
+  };
+}

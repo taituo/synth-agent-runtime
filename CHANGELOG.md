@@ -2,6 +2,56 @@
 
 ## 1.0.0-rc.1 — abort-safety fix folded in, git ref/remote argument-injection fixed
 
+### Swarm against real inference, with injected faults
+
+- **The swarm had only ever run against an instant echo stub.** The typed-event
+  swarm proved the Temporal plumbing (signals, per-instance workflows,
+  correlation isolation) but never put a real model behind `runTurn`, so slow
+  inference, batching, and inference failure were all untested. Added
+  `createGatewayRunTurn` (`integrations/temporal/src/gateway-run-turn.ts`), a
+  `runTurn` activity that classifies each event in the turn's batch through any
+  OpenAI-compatible gateway. The typed `kind` is never sent to the model, so it
+  stays a planted ground truth to score against. The activity heartbeats while
+  it waits (the workflow sets a 1-minute heartbeat timeout and a reasoning model
+  takes 8-14 s per call), aborts calls that outlive a timeout, and throws on any
+  HTTP error, empty completion or structurally invalid answer so Temporal's
+  retry policy decides what happens next. Seven unit tests cover the request
+  shape, kind-hiding (verified by mutation: leaking the kind into the prompt
+  fails two tests), fenced/prosey JSON, the error paths, heartbeat and timeout.
+- **`swarm-inference-driver.ts`** runs three concurrent agents (12 events) with
+  real model calls through this repo's gateway and scores the result: per-event
+  accuracy against the planted kind, no event lost/duplicated/reordered by
+  batching, empty mailbox and no error at the end, and the same correlation
+  isolation checks as the stub swarm. Because a model call is far slower than
+  the 200-400 ms between events, events pile up during a turn and are taken as
+  a batch by the next one (every agent ran `[1, 3]`), which is exactly the
+  mid-turn-arrival case the earlier mailbox fix had to get right.
+  Live result, three runs against the OpenCode-backed gateway
+  (`muse-spark-1.3-contributor`): 36/36 classifications correct, 0 retries,
+  6 model calls and ~5.2k tokens per run, 13-16 s wall-clock. The scripts use
+  deliberately unambiguous texts, so 100% accuracy is a floor check, not a
+  measure of model quality; the gate is 75% because a real model may disagree.
+- **`flaky-gateway.ts`** is a fault-injecting reverse proxy for a real gateway
+  (HTTP 502, HTTP 200 with a non-JSON reply, or a request that never answers),
+  so failure handling is exercised with genuine HTTP faults rather than mocks.
+  Live through Temporal: two injected 502s and two injected garbage replies were
+  each retried and recovered (2 retried turns, all 12 events classified); one
+  hung request was aborted by a 25 s call timeout and retried (1 retry,
+  recovered); with every request failing, all three agents ended `failed` after
+  three attempts each, reported the real cause (`gateway returned HTTP 502`),
+  and the driver returned in 4 s instead of hanging.
+- **Known limitation, found by this work and not changed here:** an agent whose
+  inference exhausts the workflow's retry policy ends permanently `failed`.
+  For a long-lived agent that means a short provider outage kills it. The same
+  thing happens if the per-call timeout is set below real model latency
+  (verified: `GATEWAY_TIMEOUT_MS=3000` against ~8 s calls failed all three
+  agents in 12 s). Whether a
+  failed turn should instead park the agent as `waiting` and retry later is a
+  workflow-semantics decision.
+- Also removed `integrations/temporal/dist/` from version control (it had been
+  committed by accident in an earlier commit and was already stale) and
+  ignored `integrations/*/dist/`.
+
 ### Small concurrent swarm with correlation-isolation proof
 
 - **Concurrent durable agents had never been checked for telemetry

@@ -3,10 +3,12 @@ import assert from "node:assert/strict";
 import type { DurableAgentState } from "../src/contracts.js";
 import {
   EVENT_SCRIPT,
+  INFERENCE_SWARM_SCRIPTS,
   SWARM_SCRIPTS,
   isDeterministicReplay,
   logCorrelationViolations,
   projectFinalState,
+  scoreAgainstScript,
   sequenceFromTrace,
   swarmIsolationViolations,
   type TraceLikeEvent,
@@ -127,4 +129,57 @@ test("isDeterministicReplay compares final state and processed sequence", () => 
     isDeterministicReplay(a, { final: { ...final, lastResult: "echo:other" }, processed: ["news", "incident"] }),
     false,
   );
+});
+
+
+test("INFERENCE_SWARM_SCRIPTS keeps the swarm small and every event typed", () => {
+  assert.ok(INFERENCE_SWARM_SCRIPTS.length >= 2 && INFERENCE_SWARM_SCRIPTS.length <= 3);
+  for (const entry of INFERENCE_SWARM_SCRIPTS) {
+    assert.ok(entry.script.length >= 3 && entry.script.length <= 5);
+    assert.ok(entry.script.every((event) => ["news", "social_post", "incident"].includes(event.kind)));
+  }
+});
+
+test("scoreAgainstScript scores batched turns, listing mismatches with their text", () => {
+  const script = [
+    { delayMs: 0, kind: "news", text: "a" },
+    { delayMs: 0, kind: "incident", text: "b" },
+    { delayMs: 0, kind: "social_post", text: "c" },
+  ];
+  // Two turns: the first took one event, the second took the other two as a batch.
+  const perfect = scoreAgainstScript(script, [
+    { plantedKinds: ["news"], classifications: [{ classification: "news" }] },
+    { plantedKinds: ["incident", "social_post"], classifications: [{ classification: "incident" }, { classification: "social_post" }] },
+  ]);
+  assert.equal(perfect.accuracy, 1);
+  assert.equal(perfect.orderOk, true);
+
+  const wrong = scoreAgainstScript(script, [
+    { plantedKinds: ["news"], classifications: [{ classification: "news" }] },
+    { plantedKinds: ["incident", "social_post"], classifications: [{ classification: "news" }, { classification: "social_post" }] },
+  ]);
+  assert.equal(wrong.correct, 2);
+  assert.deepEqual(wrong.mismatches, [{ index: 1, text: "b", planted: "incident", got: "news" }]);
+  assert.equal(wrong.orderOk, true, "a wrong answer is not an ordering fault");
+});
+
+test("scoreAgainstScript flags lost, duplicated and reordered events", () => {
+  const script = [
+    { delayMs: 0, kind: "news", text: "a" },
+    { delayMs: 0, kind: "incident", text: "b" },
+  ];
+  const lost = scoreAgainstScript(script, [{ plantedKinds: ["news"], classifications: [{ classification: "news" }] }]);
+  assert.equal(lost.orderOk, false);
+  assert.equal(lost.mismatches[0]!.got, "(missing)");
+
+  const duplicated = scoreAgainstScript(script, [
+    { plantedKinds: ["news", "news"], classifications: [{ classification: "news" }, { classification: "news" }] },
+    { plantedKinds: ["incident"], classifications: [{ classification: "incident" }] },
+  ]);
+  assert.equal(duplicated.orderOk, false);
+
+  const reordered = scoreAgainstScript(script, [
+    { plantedKinds: ["incident", "news"], classifications: [{ classification: "incident" }, { classification: "news" }] },
+  ]);
+  assert.equal(reordered.orderOk, false);
 });

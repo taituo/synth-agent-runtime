@@ -13,6 +13,7 @@ import { Context as ActivityContext, log as activityLog } from "@temporalio/acti
 import { Client, Connection } from "@temporalio/client";
 import { DefaultLogger, Runtime } from "@temporalio/worker";
 import { cancelAgent, durableAgentWorkflow, getAgentState, sendMessage } from "./src/workflows.js";
+import type { AgentActivities } from "./src/contracts.js";
 import { runTemporalWorker } from "./src/worker.js";
 import {
   projectFinalState,
@@ -38,6 +39,8 @@ export interface StartEventRunnerOptions {
   taskQueue?: string;
   /** Wait after starting the worker before connecting (default 2500ms). */
   warmupMs?: number;
+  /** Activities the worker runs. Defaults to the instant echo stub. */
+  activities?: AgentActivities;
 }
 
 const activities = {
@@ -69,7 +72,7 @@ export async function startEventRunner(options: StartEventRunnerOptions = {}): P
   void runTemporalWorker({
     workflowsPath: fileURLToPath(new URL("./src/workflows.ts", import.meta.url)),
     workflowInterceptorModules: [fileURLToPath(new URL("./src/workflow-interceptors.ts", import.meta.url))],
-    activities,
+    activities: options.activities ?? activities,
     taskQueue,
     address,
     namespace,
