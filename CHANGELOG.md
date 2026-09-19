@@ -2,6 +2,24 @@
 
 ## 1.0.0-rc.1 — abort-safety fix folded in, git ref/remote argument-injection fixed
 
+### Shared (cross-replica) tenant rate limiting
+
+- **Tenant rate limiting was per-process only.** `InMemoryTenantRateLimitPolicy`
+  (`src/inference/gateway/tenant-policy.ts`) kept its window in process memory,
+  so with N gateway replicas each replica enforced the full configured limit
+  and the effective limit multiplied by the replica count. Added a
+  `SharedRateLimitStore` abstraction with `InMemorySharedRateLimitStore`
+  (local/tests) and `PostgresRateLimitStore` (new `synth_rate_limits` table
+  with an atomic per-(tenant, window) upsert), plus
+  `SharedTenantRateLimitPolicy`, which increments the shared counter so a
+  tenant's limit is global across replicas. `InMemoryTenantRateLimitPolicy` is
+  left unchanged for deliberately single-process use. Verified live against
+  PostgreSQL: two store/policy instances sharing one database allowed exactly
+  the configured 5 of 8 requests at `requestsPerMinute: 5`. Regression tests
+  cover the shared policy across two "replicas" and the Postgres store.
+
+Root suite: 95/95 (93 + 2 new tests).
+
 ### Caller-supplied Kubernetes namespaces are validated
 
 - **A caller-supplied namespace reached `kubectl` unvalidated**

@@ -88,6 +88,14 @@ CREATE INDEX IF NOT EXISTS synth_continuations_expiry_idx ON synth_continuations
 CREATE TABLE IF NOT EXISTS synth_route_health (route_key text PRIMARY KEY, body jsonb NOT NULL, updated_at_ms bigint NOT NULL);
 CREATE TABLE IF NOT EXISTS synth_route_affinity (affinity_key text PRIMARY KEY, route_id text NOT NULL, expires_at_ms bigint, updated_at_ms bigint NOT NULL);
 CREATE INDEX IF NOT EXISTS synth_route_affinity_expiry_idx ON synth_route_affinity(expires_at_ms);
+CREATE TABLE IF NOT EXISTS synth_rate_limits (
+  tenant_id text NOT NULL,
+  window_start_ms bigint NOT NULL,
+  count bigint NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (tenant_id, window_start_ms)
+);
+CREATE INDEX IF NOT EXISTS synth_rate_limits_window_idx ON synth_rate_limits(window_start_ms);
 `;
 /**
  * Arbitrary but fixed advisory-lock key for schema install. Every

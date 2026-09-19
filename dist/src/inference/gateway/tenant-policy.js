@@ -53,6 +53,52 @@ export class InMemoryTenantRateLimitPolicy {
             throw new Error(`RATE_LIMITED:${principal.tenantId}`);
     }
 }
+/** Single-process implementation, for local mode and tests. */
+export class InMemorySharedRateLimitStore {
+    #counts = new Map();
+    async increment(tenantId, windowStartMs) {
+        const key = `${tenantId}@${windowStartMs}`;
+        const next = (this.#counts.get(key) ?? 0) + 1;
+        this.#counts.set(key, next);
+        return next;
+    }
+    async prune(beforeMs) {
+        let removed = 0;
+        for (const key of [...this.#counts.keys()]) {
+            const at = Number(key.slice(key.lastIndexOf("@") + 1));
+            if (at < beforeMs) {
+                this.#counts.delete(key);
+                removed++;
+            }
+        }
+        return removed;
+    }
+}
+/**
+ * Tenant rate limiting against a shared counter. Unlike
+ * {@link InMemoryTenantRateLimitPolicy}, which keeps its window per process
+ * (so N replicas allow up to N× the configured limit), every replica here
+ * increments the same store, so the configured limit is global.
+ */
+export class SharedTenantRateLimitPolicy {
+    store;
+    windowMs;
+    now;
+    constructor(store, windowMs = 60_000, now = Date.now) {
+        this.store = store;
+        this.windowMs = windowMs;
+        this.now = now;
+    }
+    async authorize(principal) {
+        const limit = principal.requestsPerMinute;
+        if (!limit || limit <= 0)
+            return;
+        const windowStartMs = Math.floor(this.now() / this.windowMs) * this.windowMs;
+        const count = await this.store.increment(principal.tenantId, windowStartMs);
+        if (count > limit)
+            throw new Error(`RATE_LIMITED:${principal.tenantId}`);
+    }
+}
 export class CompositeTenantPolicy {
     policies;
     constructor(policies) {

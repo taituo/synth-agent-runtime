@@ -9,7 +9,9 @@ import {
   InMemoryLeaseStore,
   InMemoryMailboxStore,
   InMemoryRouterStateStore,
+  InMemorySharedRateLimitStore,
   InMemoryTenantRateLimitPolicy,
+  SharedTenantRateLimitPolicy,
   InMemoryWorldStore,
   LocalMemoryDurability,
   LocalRuntimeStateStore,
@@ -290,4 +292,29 @@ test("gateway enforces bearer auth, model ACL and tenant rate limit", async () =
     assert.equal((await ok.json() as any).tenant, "t1");
     assert.equal((await post("allowed", "token")).status, 429);
   } finally { await gateway.close(); }
+});
+
+test("shared tenant rate limiting enforces one global limit across replicas", async () => {
+  const store = new InMemorySharedRateLimitStore();
+  const replicaA = new SharedTenantRateLimitPolicy(store, 60_000, () => 0);
+  const replicaB = new SharedTenantRateLimitPolicy(store, 60_000, () => 0);
+  const principal = { tenantId: "t-shared", subject: "u", requestsPerMinute: 3 };
+  const attempt = async (policy: SharedTenantRateLimitPolicy) => {
+    try { await policy.authorize(principal); return "ok"; } catch (error) { return (error as Error).message; }
+  };
+  const results = [
+    await attempt(replicaA), await attempt(replicaB), await attempt(replicaA),
+    await attempt(replicaB), await attempt(replicaA),
+  ];
+  assert.deepEqual(results, ["ok", "ok", "ok", "RATE_LIMITED:t-shared", "RATE_LIMITED:t-shared"]);
+
+  // The per-process policy allows the full limit per instance, so N replicas
+  // permit up to N x the configured limit — the reason the shared policy exists.
+  const perProcessA = new InMemoryTenantRateLimitPolicy(() => 0);
+  const perProcessB = new InMemoryTenantRateLimitPolicy(() => 0);
+  let allowed = 0;
+  for (const policy of [perProcessA, perProcessB, perProcessA, perProcessB, perProcessA]) {
+    try { policy.authorize(principal, "m"); allowed++; } catch { /* limited */ }
+  }
+  assert.ok(allowed > principal.requestsPerMinute, `two replicas allowed ${allowed} > limit ${principal.requestsPerMinute}`);
 });

@@ -1,6 +1,7 @@
 import type { AgentId } from "../core/ids.js";
 import type { AgentMessage } from "../core/types.js";
 import type { ContinuationRecord, ContinuationStore } from "../inference/gateway/continuation-store.js";
+import type { SharedRateLimitStore } from "../inference/gateway/tenant-policy.js";
 import type { RouterStateStore, SharedRouteHealth } from "../inference/gateway/router-state.js";
 import type { LeaseClaimResult, LeaseRecord, LeaseStore } from "../control-plane/lease.js";
 import type { MailboxAppendResult, MailboxCursor, MailboxEnvelope, MailboxStore } from "../control-plane/mailbox.js";
@@ -27,4 +28,15 @@ export declare class PostgresDistributedControlStore implements LeaseStore, Mail
     getAffinity(key: string): Promise<string | undefined>;
     putAffinity(key: string, routeId: string, expiresAt?: number): Promise<void>;
     deleteAffinity(key: string): Promise<void>;
+}
+/**
+ * Shared tenant rate-limit counter backed by PostgreSQL. The upsert is atomic,
+ * so multiple gateway replicas increment the same per-(tenant, window) row and
+ * a tenant's configured limit is global rather than per-process.
+ */
+export declare class PostgresRateLimitStore implements SharedRateLimitStore {
+    readonly db: PgExecutor;
+    constructor(db: PgExecutor);
+    increment(tenantId: string, windowStartMs: number): Promise<number>;
+    prune(beforeMs: number): Promise<number>;
 }

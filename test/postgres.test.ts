@@ -5,6 +5,8 @@ import {
   ExecutionBroker,
   installPostgresSchema,
   PostgresPersistence,
+  PostgresRateLimitStore,
+  SharedTenantRateLimitPolicy,
   type Effect,
   type PgExecutor,
   type PgQueryResult,
@@ -13,6 +15,7 @@ import {
 class FakePg implements PgExecutor {
   readonly commands = new Map<string, unknown>();
   readonly effects = new Map<string, unknown>();
+  readonly rateLimits = new Map<string, number>();
 
   async query<Row = Record<string, unknown>>(text: string, values: unknown[] = []): Promise<PgQueryResult<Row>> {
     const sql = text.replace(/\s+/g, " ").trim();
@@ -53,6 +56,21 @@ class FakePg implements PgExecutor {
       if (!existing || canReplaceEffect(existing, next)) this.effects.set(id, next);
       return { rows: [] };
     }
+    if (sql.startsWith("INSERT INTO synth_rate_limits")) {
+      const key = `${values[0]}@${values[1]}`;
+      const next = (this.rateLimits.get(key) ?? 0) + 1;
+      this.rateLimits.set(key, next);
+      return { rows: [{ count: next } as Row] };
+    }
+    if (sql.startsWith("DELETE FROM synth_rate_limits")) {
+      const before = Number(values[0]);
+      let removed = 0;
+      for (const key of [...this.rateLimits.keys()]) {
+        const at = Number(key.slice(key.lastIndexOf("@") + 1));
+        if (at < before) { this.rateLimits.delete(key); removed++; }
+      }
+      return { rows: Array.from({ length: removed }, () => ({ tenant_id: "t" } as Row)) };
+    }
     throw new Error(`FakePg does not implement SQL: ${sql}`);
   }
 }
@@ -80,6 +98,21 @@ test("Postgres effect claim prevents duplicate executor calls", async () => {
   const two = await brokerB.execute(effect, context);
   assert.equal(executions, 1);
   assert.deepEqual(two, one);
+});
+
+test("Postgres rate limit store shares one counter across store instances", async () => {
+  const db = new FakePg();
+  const policyA = new SharedTenantRateLimitPolicy(new PostgresRateLimitStore(db), 60_000, () => 0);
+  const policyB = new SharedTenantRateLimitPolicy(new PostgresRateLimitStore(db), 60_000, () => 0);
+  const principal = { tenantId: "t1", subject: "u", requestsPerMinute: 2 };
+  const attempt = async (policy: SharedTenantRateLimitPolicy) => {
+    try { await policy.authorize(principal); return "ok"; } catch { return "limited"; }
+  };
+  assert.deepEqual(
+    [await attempt(policyA), await attempt(policyB), await attempt(policyA)],
+    ["ok", "ok", "limited"],
+  );
+  assert.equal(await new PostgresRateLimitStore(db).prune(60_000), 1);
 });
 
 test("Postgres effect upsert cannot regress a committed receipt", async () => {

@@ -24,6 +24,36 @@ export declare class InMemoryTenantRateLimitPolicy implements GatewayTenantPolic
     constructor(now?: () => number);
     authorize(principal: GatewayPrincipal, _model: string): void;
 }
+/**
+ * Shared counter backing for tenant rate limiting. Implementations must make
+ * `increment` atomic across replicas (e.g. a single-row upsert), so the
+ * effective limit does not multiply by the number of gateway processes.
+ */
+export interface SharedRateLimitStore {
+    /** Atomically increment and return the count for (tenant, fixed window). */
+    increment(tenantId: string, windowStartMs: number): Promise<number>;
+    /** Optional: remove windows older than `beforeMs`. Returns rows removed. */
+    prune?(beforeMs: number): Promise<number>;
+}
+/** Single-process implementation, for local mode and tests. */
+export declare class InMemorySharedRateLimitStore implements SharedRateLimitStore {
+    #private;
+    increment(tenantId: string, windowStartMs: number): Promise<number>;
+    prune(beforeMs: number): Promise<number>;
+}
+/**
+ * Tenant rate limiting against a shared counter. Unlike
+ * {@link InMemoryTenantRateLimitPolicy}, which keeps its window per process
+ * (so N replicas allow up to N× the configured limit), every replica here
+ * increments the same store, so the configured limit is global.
+ */
+export declare class SharedTenantRateLimitPolicy implements GatewayTenantPolicy {
+    private readonly store;
+    private readonly windowMs;
+    private readonly now;
+    constructor(store: SharedRateLimitStore, windowMs?: number, now?: () => number);
+    authorize(principal: GatewayPrincipal): Promise<void>;
+}
 export declare class CompositeTenantPolicy implements GatewayTenantPolicy {
     private readonly policies;
     constructor(policies: readonly GatewayTenantPolicy[]);

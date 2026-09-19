@@ -1,6 +1,7 @@
 import type { AgentId } from "../core/ids.js";
 import type { AgentMessage } from "../core/types.js";
 import type { ContinuationRecord, ContinuationStore } from "../inference/gateway/continuation-store.js";
+import type { SharedRateLimitStore } from "../inference/gateway/tenant-policy.js";
 import type { RouterStateStore, SharedRouteHealth } from "../inference/gateway/router-state.js";
 import type { LeaseClaimResult, LeaseRecord, LeaseStore } from "../control-plane/lease.js";
 import type { MailboxAppendResult, MailboxCursor, MailboxEnvelope, MailboxStore } from "../control-plane/mailbox.js";
@@ -198,6 +199,35 @@ export class PostgresDistributedControlStore implements LeaseStore, MailboxStore
     );
   }
   async deleteAffinity(key: string): Promise<void> { await this.db.query(`DELETE FROM synth_route_affinity WHERE affinity_key=$1`, [key]); }
+}
+
+/**
+ * Shared tenant rate-limit counter backed by PostgreSQL. The upsert is atomic,
+ * so multiple gateway replicas increment the same per-(tenant, window) row and
+ * a tenant's configured limit is global rather than per-process.
+ */
+export class PostgresRateLimitStore implements SharedRateLimitStore {
+  constructor(readonly db: PgExecutor) {}
+
+  async increment(tenantId: string, windowStartMs: number): Promise<number> {
+    const result = await this.db.query<{ count: string | number }>(
+      `INSERT INTO synth_rate_limits(tenant_id,window_start_ms,count,updated_at)
+       VALUES ($1,$2,1,now())
+       ON CONFLICT (tenant_id,window_start_ms)
+       DO UPDATE SET count=synth_rate_limits.count+1, updated_at=now()
+       RETURNING count`,
+      [tenantId, windowStartMs],
+    );
+    return Number(result.rows[0]!.count);
+  }
+
+  async prune(beforeMs: number): Promise<number> {
+    const result = await this.db.query<{ tenant_id: string }>(
+      `DELETE FROM synth_rate_limits WHERE window_start_ms < $1 RETURNING tenant_id`,
+      [beforeMs],
+    );
+    return result.rows.length;
+  }
 }
 
 

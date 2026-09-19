@@ -65,6 +65,58 @@ export class InMemoryTenantRateLimitPolicy implements GatewayTenantPolicy {
   }
 }
 
+/**
+ * Shared counter backing for tenant rate limiting. Implementations must make
+ * `increment` atomic across replicas (e.g. a single-row upsert), so the
+ * effective limit does not multiply by the number of gateway processes.
+ */
+export interface SharedRateLimitStore {
+  /** Atomically increment and return the count for (tenant, fixed window). */
+  increment(tenantId: string, windowStartMs: number): Promise<number>;
+  /** Optional: remove windows older than `beforeMs`. Returns rows removed. */
+  prune?(beforeMs: number): Promise<number>;
+}
+
+/** Single-process implementation, for local mode and tests. */
+export class InMemorySharedRateLimitStore implements SharedRateLimitStore {
+  readonly #counts = new Map<string, number>();
+  async increment(tenantId: string, windowStartMs: number): Promise<number> {
+    const key = `${tenantId}@${windowStartMs}`;
+    const next = (this.#counts.get(key) ?? 0) + 1;
+    this.#counts.set(key, next);
+    return next;
+  }
+  async prune(beforeMs: number): Promise<number> {
+    let removed = 0;
+    for (const key of [...this.#counts.keys()]) {
+      const at = Number(key.slice(key.lastIndexOf("@") + 1));
+      if (at < beforeMs) { this.#counts.delete(key); removed++; }
+    }
+    return removed;
+  }
+}
+
+/**
+ * Tenant rate limiting against a shared counter. Unlike
+ * {@link InMemoryTenantRateLimitPolicy}, which keeps its window per process
+ * (so N replicas allow up to N× the configured limit), every replica here
+ * increments the same store, so the configured limit is global.
+ */
+export class SharedTenantRateLimitPolicy implements GatewayTenantPolicy {
+  constructor(
+    private readonly store: SharedRateLimitStore,
+    private readonly windowMs: number = 60_000,
+    private readonly now: () => number = Date.now,
+  ) {}
+  async authorize(principal: GatewayPrincipal): Promise<void> {
+    const limit = principal.requestsPerMinute;
+    if (!limit || limit <= 0) return;
+    const windowStartMs = Math.floor(this.now() / this.windowMs) * this.windowMs;
+    const count = await this.store.increment(principal.tenantId, windowStartMs);
+    if (count > limit) throw new Error(`RATE_LIMITED:${principal.tenantId}`);
+  }
+}
+
 export class CompositeTenantPolicy implements GatewayTenantPolicy {
   constructor(private readonly policies: readonly GatewayTenantPolicy[]) {}
   async authorize(principal: GatewayPrincipal, model: string): Promise<void> {

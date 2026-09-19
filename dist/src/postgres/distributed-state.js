@@ -138,6 +138,29 @@ export class PostgresDistributedControlStore {
     }
     async deleteAffinity(key) { await this.db.query(`DELETE FROM synth_route_affinity WHERE affinity_key=$1`, [key]); }
 }
+/**
+ * Shared tenant rate-limit counter backed by PostgreSQL. The upsert is atomic,
+ * so multiple gateway replicas increment the same per-(tenant, window) row and
+ * a tenant's configured limit is global rather than per-process.
+ */
+export class PostgresRateLimitStore {
+    db;
+    constructor(db) {
+        this.db = db;
+    }
+    async increment(tenantId, windowStartMs) {
+        const result = await this.db.query(`INSERT INTO synth_rate_limits(tenant_id,window_start_ms,count,updated_at)
+       VALUES ($1,$2,1,now())
+       ON CONFLICT (tenant_id,window_start_ms)
+       DO UPDATE SET count=synth_rate_limits.count+1, updated_at=now()
+       RETURNING count`, [tenantId, windowStartMs]);
+        return Number(result.rows[0].count);
+    }
+    async prune(beforeMs) {
+        const result = await this.db.query(`DELETE FROM synth_rate_limits WHERE window_start_ms < $1 RETURNING tenant_id`, [beforeMs]);
+        return result.rows.length;
+    }
+}
 function decodeMailboxEnvelope(row) {
     return {
         agentId: row.agent_id,

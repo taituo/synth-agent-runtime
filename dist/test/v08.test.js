@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { AgentRuntime, CommandCoordinator, CompositeTenantPolicy, EffectReconciler, InMemoryContinuationStore, InMemoryLeaseStore, InMemoryMailboxStore, InMemoryRouterStateStore, InMemoryTenantRateLimitPolicy, InMemoryWorldStore, LocalMemoryDurability, LocalRuntimeStateStore, MemoryWorkspace, ModelAclPolicy, ProfileRouterBackend, StaticBearerAuthenticator, createInferenceGateway, } from "../src/index.js";
+import { AgentRuntime, CommandCoordinator, CompositeTenantPolicy, EffectReconciler, InMemoryContinuationStore, InMemoryLeaseStore, InMemoryMailboxStore, InMemoryRouterStateStore, InMemorySharedRateLimitStore, InMemoryTenantRateLimitPolicy, SharedTenantRateLimitPolicy, InMemoryWorldStore, LocalMemoryDurability, LocalRuntimeStateStore, MemoryWorkspace, ModelAclPolicy, ProfileRouterBackend, StaticBearerAuthenticator, createInferenceGateway, } from "../src/index.js";
 test("lease fencing token advances and stale owner cannot renew", async () => {
     let now = 1000;
     const leases = new InMemoryLeaseStore(() => now);
@@ -253,4 +253,37 @@ test("gateway enforces bearer auth, model ACL and tenant rate limit", async () =
     finally {
         await gateway.close();
     }
+});
+test("shared tenant rate limiting enforces one global limit across replicas", async () => {
+    const store = new InMemorySharedRateLimitStore();
+    const replicaA = new SharedTenantRateLimitPolicy(store, 60_000, () => 0);
+    const replicaB = new SharedTenantRateLimitPolicy(store, 60_000, () => 0);
+    const principal = { tenantId: "t-shared", subject: "u", requestsPerMinute: 3 };
+    const attempt = async (policy) => {
+        try {
+            await policy.authorize(principal);
+            return "ok";
+        }
+        catch (error) {
+            return error.message;
+        }
+    };
+    const results = [
+        await attempt(replicaA), await attempt(replicaB), await attempt(replicaA),
+        await attempt(replicaB), await attempt(replicaA),
+    ];
+    assert.deepEqual(results, ["ok", "ok", "ok", "RATE_LIMITED:t-shared", "RATE_LIMITED:t-shared"]);
+    // The per-process policy allows the full limit per instance, so N replicas
+    // permit up to N x the configured limit — the reason the shared policy exists.
+    const perProcessA = new InMemoryTenantRateLimitPolicy(() => 0);
+    const perProcessB = new InMemoryTenantRateLimitPolicy(() => 0);
+    let allowed = 0;
+    for (const policy of [perProcessA, perProcessB, perProcessA, perProcessB, perProcessA]) {
+        try {
+            policy.authorize(principal, "m");
+            allowed++;
+        }
+        catch { /* limited */ }
+    }
+    assert.ok(allowed > principal.requestsPerMinute, `two replicas allowed ${allowed} > limit ${principal.requestsPerMinute}`);
 });
