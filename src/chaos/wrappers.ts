@@ -1,6 +1,6 @@
 import type { AgentId, TaskId } from "../core/ids.js";
 import type { AgentSnapshot, Relation, RuntimeEvent, TaskSpec } from "../core/types.js";
-import type { DurabilityProvider } from "../durability/types.js";
+import type { AgentWriteFence, DurabilityProvider, EventReadOptions, SequencedRuntimeEvent } from "../durability/types.js";
 import type {
   DurableCommandRecord,
   DurableEffectRecord,
@@ -13,7 +13,28 @@ import type { Effect, EffectContext, EffectResult, Executor } from "../execution
 import { ChaosController } from "./faults.js";
 
 export class ChaosDurabilityProvider implements DurabilityProvider {
-  constructor(readonly inner: DurabilityProvider, readonly chaos: ChaosController) {}
+  constructor(readonly inner: DurabilityProvider, readonly chaos: ChaosController) {
+    // Forward the optional durability surface only when the wrapped provider
+    // actually implements it. Defining it unconditionally would make a caller's
+    // capability check (`if (provider.putAgentFenced)`) lie — turning a store
+    // that cannot fence into a silent fence rejection instead of the explicit
+    // FENCED_AGENT_WRITE_UNSUPPORTED that persistAgentSnapshot raises.
+    if (inner.putAgentFenced) {
+      this.putAgentFenced = (snapshot, fence) =>
+        this.call("durability.putAgentFenced", () => inner.putAgentFenced!(snapshot, fence));
+    }
+    if (inner.readEvents) {
+      this.readEvents = (options) =>
+        this.call("durability.readEvents", () => inner.readEvents!(options));
+    }
+    if (inner.pruneEvents) {
+      this.pruneEvents = (throughSeq) =>
+        this.call("durability.pruneEvents", () => inner.pruneEvents!(throughSeq));
+    }
+  }
+  putAgentFenced?: (snapshot: AgentSnapshot, fence: AgentWriteFence) => Promise<boolean>;
+  readEvents?: (options?: EventReadOptions) => Promise<SequencedRuntimeEvent[]>;
+  pruneEvents?: (throughSeq: number) => Promise<number>;
   async createAgent(v: AgentSnapshot) { return this.call("durability.createAgent", () => this.inner.createAgent(v)); }
   async putAgent(v: AgentSnapshot) { return this.call("durability.putAgent", () => this.inner.putAgent(v)); }
   async getAgent(id: AgentId) { return this.call("durability.getAgent", () => this.inner.getAgent(id)); }

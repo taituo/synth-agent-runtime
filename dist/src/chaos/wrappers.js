@@ -4,7 +4,24 @@ export class ChaosDurabilityProvider {
     constructor(inner, chaos) {
         this.inner = inner;
         this.chaos = chaos;
+        // Forward the optional durability surface only when the wrapped provider
+        // actually implements it. Defining it unconditionally would make a caller's
+        // capability check (`if (provider.putAgentFenced)`) lie — turning a store
+        // that cannot fence into a silent fence rejection instead of the explicit
+        // FENCED_AGENT_WRITE_UNSUPPORTED that persistAgentSnapshot raises.
+        if (inner.putAgentFenced) {
+            this.putAgentFenced = (snapshot, fence) => this.call("durability.putAgentFenced", () => inner.putAgentFenced(snapshot, fence));
+        }
+        if (inner.readEvents) {
+            this.readEvents = (options) => this.call("durability.readEvents", () => inner.readEvents(options));
+        }
+        if (inner.pruneEvents) {
+            this.pruneEvents = (throughSeq) => this.call("durability.pruneEvents", () => inner.pruneEvents(throughSeq));
+        }
     }
+    putAgentFenced;
+    readEvents;
+    pruneEvents;
     async createAgent(v) { return this.call("durability.createAgent", () => this.inner.createAgent(v)); }
     async putAgent(v) { return this.call("durability.putAgent", () => this.inner.putAgent(v)); }
     async getAgent(id) { return this.call("durability.getAgent", () => this.inner.getAgent(id)); }

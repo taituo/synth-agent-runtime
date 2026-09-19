@@ -2,6 +2,26 @@
 
 ## 1.0.0-rc.1 — abort-safety fix folded in, git ref/remote argument-injection fixed
 
+### ChaosDurabilityProvider now forwards the optional durability surface
+
+- **`ChaosDurabilityProvider` silently dropped
+  `putAgentFenced`/`readEvents`/`pruneEvents`** (`src/chaos/wrappers.ts`).
+  Wrapping a provider in the chaos failpoint provider hid those optional
+  capabilities: a fenced agent write, or a resumable/prunable event read,
+  through the wrapper behaved as if the underlying store didn't support them
+  at all — and because `persistAgentSnapshot` decides between fenced and
+  unfenced writes by checking `provider.putAgentFenced`, the wrapper could
+  misreport a fenced store as unfenced. Fixed by forwarding each optional
+  method only when the wrapped provider actually implements it, mirroring the
+  existing `claimCommand`/`claimEffect` optional-forwarding pattern in
+  `ChaosRuntimeStateStore`. When the wrapped store genuinely cannot fence, the
+  method stays absent so the runtime still fails closed with
+  `FENCED_AGENT_WRITE_UNSUPPORTED` instead of a silent fence rejection. The
+  regression test covers both the forwarding path and the absent-capability
+  path.
+
+Root suite: 90/90 (89 + 1 new test).
+
 ### Effect receipts are now monotonic; a resolved effect can no longer be regressed
 
 - **`putEffect` had no regression guard** (`src/durability/runtime-state.ts`,

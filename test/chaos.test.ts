@@ -2,10 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   ChaosController,
+  ChaosDurabilityProvider,
   ChaosExecutor,
   ExecutionBroker,
+  LocalMemoryDurability,
   LocalRuntimeStateStore,
+  persistAgentSnapshot,
   runCrashRecoveryScenario,
+  type DurabilityProvider,
   type Effect,
 } from "../src/index.js";
 
@@ -22,6 +26,55 @@ test("crash recovery scenario restores pre-turn world", async () => {
   assert.equal(result.dirty, "dirty-after-crash");
   assert.equal(result.recovered, result.before);
   assert.equal(result.rolledBack, 1);
+});
+
+test("chaos durability forwards the optional fenced/event surface only when present", async () => {
+  const chaos = new ChaosController([]);
+  const wrapped = new ChaosDurabilityProvider(new LocalMemoryDurability(), chaos);
+  assert.equal(typeof wrapped.putAgentFenced, "function");
+  assert.equal(typeof wrapped.readEvents, "function");
+  assert.equal(typeof wrapped.pruneEvents, "function");
+
+  const agent = {
+    id: "agent-1", definitionId: "d", workspaceId: "w", state: "idle" as const,
+    createdAt: 1, updatedAt: 1, mailbox: [], metadata: {},
+  } as any;
+  const fence = { resourceId: "agent:agent-1", ownerId: "owner", fencingToken: 2 };
+  await wrapped.createAgent(agent);
+  assert.equal(await wrapped.putAgentFenced!(agent, fence), true);
+  assert.equal(await wrapped.putAgentFenced!(agent, { ...fence, fencingToken: 1 }), false);
+  await persistAgentSnapshot(wrapped, agent, fence);
+
+  await wrapped.appendEvent({ type: "agent.created", agent, at: 1 } as any);
+  const events = await wrapped.readEvents!();
+  assert.equal(events.length, 1);
+  assert.equal(events[0]!.seq, 1);
+  assert.equal(await wrapped.pruneEvents!(1), 1);
+  assert.equal((await wrapped.readEvents!()).length, 0);
+
+  for (const point of ["durability.putAgentFenced.before", "durability.readEvents.before", "durability.pruneEvents.before"]) {
+    assert.ok(chaos.history().some((entry) => entry.point === point), `expected a chaos hit at ${point}`);
+  }
+
+  // A provider without the optional surface must not appear to support it, so
+  // the runtime still fails closed with FENCED_AGENT_WRITE_UNSUPPORTED.
+  const bare: DurabilityProvider = {
+    async createAgent() { return true; },
+    async putAgent() {},
+    async getAgent() { return undefined; },
+    async listAgents() { return []; },
+    async putTask() {},
+    async getTask() { return undefined; },
+    async putRelation() {},
+    async listRelations() { return []; },
+    async appendEvent() {},
+    async listEvents() { return []; },
+  };
+  const bareWrapped = new ChaosDurabilityProvider(bare, new ChaosController([]));
+  assert.equal(bareWrapped.putAgentFenced, undefined);
+  assert.equal(bareWrapped.readEvents, undefined);
+  assert.equal(bareWrapped.pruneEvents, undefined);
+  await assert.rejects(persistAgentSnapshot(bareWrapped, agent, fence), /FENCED_AGENT_WRITE_UNSUPPORTED/);
 });
 
 test("fault after external execution leaves effect outcome uncertain and blocks replay", async () => {
