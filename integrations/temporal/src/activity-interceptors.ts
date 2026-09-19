@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { ActivityInterceptors, ActivityInterceptorsFactory } from "@temporalio/worker";
-import { agentIdFromArgs, compactCorrelation, rootCauseMessage, type SynthCorrelation } from "./correlation.js";
+import {
+  agentIdFromArgs,
+  compactCorrelation,
+  messageKindFromArgs,
+  rootCauseMessage,
+  type SynthCorrelation,
+} from "./correlation.js";
 
 /**
  * Structural mirror of `src/observability/trace.ts` `TraceEvent`/`TraceSink`.
@@ -107,6 +113,8 @@ export function createSynthActivityInterceptors(
       async execute(input, next) {
         const agentId = agentIdFromArgs(input.args);
         if (agentId) correlation.agentId = agentId;
+        const messageKind = messageKindFromArgs(input.args);
+        if (messageKind) correlation.messageKind = messageKind;
         const spanName = `temporal.activity.${info.activityType}`;
         const spanId = `${info.activityType}-${randomUUID()}`;
         const startedAt = Date.now();

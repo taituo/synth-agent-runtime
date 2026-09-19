@@ -7,11 +7,13 @@
  *   TEMPORAL_ADDRESS=127.0.0.1:7243 npx tsx interceptors-live.ts
  *
  * It runs a real worker (with the Synth activity + workflow interceptors),
- * drives two workflows (one happy path, one that fails once and succeeds on
- * retry), and then asserts that:
+ * drives three workflows (one happy path, one that fails once and succeeds on
+ * retry, one fed a typed signal), and then asserts that:
  *   - the trace sink received activity spans carrying agentId/workflowId/attempt,
  *   - the retry attempt carries `retryReason` and the failure carries `willRetry`,
- *   - worker log lines carry the same correlation fields.
+ *   - worker log lines carry the same correlation fields,
+ *   - a typed (`kind`) signal round-trips through workflow state and shows up
+ *     as `messageKind` in both trace attributes and worker logs.
  */
 import { appendFileSync, readFileSync, rmSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -35,13 +37,18 @@ const traceSink = {
 };
 
 const activities = {
-  async runTurn({ agentId, messages }: { agentId: string; messages: Array<{ text?: string }> }) {
+  async runTurn({ agentId, messages }: { agentId: string; messages: Array<{ text?: string; kind?: string }> }) {
     const attempt = ActivityContext.current().info.attempt;
     const last = messages[messages.length - 1]?.text;
     activityLog.info("synth.activity.runTurn", { attempt, text: last });
     if (last === "flaky" && attempt < 2) throw new Error("synthetic flaky failure");
     if (last === "flaky") return { result: `flaky-ok:${attempt}`, state: "completed" as const };
     if (last === "finish") return { result: `done:${messages.length}`, state: "completed" as const };
+    // Echo back every message kind so the driver can prove the typed signal
+    // round-tripped through the workflow's mailbox, not just through telemetry.
+    if (last === "typed") {
+      return { result: { kinds: messages.map((message) => message.kind ?? null) }, state: "completed" as const };
+    }
     return { result: `echo:${last}`, state: "idle" as const };
   },
 };
@@ -70,24 +77,32 @@ await sleep(2500);
 const connection = await Connection.connect({ address });
 const client = new Client({ connection, namespace });
 
-function makeMessage(text: string) {
-  return { id: `m-${Math.random().toString(36).slice(2)}`, role: "human" as const, text, createdAt: Date.now() };
+function makeMessage(text: string, kind?: string) {
+  return {
+    id: `m-${Math.random().toString(36).slice(2)}`,
+    role: "human" as const,
+    text,
+    createdAt: Date.now(),
+    ...(kind ? { kind } : {}),
+  };
 }
 
-async function runAgent(agentId: string, text: string, timeoutMs = 30000) {
+async function runAgent(agentId: string, text: string, kind?: string, timeoutMs = 30000) {
   const handle = await client.workflow.start(durableAgentWorkflow, {
     taskQueue: TASK_QUEUE,
     workflowId: `agent/${agentId}`,
     args: [{ agentId, status: "idle", mailbox: [], updatedAt: Date.now() }],
   });
-  await handle.signal(sendMessage, makeMessage(text));
+  await handle.signal(sendMessage, makeMessage(text, kind));
   return Promise.race([handle.result(), sleep(timeoutMs).then(() => ({ status: "timeout" as const }))]);
 }
 
 const happyId = `agt_happy_${Date.now()}`;
 const flakyId = `agt_flaky_${Date.now()}`;
+const typedId = `agt_typed_${Date.now()}`;
 const happy = await runAgent(happyId, "finish");
 const flaky = await runAgent(flakyId, "flaky");
+const typed = await runAgent(typedId, "typed", "incident");
 
 const events = readFileSync(TRACE_FILE, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as {
   traceId: string; name: string; phase: string; attributes: Record<string, unknown>;
@@ -100,11 +115,19 @@ const logHits = logs.filter((entry) => entry.meta && typeof entry.meta === "obje
 const workflowLogHits = logHits.filter((entry) => entry.meta?.sdkComponent === "workflow");
 const activityLogHits = logHits.filter((entry) => entry.meta?.sdkComponent === "activity");
 
+const typedKinds = (typed as { lastResult?: { kinds?: Array<string | null> } }).lastResult?.kinds ?? [];
+const typedTraceEvents = byAgent(typedId).filter((event) => event.attributes.messageKind === "incident");
+const typedLogHits = logHits.filter((entry) => entry.meta?.messageKind === "incident");
+const typedSignalLog = logs.find(
+  (entry) => entry.message === "synth.workflow.signal" && entry.meta?.messageKind === "incident",
+);
+
 const report = {
   address,
   traceFile: TRACE_FILE,
   happy: { status: happy.status, result: (happy as { lastResult?: unknown }).lastResult },
   flaky: { status: flaky.status, result: (flaky as { lastResult?: unknown }).lastResult },
+  typed: { status: typed.status, kinds: typedKinds },
   trace: {
     totalEvents: events.length,
     happyAgentEvents: byAgent(happyId).length,
@@ -113,11 +136,14 @@ const report = {
     retryReasonOnRetry: retryStart?.attributes.retryReason ?? null,
     failureWillRetry: failure?.attributes.willRetry ?? null,
     failureError: failure?.attributes.error ?? null,
+    typedEventsWithMessageKind: typedTraceEvents.length,
   },
   workerLogs: {
     withAgentId: logHits.length,
     workflowComponent: workflowLogHits.length,
     activityComponent: activityLogHits.length,
+    typedLogsWithMessageKind: typedLogHits.length,
+    typedSignalLogSeen: typedSignalLog !== undefined,
     sample: logHits[0]?.meta ?? null,
   },
 };
@@ -125,13 +151,18 @@ const report = {
 const ok =
   happy.status === "completed" &&
   flaky.status === "completed" &&
+  typed.status === "completed" &&
   retryStart !== undefined &&
   retryStart.attributes.retryReason === "synthetic flaky failure" &&
   failure?.attributes.willRetry === true &&
   byAgent(happyId).length >= 2 &&
   logHits.length > 0 &&
   workflowLogHits.length > 0 &&
-  activityLogHits.length > 0;
+  activityLogHits.length > 0 &&
+  typedKinds.includes("incident") &&
+  typedTraceEvents.length > 0 &&
+  typedLogHits.length > 0 &&
+  typedSignalLog !== undefined;
 
 console.log(JSON.stringify({ ...report, ok }, null, 2));
 await connection.close();

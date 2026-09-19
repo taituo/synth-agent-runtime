@@ -2,6 +2,26 @@
 
 ## 1.0.0-rc.1 — abort-safety fix folded in, git ref/remote argument-injection fixed
 
+### Typed mailbox signals in the Temporal integration
+
+- **The durable agent's `sendMessage` signal carried no event type**, so a
+  mailbox message could only be described by free text — traces and logs could
+  be filtered by agent but not by the kind of event that drove a turn. Added an
+  optional `kind?: string` to a new exported `DurableMailboxMessage` interface
+  (used by `DurableAgentState.mailbox` and `RunTurnInput.messages`), and a
+  sandbox-safe `messageKindFromArgs` helper that reads the kind off either a
+  `{ messages: [...] }` activity input (the last, driving message) or a bare
+  `sendMessage` payload. The activity interceptors now attach `messageKind` to
+  every activity log line and trace span, and the workflow-isolate signal
+  interceptor includes it on the `synth.workflow.signal` log. The field is
+  omitted entirely for legacy untyped messages, so existing callers, signals,
+  and serialized state are unaffected. Regression tests cover the extractor's
+  both-shapes/legacy/invalid-kind cases and the activity interceptor's typed vs.
+  untyped attributes; verified live against a Temporal dev server
+  (`integrations/temporal/interceptors-live.ts`) that a `kind: "incident"`
+  signal round-trips into the workflow's final state and shows up as
+  `messageKind` in both trace attributes and worker logs.
+
 ### Durable named event-consumer ACK and safe retention watermark
 
 - **`pruneEvents(throughSeq)` trusted the caller**, so a lagging named

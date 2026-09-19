@@ -1,5 +1,5 @@
 import { log, workflowInfo, } from "@temporalio/workflow";
-import { agentIdFromArgs, agentIdFromWorkflowId } from "./correlation.js";
+import { agentIdFromArgs, agentIdFromWorkflowId, messageKindFromArgs } from "./correlation.js";
 /**
  * Workflow-isolate interceptors. This module is bundled into the workflow
  * bundle via `WorkerOptions.interceptors.workflowModules`, so it may only use
@@ -43,7 +43,11 @@ export function interceptors() {
             }
         },
         async handleSignal(input, next) {
-            log.info("synth.workflow.signal", { signalName: input.signalName });
+            const messageKind = messageKindFromArgs(input.args);
+            log.info("synth.workflow.signal", {
+                signalName: input.signalName,
+                ...(messageKind ? { messageKind } : {}),
+            });
             return next(input);
         },
     };

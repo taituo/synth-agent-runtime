@@ -30,6 +30,12 @@ export interface SynthCorrelation {
   attempt?: number;
   /** Root-cause message of the previous failed attempt, when this is a retry. */
   retryReason?: string;
+  /**
+   * Typed-event tag of the message driving this turn (the last mailbox message
+   * in the activity/workflow input). Lets traces and logs be filtered by event
+   * type, not just by agent.
+   */
+  messageKind?: string;
 }
 
 /** Header used to carry correlation from a workflow into its activities. */
@@ -61,6 +67,32 @@ export function agentIdFromArgs(args: readonly unknown[] | undefined): string | 
     if (typeof value === "string" && value.length > 0) return value;
   }
   return undefined;
+}
+
+function readKind(value: unknown): string | undefined {
+  if (value && typeof value === "object" && "kind" in value) {
+    const kind = (value as { kind?: unknown }).kind;
+    if (typeof kind === "string" && kind.length > 0) return kind;
+  }
+  return undefined;
+}
+
+/**
+ * Pull the typed-event `kind` off a call's args. Handles both shapes that
+ * carry a mailbox message: a `runTurn` activity input `{ messages: [...] }`
+ * (uses the last, i.e. driving, message) and a bare `sendMessage` signal
+ * payload. Returns undefined for legacy untyped messages, so correlation is
+ * unchanged for existing signals.
+ */
+export function messageKindFromArgs(args: readonly unknown[] | undefined): string | undefined {
+  const first = args?.[0];
+  if (!first || typeof first !== "object") return undefined;
+  if ("messages" in first) {
+    const messages = (first as { messages?: unknown }).messages;
+    if (!Array.isArray(messages) || messages.length === 0) return undefined;
+    return readKind(messages[messages.length - 1]);
+  }
+  return readKind(first);
 }
 
 /** Drop undefined fields so log attributes stay clean. */

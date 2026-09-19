@@ -5,7 +5,7 @@ import {
   type WorkflowInterceptors,
   type WorkflowOutboundCallsInterceptor,
 } from "@temporalio/workflow";
-import { agentIdFromArgs, agentIdFromWorkflowId } from "./correlation.js";
+import { agentIdFromArgs, agentIdFromWorkflowId, messageKindFromArgs } from "./correlation.js";
 
 /**
  * Workflow-isolate interceptors. This module is bundled into the workflow
@@ -51,7 +51,11 @@ export function interceptors(): WorkflowInterceptors {
       }
     },
     async handleSignal(input, next) {
-      log.info("synth.workflow.signal", { signalName: input.signalName });
+      const messageKind = messageKindFromArgs(input.args);
+      log.info("synth.workflow.signal", {
+        signalName: input.signalName,
+        ...(messageKind ? { messageKind } : {}),
+      });
       return next(input);
     },
   };

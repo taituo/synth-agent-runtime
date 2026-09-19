@@ -5,6 +5,7 @@ import {
   agentIdFromArgs,
   agentIdFromWorkflowId,
   compactCorrelation,
+  messageKindFromArgs,
   rootCauseMessage,
 } from "../src/correlation.js";
 import { createSynthActivityInterceptors, type SynthTraceEvent } from "../src/activity-interceptors.js";
@@ -32,6 +33,23 @@ test("correlation helpers derive Synth ids from workflow ids and inputs", () => 
   assert.equal(agentIdFromArgs([{ messages: [] }]), undefined);
   assert.equal(agentIdFromArgs([]), undefined);
   assert.deepEqual(compactCorrelation({ agentId: "a", attempt: undefined }), { agentId: "a" });
+});
+
+test("messageKindFromArgs reads the kind of the last message, and tolerates legacy input", () => {
+  const typed = [{ messages: [{ id: "1", kind: "social_post" }, { id: "2", kind: "incident" }] }];
+  assert.equal(messageKindFromArgs(typed), "incident");
+  // A bare `sendMessage` signal payload (no wrapping `messages` array).
+  assert.equal(messageKindFromArgs([{ id: "1", text: "hi", kind: "news" }]), "news");
+
+  // Untyped/legacy messages must not invent a kind (backward compatibility).
+  assert.equal(messageKindFromArgs([{ messages: [{ id: "1" }] }]), undefined);
+  assert.equal(messageKindFromArgs([{ messages: [] }]), undefined);
+  assert.equal(messageKindFromArgs([{}]), undefined);
+  assert.equal(messageKindFromArgs([]), undefined);
+  assert.equal(messageKindFromArgs(undefined), undefined);
+  // A non-string or empty kind is ignored rather than leaked into telemetry.
+  assert.equal(messageKindFromArgs([{ messages: [{ kind: 7 }] }]), undefined);
+  assert.equal(messageKindFromArgs([{ messages: [{ kind: "" }] }]), undefined);
 });
 
 test("rootCauseMessage surfaces the innermost nested cause", () => {
@@ -75,6 +93,31 @@ test("activity interceptor attaches correlation to logs and emits a trace span",
   assert.equal(tags.agentId, "agt_123");
   assert.equal(tags.activityType, "runTurn");
   assert.equal(tags.attempt, 1);
+});
+
+test("activity interceptor surfaces the typed-signal kind on logs and trace spans", async () => {
+  const events: SynthTraceEvent[] = [];
+  const factory = createSynthActivityInterceptors({ trace: { emit: (event) => { events.push(event); } } });
+
+  const typed = factory(activityContext());
+  await typed.inbound!.execute!(
+    { args: [{ agentId: "agt_typed", messages: [{ id: "m1", kind: "incident" }] }], headers: {} },
+    async () => "ok",
+  );
+  const attrs = typed.outbound!.getLogAttributes!({}, (input) => input);
+  assert.equal(attrs.messageKind, "incident");
+  assert.equal(events[0]!.attributes?.messageKind, "incident");
+  assert.equal(events[1]!.attributes?.messageKind, "incident");
+
+  // An untyped signal must not gain a messageKind attribute (backward compat).
+  const untyped = factory(activityContext());
+  await untyped.inbound!.execute!(
+    { args: [{ agentId: "agt_untyped", messages: [{ id: "m2" }] }], headers: {} },
+    async () => "ok",
+  );
+  const untypedAttrs = untyped.outbound!.getLogAttributes!({}, (input) => input);
+  assert.equal(untypedAttrs.messageKind, undefined);
+  assert.equal("messageKind" in untypedAttrs, false);
 });
 
 test("activity interceptor reports the retry reason and willRetry on a failed attempt", async () => {
