@@ -2,6 +2,48 @@
 
 ## 1.0.0-rc.1 — abort-safety fix folded in, git ref/remote argument-injection fixed
 
+### Fixes from adversarial testing of previously-uncovered paths (Temporal, Kubernetes workspace-sync)
+
+Neither `integrations/temporal` nor the Kubernetes physical-execution
+path (`WorkspaceSynchronizer` + `KubectlSandboxBackend`) had any test
+coverage; a round of testing against a real Temporal dev server and a
+real k3s+gVisor cluster found both were completely nonfunctional out of
+the box, plus two smaller silent-data-loss gaps. All four fixed and
+verified live, failing-first:
+
+- **Temporal workflows could not run at all**
+  (`integrations/temporal/src/workflows.ts`). `structuredClone` is not
+  defined in Temporal's workflow V8 sandbox — every workflow failed
+  immediately with `ReferenceError`. Fixed with a sandbox-safe JSON
+  round-trip `clone()` helper.
+- **The workflow could silently drop mid-turn messages and hang
+  forever** (same file). A message a signal appended while an activity
+  was still running got wiped by the idle-transition code
+  (`state.mailbox.length = 0` cleared everything, not just what the
+  turn actually consumed) — including a message that should have ended
+  the loop, leaving `handle.result()` unresolved indefinitely. Fixed by
+  tracking a consumed-count snapshot and removing only those messages
+  (`splice`), plus waking on leftover mailbox content. Verified live: a
+  9-message burst sent mid-turn (including a "finish" message) hung
+  before the fix, resolved correctly after it.
+- Activity failure detail was being lost behind Temporal's generic
+  "Activity task failed" wrapper; added a cause-chain walk so the real
+  error surfaces.
+- **The Kubernetes physical-execution path failed out of the box**
+  (`src/execution/kubernetes/workspace-sync.ts`,
+  `kubectl-backend.ts`). The sandbox `/workspace` emptyDir is root-owned
+  while the pod intentionally runs as a non-root uid; git refuses to
+  operate ("detected dubious ownership") unless told otherwise, so both
+  the baseline-commit step and `listGitChanges()` failed on every use.
+  Fixed by scoping `safe.directory` to `/workspace` via env/`-c` (no
+  filesystem writes needed, since the rest of the pod's root filesystem
+  is read-only by design).
+- Overlay-origin file deletions didn't round-trip through `syncBack()`:
+  the Git baseline was committed before overlay changes were written,
+  so an overlay-only file was untracked and its deletion invisible to
+  `git status`. Fixed by committing the baseline after overlay
+  materialization instead.
+
 ### Fixes from a real concurrent-load benchmark (32-256 workers, real PostgreSQL, real k3s+gVisor)
 
 A benchmark/soak suite was run against a fresh clone of this tag: atomic
