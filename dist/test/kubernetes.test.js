@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULT_KUBERNETES_RESOURCE_CLASSES, ExecutionBroker, KubernetesExecutor, MemoryWorkspace, WarmSandboxPool, WorkspaceSynchronizer, buildSandboxNetworkPolicy, buildSandboxPod, } from "../src/index.js";
+import { DEFAULT_KUBERNETES_RESOURCE_CLASSES, ExecutionBroker, KubernetesExecutor, MemoryWorkspace, WarmSandboxPool, WorkspaceSynchronizer, buildSandboxNetworkPolicy, buildSandboxPod, deletePodAndPolicyArgs, } from "../src/index.js";
 class MockSandboxBackend {
     creates = 0;
     resets = 0;
@@ -220,4 +220,26 @@ test("sandbox manifest omits an empty runtimeClassName instead of emitting an in
     const cls = { ...DEFAULT_KUBERNETES_RESOURCE_CLASSES[0], runtimeClassName: "" };
     const pod = buildSandboxPod("test", "pod", "sandbox", cls);
     assert.ok(!("runtimeClassName" in pod.spec) || pod.spec.runtimeClassName === undefined);
+});
+test("pod+NetworkPolicy delete uses type/name form so both resources are actually targeted", () => {
+    // `kubectl delete pod X networkpolicy Y` is NOT "delete pod X and
+    // networkpolicy Y": kubectl treats every token after the first resource
+    // type as another name of THAT type, so it tries to delete pods named X,
+    // "networkpolicy", and Y, and the real NetworkPolicy is never touched.
+    // With --ignore-not-found the bogus lookups fail silently (exit 0), so
+    // the leak is invisible unless you inspect the exact argv. Verified live
+    // against a real cluster: bare "pod X networkpolicy Y" leaks the policy,
+    // "pod/X networkpolicy/Y" deletes both.
+    const args = deletePodAndPolicyArgs("agent-7", "synth-sandboxes");
+    assert.deepEqual(args, [
+        "delete",
+        "pod/agent-7",
+        "networkpolicy/agent-7-network",
+        "-n",
+        "synth-sandboxes",
+        "--ignore-not-found=true",
+        "--wait=false",
+    ]);
+    assert.ok(!args.includes("pod"), "must not pass bare 'pod' as a resource type followed by extra name-only tokens");
+    assert.ok(!args.includes("networkpolicy"), "must not pass bare 'networkpolicy' as a second name under the 'pod' type");
 });

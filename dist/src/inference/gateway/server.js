@@ -154,9 +154,18 @@ export function createInferenceGateway(options) {
         }
         catch (error) {
             if (error instanceof RequestTooLargeError && !res.headersSent) {
+                // readBody() bails out as soon as the byte limit is crossed, so the
+                // client may still be sending more of the oversized body: the
+                // request stream is not drained. Ending the response with the
+                // default keep-alive would hand a connection with unread bytes
+                // still in flight back to the client's pool; the client's next
+                // request on that reused socket then races the leftover bytes and
+                // gets ECONNRESET. Force the socket closed instead.
                 res.statusCode = 413;
                 res.setHeader("content-type", "application/json");
+                res.setHeader("connection", "close");
                 res.end(JSON.stringify({ error: { message: error.message } }));
+                req.destroy();
                 return;
             }
             if (abort.signal.aborted && !res.headersSent) {

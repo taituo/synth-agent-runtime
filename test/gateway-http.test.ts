@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import http from "node:http";
 import { createInferenceGateway } from "../src/inference/gateway/server.js";
 import type { GatewayBackend } from "../src/inference/gateway/types.js";
 import { ResponsesStreamEncoder } from "../src/inference/gateway/responses-protocol.js";
@@ -65,6 +66,43 @@ test("HTTP gateway rejects oversized JSON bodies before backend dispatch", async
   }
 });
 
+
+test("a 413 does not poison a reused keep-alive connection", async () => {
+  // readBody() throws as soon as the byte limit is crossed without draining
+  // the rest of the oversized request. If the 413 response is sent with the
+  // default keep-alive, the client's pooled socket still has those unread
+  // bytes in flight; the client's NEXT request over that same socket then
+  // races the leftover bytes and fails with ECONNRESET/socket-hang-up. This
+  // reproduced live on a real cluster with a single-socket keep-alive agent.
+  let calls = 0;
+  const backend: GatewayBackend = {
+    async listModels() { return [{ id: "m" }]; },
+    async handle() { calls++; return Response.json({ ok: true }); },
+  };
+  const gateway = createInferenceGateway({ backend, port: 0, maxRequestBytes: 64 * 1024 });
+  await gateway.listen();
+  const base = new URL(gateway.url);
+  const agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
+  const post = (body: unknown) => new Promise<{ status?: number; error?: string }>((resolve) => {
+    const req = http.request(
+      { hostname: base.hostname, port: base.port, path: "/v1/chat/completions", method: "POST", agent, headers: { "content-type": "application/json" } },
+      (res) => { res.resume(); res.on("end", () => resolve({ status: res.statusCode })); },
+    );
+    req.on("error", (error: NodeJS.ErrnoException) => resolve({ error: error.code }));
+    req.end(Buffer.from(JSON.stringify(body)));
+  });
+  try {
+    const oversized = await post({ model: "m", messages: [{ role: "user", content: "x".repeat(200 * 1024) }] });
+    assert.equal(oversized.status, 413);
+    const followUp = await post({ model: "m", messages: [] });
+    assert.equal(followUp.error, undefined, "the reused connection must not fail after a 413");
+    assert.equal(followUp.status, 200);
+    assert.equal(calls, 1);
+  } finally {
+    agent.destroy();
+    await gateway.close();
+  }
+});
 
 test("profile router preserves AbortSignal through failover layer", async () => {
   let observedSignal: AbortSignal | undefined;

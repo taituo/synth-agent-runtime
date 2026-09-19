@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   ExecutionBroker,
+  installPostgresSchema,
   PostgresPersistence,
   type Effect,
   type PgExecutor,
@@ -74,4 +75,28 @@ test("Postgres effect claim prevents duplicate executor calls", async () => {
   const two = await brokerB.execute(effect, context);
   assert.equal(executions, 1);
   assert.deepEqual(two, one);
+});
+
+test("schema install takes a transaction-scoped advisory lock before any DDL", async () => {
+  // Regression for a real race found under 256-way concurrent bootstrap on
+  // live PostgreSQL: every statement in POSTGRES_SCHEMA_SQL is individually
+  // "IF NOT EXISTS", but the existence-check-then-create is not atomic
+  // against a second session doing the same DDL at the same instant, and
+  // concurrent callers hit `duplicate key ... pg_type_typname_nsp_index`.
+  // This only asserts the lock statement precedes the schema DDL in the one
+  // query text sent (so node-postgres runs it on a single connection as one
+  // implicit transaction) — the actual cross-session serialization can only
+  // be proven against real PostgreSQL, see integrations/postgres/concurrency.ts.
+  let sentText = "";
+  const db: PgExecutor = {
+    async query(text) {
+      sentText = text;
+      return { rows: [] };
+    },
+  };
+  await installPostgresSchema(db);
+  const lockIndex = sentText.indexOf("pg_advisory_xact_lock(");
+  const ddlIndex = sentText.indexOf("CREATE TABLE");
+  assert.ok(lockIndex >= 0, "must take an advisory lock");
+  assert.ok(ddlIndex > lockIndex, "the lock must be acquired before any DDL runs");
 });

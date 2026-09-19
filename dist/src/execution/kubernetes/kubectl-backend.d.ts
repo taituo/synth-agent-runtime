@@ -8,6 +8,17 @@ export interface KubectlSandboxBackendOptions {
     defaultExecTimeoutMs?: number;
 }
 /**
+ * `kubectl delete pod X networkpolicy Y` does NOT mean "delete pod X and
+ * networkpolicy Y" — kubectl reads the first positional argument after the
+ * verb as the resource TYPE, and every following non-flag token as another
+ * NAME of that same type. It tries to delete pods named X, "networkpolicy",
+ * and Y; the real NetworkPolicy object is never targeted. With
+ * `--ignore-not-found`, the bogus lookups fail silently and the exit code is
+ * 0, so the leak goes unnoticed. The `type/name` form deletes heterogeneous
+ * resources correctly in one call.
+ */
+export declare function deletePodAndPolicyArgs(podName: string, namespace: string): string[];
+/**
  * Concrete Kubernetes backend implemented only with kubectl.
  *
  * The trusted control plane owns kubectl credentials. The untrusted executor Pod

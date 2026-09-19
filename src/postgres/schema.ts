@@ -92,6 +92,26 @@ CREATE TABLE IF NOT EXISTS synth_route_affinity (affinity_key text PRIMARY KEY, 
 CREATE INDEX IF NOT EXISTS synth_route_affinity_expiry_idx ON synth_route_affinity(expires_at_ms);
 `;
 
+/**
+ * Arbitrary but fixed advisory-lock key for schema install. Every
+ * `IF NOT EXISTS` statement below is individually idempotent, but the
+ * existence-check-then-create is not atomic against another session doing
+ * the same DDL at the same instant: concurrently bootstrapping replicas can
+ * race on Postgres's own system catalogs (e.g. two sessions both creating
+ * the same table's implicit row type at once violates
+ * `pg_type_typname_nsp_index`). Any distinct int8 works; this one has no
+ * significance beyond being unlikely to collide with another advisory lock
+ * this application might take.
+ */
+const SCHEMA_INSTALL_LOCK_KEY = 84172659;
+
 export async function installPostgresSchema(db: PgExecutor): Promise<void> {
-  await db.query(POSTGRES_SCHEMA_SQL);
+  // No `values` array is passed, so node-postgres sends this as one
+  // simple-query-protocol message on a single connection, which Postgres
+  // runs as one implicit transaction. Taking a transaction-scoped advisory
+  // lock as the first statement therefore serializes concurrent callers
+  // (they queue for the lock instead of racing on DDL) and releases
+  // automatically when this call's implicit transaction ends, without a
+  // separate connection or explicit unlock.
+  await db.query(`SELECT pg_advisory_xact_lock(${SCHEMA_INSTALL_LOCK_KEY});\n${POSTGRES_SCHEMA_SQL}`);
 }
