@@ -18,10 +18,34 @@ export class ChaosDurabilityProvider {
         if (inner.pruneEvents) {
             this.pruneEvents = (throughSeq) => this.call("durability.pruneEvents", () => inner.pruneEvents(throughSeq));
         }
+        if (inner.ackEvent) {
+            this.ackEvent = (consumerId, throughSeq) => this.call("durability.ackEvent", () => inner.ackEvent(consumerId, throughSeq));
+        }
+        if (inner.getEventCursor) {
+            this.getEventCursor = (consumerId) => this.call("durability.getEventCursor", () => inner.getEventCursor(consumerId));
+        }
+        if (inner.listEventCursors) {
+            this.listEventCursors = () => this.call("durability.listEventCursors", () => inner.listEventCursors());
+        }
+        if (inner.forgetEventConsumer) {
+            this.forgetEventConsumer = (consumerId) => this.call("durability.forgetEventConsumer", () => inner.forgetEventConsumer(consumerId));
+        }
+        if (inner.safeEventWatermark) {
+            this.safeEventWatermark = () => this.call("durability.safeEventWatermark", () => inner.safeEventWatermark());
+        }
+        if (inner.pruneEventsSafe) {
+            this.pruneEventsSafe = () => this.call("durability.pruneEventsSafe", () => inner.pruneEventsSafe());
+        }
     }
     putAgentFenced;
     readEvents;
     pruneEvents;
+    ackEvent;
+    getEventCursor;
+    listEventCursors;
+    forgetEventConsumer;
+    safeEventWatermark;
+    pruneEventsSafe;
     async createAgent(v) { return this.call("durability.createAgent", () => this.inner.createAgent(v)); }
     async putAgent(v) { return this.call("durability.putAgent", () => this.inner.putAgent(v)); }
     async getAgent(id) { return this.call("durability.getAgent", () => this.inner.getAgent(id)); }

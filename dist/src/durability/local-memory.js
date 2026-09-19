@@ -4,6 +4,7 @@ export class LocalMemoryDurability {
     #tasks = new Map();
     #relations = [];
     #events = [];
+    #eventCursors = new Map();
     #nextSeq = 1;
     async createAgent(snapshot) {
         if (this.#agents.has(snapshot.id))
@@ -42,5 +43,35 @@ export class LocalMemoryDurability {
         const before = this.#events.length;
         this.#events = this.#events.filter((v) => v.seq > throughSeq);
         return before - this.#events.length;
+    }
+    async ackEvent(consumerId, throughSeq) {
+        const maxSeq = this.#events.at(-1)?.seq ?? 0;
+        const existing = this.#eventCursors.get(consumerId);
+        const ackSeq = Math.max(existing?.ackSeq ?? 0, Math.min(throughSeq, maxSeq));
+        const cursor = { consumerId, ackSeq, updatedAt: Date.now() };
+        this.#eventCursors.set(consumerId, cursor);
+        return structuredClone(cursor);
+    }
+    async getEventCursor(consumerId) {
+        const value = this.#eventCursors.get(consumerId);
+        return value ? structuredClone(value) : undefined;
+    }
+    async listEventCursors() {
+        return [...this.#eventCursors.values()].map((value) => structuredClone(value));
+    }
+    async forgetEventConsumer(consumerId) {
+        return this.#eventCursors.delete(consumerId);
+    }
+    async safeEventWatermark() {
+        if (this.#eventCursors.size === 0)
+            return 0;
+        let min = Number.POSITIVE_INFINITY;
+        for (const cursor of this.#eventCursors.values())
+            min = Math.min(min, cursor.ackSeq);
+        return min;
+    }
+    async pruneEventsSafe() {
+        const watermark = await this.safeEventWatermark();
+        return watermark <= 0 ? 0 : this.pruneEvents(watermark);
     }
 }

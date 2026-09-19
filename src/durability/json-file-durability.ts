@@ -2,7 +2,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { AgentId, TaskId } from "../core/ids.js";
 import type { AgentSnapshot, Relation, RuntimeEvent, TaskSpec } from "../core/types.js";
-import type { AgentWriteFence, DurabilityProvider, EventReadOptions, SequencedRuntimeEvent } from "./types.js";
+import type { AgentWriteFence, DurabilityProvider, EventCursor, EventReadOptions, SequencedRuntimeEvent } from "./types.js";
 
 interface DurableFileState {
   agents: Record<string, AgentSnapshot>;
@@ -10,10 +10,11 @@ interface DurableFileState {
   tasks: Record<string, TaskSpec>;
   relations: Relation[];
   events: SequencedRuntimeEvent[];
+  eventCursors: Record<string, EventCursor>;
   nextEventSeq: number;
 }
 
-const EMPTY = (): DurableFileState => ({ agents: {}, agentFences: {}, tasks: {}, relations: [], events: [], nextEventSeq: 1 });
+const EMPTY = (): DurableFileState => ({ agents: {}, agentFences: {}, tasks: {}, relations: [], events: [], eventCursors: {}, nextEventSeq: 1 });
 
 /** Crash-safe local DurabilityProvider for one control-plane writer. */
 export class JsonFileDurabilityProvider implements DurabilityProvider {
@@ -65,6 +66,37 @@ export class JsonFileDurabilityProvider implements DurabilityProvider {
   async pruneEvents(throughSeq: number): Promise<number> {
     let removed = 0; await this.#mutate((state) => { const before = state.events.length; state.events = state.events.filter((value) => value.seq > throughSeq); removed = before - state.events.length; }); return removed;
   }
+  async ackEvent(consumerId: string, throughSeq: number): Promise<EventCursor> {
+    let cursor: EventCursor | undefined;
+    await this.#mutate((state) => {
+      const maxSeq = state.events.at(-1)?.seq ?? 0;
+      const ackSeq = Math.max(state.eventCursors[consumerId]?.ackSeq ?? 0, Math.min(throughSeq, maxSeq));
+      cursor = { consumerId, ackSeq, updatedAt: Date.now() };
+      state.eventCursors[consumerId] = cursor;
+    });
+    return structuredClone(cursor!);
+  }
+  async getEventCursor(consumerId: string): Promise<EventCursor | undefined> {
+    const value = (await this.#read()).eventCursors[consumerId];
+    return value ? structuredClone(value) : undefined;
+  }
+  async listEventCursors(): Promise<EventCursor[]> {
+    return Object.values((await this.#read()).eventCursors).map((value) => structuredClone(value));
+  }
+  async forgetEventConsumer(consumerId: string): Promise<boolean> {
+    let removed = false;
+    await this.#mutate((state) => { if (state.eventCursors[consumerId]) { delete state.eventCursors[consumerId]; removed = true; } });
+    return removed;
+  }
+  async safeEventWatermark(): Promise<number> {
+    const cursors = Object.values((await this.#read()).eventCursors);
+    if (cursors.length === 0) return 0;
+    return cursors.reduce((min, cursor) => Math.min(min, cursor.ackSeq), Number.POSITIVE_INFINITY);
+  }
+  async pruneEventsSafe(): Promise<number> {
+    const watermark = await this.safeEventWatermark();
+    return watermark <= 0 ? 0 : this.pruneEvents(watermark);
+  }
 
   async #read(): Promise<DurableFileState> {
     try {
@@ -80,6 +112,7 @@ export class JsonFileDurabilityProvider implements DurabilityProvider {
         tasks: parsed.tasks ?? {},
         relations: parsed.relations ?? [],
         events: sequenced,
+        eventCursors: parsed.eventCursors ?? {},
         nextEventSeq: parsed.nextEventSeq ?? ((sequenced.at(-1)?.seq ?? 0) + 1),
       };
     } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return EMPTY(); throw error; }

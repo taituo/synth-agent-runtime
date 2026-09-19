@@ -228,6 +228,39 @@ test("concurrent effect reconcilers cannot discard a committed resolution", asyn
   assert.deepEqual(final?.result, { ok: true, output: { deploymentId: "d1" } });
 });
 
+test("event retention watermark is the slowest registered consumer", async () => {
+  const durability = new LocalMemoryDurability();
+  for (let i = 0; i < 5; i++) {
+    await durability.appendEvent({ type: "agent.created", agent: { id: `a${i}` } as any, at: i } as any);
+  }
+  assert.equal(await durability.safeEventWatermark!(), 0, "no consumers must fail closed");
+  await durability.ackEvent!("c1", 3);
+  await durability.ackEvent!("c2", 5);
+  assert.equal(await durability.safeEventWatermark!(), 3);
+
+  // Acks are monotonic and clamped to the current max sequence.
+  assert.equal((await durability.ackEvent!("c1", 1)).ackSeq, 3);
+  assert.equal((await durability.ackEvent!("c1", 99)).ackSeq, 5);
+  assert.equal(await durability.safeEventWatermark!(), 5);
+
+  // A lagging consumer holds retention back; forgetting it raises the watermark.
+  await durability.ackEvent!("c3", 1);
+  assert.equal(await durability.safeEventWatermark!(), 1);
+  assert.equal(await durability.forgetEventConsumer!("c3"), true);
+  assert.equal(await durability.safeEventWatermark!(), 5);
+
+  // Safe pruning removes exactly the acked prefix.
+  assert.equal(await durability.pruneEventsSafe!(), 5);
+  assert.deepEqual((await durability.readEvents!()).map((e) => e.seq), []);
+});
+
+test("pruneEventsSafe never removes events with no registered consumer", async () => {
+  const durability = new LocalMemoryDurability();
+  await durability.appendEvent({ type: "agent.created", agent: { id: "a" } as any, at: 1 } as any);
+  assert.equal(await durability.pruneEventsSafe!(), 0);
+  assert.equal((await durability.readEvents!()).length, 1);
+});
+
 test("continuation store isolates tenant continuation ids", async () => {
   const store = new InMemoryContinuationStore<{ value: string }>();
   await store.putContinuation({ id: "r1", tenantId: "t1", value: { value: "secret" }, createdAt: Date.now(), expiresAt: Date.now() + 10000 });

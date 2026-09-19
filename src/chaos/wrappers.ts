@@ -1,6 +1,6 @@
 import type { AgentId, TaskId } from "../core/ids.js";
 import type { AgentSnapshot, Relation, RuntimeEvent, TaskSpec } from "../core/types.js";
-import type { AgentWriteFence, DurabilityProvider, EventReadOptions, SequencedRuntimeEvent } from "../durability/types.js";
+import type { AgentWriteFence, DurabilityProvider, EventCursor, EventReadOptions, SequencedRuntimeEvent } from "../durability/types.js";
 import type {
   DurableCommandRecord,
   DurableEffectRecord,
@@ -31,10 +31,37 @@ export class ChaosDurabilityProvider implements DurabilityProvider {
       this.pruneEvents = (throughSeq) =>
         this.call("durability.pruneEvents", () => inner.pruneEvents!(throughSeq));
     }
+    if (inner.ackEvent) {
+      this.ackEvent = (consumerId, throughSeq) =>
+        this.call("durability.ackEvent", () => inner.ackEvent!(consumerId, throughSeq));
+    }
+    if (inner.getEventCursor) {
+      this.getEventCursor = (consumerId) =>
+        this.call("durability.getEventCursor", () => inner.getEventCursor!(consumerId));
+    }
+    if (inner.listEventCursors) {
+      this.listEventCursors = () => this.call("durability.listEventCursors", () => inner.listEventCursors!());
+    }
+    if (inner.forgetEventConsumer) {
+      this.forgetEventConsumer = (consumerId) =>
+        this.call("durability.forgetEventConsumer", () => inner.forgetEventConsumer!(consumerId));
+    }
+    if (inner.safeEventWatermark) {
+      this.safeEventWatermark = () => this.call("durability.safeEventWatermark", () => inner.safeEventWatermark!());
+    }
+    if (inner.pruneEventsSafe) {
+      this.pruneEventsSafe = () => this.call("durability.pruneEventsSafe", () => inner.pruneEventsSafe!());
+    }
   }
   putAgentFenced?: (snapshot: AgentSnapshot, fence: AgentWriteFence) => Promise<boolean>;
   readEvents?: (options?: EventReadOptions) => Promise<SequencedRuntimeEvent[]>;
   pruneEvents?: (throughSeq: number) => Promise<number>;
+  ackEvent?: (consumerId: string, throughSeq: number) => Promise<EventCursor>;
+  getEventCursor?: (consumerId: string) => Promise<EventCursor | undefined>;
+  listEventCursors?: () => Promise<EventCursor[]>;
+  forgetEventConsumer?: (consumerId: string) => Promise<boolean>;
+  safeEventWatermark?: () => Promise<number>;
+  pruneEventsSafe?: () => Promise<number>;
   async createAgent(v: AgentSnapshot) { return this.call("durability.createAgent", () => this.inner.createAgent(v)); }
   async putAgent(v: AgentSnapshot) { return this.call("durability.putAgent", () => this.inner.putAgent(v)); }
   async getAgent(id: AgentId) { return this.call("durability.getAgent", () => this.inner.getAgent(id)); }

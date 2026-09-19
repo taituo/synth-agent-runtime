@@ -96,6 +96,11 @@ CREATE TABLE IF NOT EXISTS synth_rate_limits (
   PRIMARY KEY (tenant_id, window_start_ms)
 );
 CREATE INDEX IF NOT EXISTS synth_rate_limits_window_idx ON synth_rate_limits(window_start_ms);
+CREATE TABLE IF NOT EXISTS synth_event_cursors (
+  consumer_id text PRIMARY KEY,
+  ack_seq bigint NOT NULL,
+  updated_at_ms bigint NOT NULL
+);
 `;
 /**
  * Arbitrary but fixed advisory-lock key for schema install. Every

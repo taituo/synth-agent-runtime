@@ -36,12 +36,15 @@ The release question is no longer "can a stale replica overwrite the current age
     load above did not include chaos (killed workers/pods) mid-soak
 [ ] production IAM + shared rate limiting + durable audit — tenant rate
     limiting is currently per-process only, see CHANGELOG known issues
-[ ] durable named event-consumer ACK + safe retention watermark — mailbox
-    delivery has named-consumer ACK cursors, and the event log has a
-    working `pruneEvents(throughSeq)` primitive, but the two are not wired
-    together: `throughSeq` is caller-supplied, so nothing today stops a
-    caller from pruning events a lagging named consumer hasn't read yet
-[ ] task/artifact per-record revision/CAS or equivalent ownership rule
+[x] durable named event-consumer ACK + safe retention watermark — the event
+    log now has a named-consumer ACK registry (`ackEvent`/`getEventCursor`/
+    `listEventCursors`/`forgetEventConsumer`) and `safeEventWatermark`/
+    `pruneEventsSafe`, which prune only up to the slowest registered consumer
+    (0 when none is registered, so an unconfigured deployment fails closed).
+    The raw `pruneEvents(throughSeq)` remains available and caller-owned.
+[x] task/artifact per-record revision/CAS or equivalent ownership rule —
+    `compareAndSwapTask`/`compareAndSwapArtifact` mirror `compareAndSwapProject`
+[ ] continuation size, encryption, retention, and cleanup policy
 [ ] continuation size, encryption, retention, and cleanup policy
 ```
 

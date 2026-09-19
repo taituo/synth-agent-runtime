@@ -70,7 +70,16 @@ Terminal agent state is hard-fenced. Streaming output/tool events are still an e
 
 ### Event retention has no durable named-consumer watermark registry
 
-**Still open, see `docs/RELEASE-GATE.md`.** Mailbox delivery has named-consumer ACK cursors (`MailboxStore`/`synth_mailbox_cursors`), and the event log has a working `pruneEvents(throughSeq)` primitive, but the two are not wired together: `throughSeq` is caller-supplied, so nothing today computes a safe watermark from active named consumers' actual read positions before pruning. A caller could prune events a lagging consumer hasn't read yet.
+**Closed.** The event log now has a durable named-consumer ACK registry on
+`DurabilityProvider` (`ackEvent`, `getEventCursor`, `listEventCursors`,
+`forgetEventConsumer`; backed by `synth_event_cursors` in PostgreSQL and
+mirrored in the in-memory/JSON-file stores). `safeEventWatermark()` returns
+the minimum ack across registered consumers, and `pruneEventsSafe()` prunes
+only through it; with no registered consumer the watermark is 0 and nothing is
+pruned, so an unconfigured deployment fails closed. Acks are monotonic and
+clamped to the current max sequence. The raw `pruneEvents(throughSeq)` is
+unchanged and remains the caller-owned primitive for deployments that manage
+the bound themselves.
 
 ### Task/artifact records are last-write-wins
 

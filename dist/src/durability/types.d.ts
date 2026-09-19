@@ -8,6 +8,12 @@ export interface EventReadOptions {
     afterSeq?: number;
     limit?: number;
 }
+/** A named event-stream consumer's read position. */
+export interface EventCursor {
+    consumerId: string;
+    ackSeq: number;
+    updatedAt: number;
+}
 /**
  * Monotonic ownership proof attached to durable agent writes.
  *
@@ -42,8 +48,33 @@ export interface DurabilityProvider {
     listEvents(): Promise<RuntimeEvent[]>;
     /** Optional resumable event stream surface for multi-client/control-plane consumers. */
     readEvents?(options?: EventReadOptions): Promise<SequencedRuntimeEvent[]>;
-    /** Optional retention primitive. Returns number of removed events. */
+    /**
+     * Optional raw retention primitive. Returns number of removed events.
+     * Caller-owned: it trusts `throughSeq`, so it can delete events a lagging
+     * named consumer has not read. Prefer {@link pruneEventsSafe} when consumers
+     * are registered.
+     */
     pruneEvents?(throughSeq: number): Promise<number>;
+    /**
+     * Optional named event-consumer ACK registry. A consumer records the highest
+     * sequence it has durably processed; retention uses the slowest consumer's
+     * position as a watermark. Additive: providers that do not implement these
+     * simply cannot compute a safe watermark, and callers must fall back to the
+     * raw primitive with an externally-managed bound.
+     */
+    ackEvent?(consumerId: string, throughSeq: number): Promise<EventCursor>;
+    getEventCursor?(consumerId: string): Promise<EventCursor | undefined>;
+    listEventCursors?(): Promise<EventCursor[]>;
+    /** Deregister a consumer so it stops holding back retention. */
+    forgetEventConsumer?(consumerId: string): Promise<boolean>;
+    /**
+     * Highest sequence that is safe to prune: the minimum ack across registered
+     * consumers. Returns 0 (prune nothing) when no consumer is registered, so an
+     * unconfigured deployment fails closed rather than deleting unread events.
+     */
+    safeEventWatermark?(): Promise<number>;
+    /** Prune only through {@link safeEventWatermark}; never removes an unacked event. */
+    pruneEventsSafe?(): Promise<number>;
 }
 export declare function agentFenceError(snapshot: AgentSnapshot, fence: AgentWriteFence): Error;
 export declare function isAgentFenceRejected(error: unknown): boolean;

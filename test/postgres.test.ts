@@ -18,6 +18,8 @@ class FakePg implements PgExecutor {
   readonly rateLimits = new Map<string, number>();
   readonly tasks = new Map<string, unknown>();
   readonly artifacts = new Map<string, unknown>();
+  readonly eventCursors = new Map<string, { ack_seq: number; updated_at_ms: number }>();
+  eventMaxSeq = 0;
 
   async query<Row = Record<string, unknown>>(text: string, values: unknown[] = []): Promise<PgQueryResult<Row>> {
     const sql = text.replace(/\s+/g, " ").trim();
@@ -57,6 +59,29 @@ class FakePg implements PgExecutor {
       // Honor the WHERE clause on the upsert (canReplaceEffect semantics).
       if (!existing || canReplaceEffect(existing, next)) this.effects.set(id, next);
       return { rows: [] };
+    }
+    if (sql.startsWith("WITH max_seq AS") && sql.includes("INSERT INTO synth_event_cursors")) {
+      const id = String(values[0]);
+      const ack = Math.max(this.eventCursors.get(id)?.ack_seq ?? 0, Math.min(Number(values[1]), this.eventMaxSeq));
+      const row = { ack_seq: ack, updated_at_ms: Number(values[2]) };
+      this.eventCursors.set(id, row);
+      return { rows: [{ ack_seq: ack, updated_at_ms: row.updated_at_ms } as Row] };
+    }
+    if (sql.startsWith("SELECT consumer_id,ack_seq,updated_at_ms FROM synth_event_cursors WHERE consumer_id=$1")) {
+      const row = this.eventCursors.get(String(values[0]));
+      return { rows: row ? [{ consumer_id: String(values[0]), ...row } as Row] : [] };
+    }
+    if (sql.startsWith("SELECT consumer_id,ack_seq,updated_at_ms FROM synth_event_cursors")) {
+      return { rows: [...this.eventCursors.entries()].map(([consumer_id, row]) => ({ consumer_id, ...row } as Row)) };
+    }
+    if (sql.startsWith("DELETE FROM synth_event_cursors")) {
+      const id = String(values[0]);
+      const had = this.eventCursors.delete(id);
+      return { rows: had ? [{ consumer_id: id } as Row] : [] };
+    }
+    if (sql.startsWith("SELECT COALESCE(MIN(ack_seq),0) AS watermark FROM synth_event_cursors")) {
+      const min = this.eventCursors.size === 0 ? 0 : Math.min(...[...this.eventCursors.values()].map((r) => r.ack_seq));
+      return { rows: [{ watermark: min } as Row] };
     }
     if (sql.startsWith("UPDATE synth_tasks SET body=$2::jsonb")) {
       const id = String(values[0]);
@@ -124,6 +149,22 @@ test("Postgres effect claim prevents duplicate executor calls", async () => {
   const two = await brokerB.execute(effect, context);
   assert.equal(executions, 1);
   assert.deepEqual(two, one);
+});
+
+test("Postgres event retention watermark tracks the slowest consumer", async () => {
+  const db = new FakePg();
+  db.eventMaxSeq = 5;
+  const store = new PostgresPersistence(db);
+  assert.equal(await store.safeEventWatermark(), 0, "no consumers must fail closed");
+  await store.ackEvent("c1", 3);
+  await store.ackEvent("c2", 5);
+  assert.equal(await store.safeEventWatermark(), 3);
+  assert.equal((await store.ackEvent("c1", 99)).ackSeq, 5, "acks are clamped to the max sequence");
+  assert.equal((await store.ackEvent("c1", 1)).ackSeq, 5, "acks are monotonic");
+  assert.equal(await store.safeEventWatermark(), 5);
+  assert.equal(await store.forgetEventConsumer("c2"), true);
+  assert.deepEqual((await store.listEventCursors()).map((c) => c.consumerId), ["c1"]);
+  assert.equal(await store.forgetEventConsumer("c2"), false);
 });
 
 test("Postgres task and artifact compare-and-swap rejects a stale revision", async () => {

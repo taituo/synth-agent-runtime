@@ -33,9 +33,23 @@ test("chaos durability forwards the optional fenced/event surface only when pres
     const events = await wrapped.readEvents();
     assert.equal(events.length, 1);
     assert.equal(events[0].seq, 1);
-    assert.equal(await wrapped.pruneEvents(1), 1);
+    await wrapped.ackEvent("consumer-1", 1);
+    assert.equal((await wrapped.getEventCursor("consumer-1"))?.ackSeq, 1);
+    assert.equal(await wrapped.safeEventWatermark(), 1);
+    assert.equal((await wrapped.listEventCursors()).length, 1);
+    assert.equal(await wrapped.pruneEventsSafe(), 1);
+    assert.equal(await wrapped.forgetEventConsumer("consumer-1"), true);
+    assert.equal(await wrapped.pruneEvents(0), 0);
     assert.equal((await wrapped.readEvents()).length, 0);
-    for (const point of ["durability.putAgentFenced.before", "durability.readEvents.before", "durability.pruneEvents.before"]) {
+    for (const point of [
+        "durability.putAgentFenced.before",
+        "durability.readEvents.before",
+        "durability.pruneEvents.before",
+        "durability.ackEvent.before",
+        "durability.safeEventWatermark.before",
+        "durability.pruneEventsSafe.before",
+        "durability.forgetEventConsumer.before",
+    ]) {
         assert.ok(chaos.history().some((entry) => entry.point === point), `expected a chaos hit at ${point}`);
     }
     // A provider without the optional surface must not appear to support it, so
@@ -56,6 +70,9 @@ test("chaos durability forwards the optional fenced/event surface only when pres
     assert.equal(bareWrapped.putAgentFenced, undefined);
     assert.equal(bareWrapped.readEvents, undefined);
     assert.equal(bareWrapped.pruneEvents, undefined);
+    assert.equal(bareWrapped.ackEvent, undefined);
+    assert.equal(bareWrapped.safeEventWatermark, undefined);
+    assert.equal(bareWrapped.pruneEventsSafe, undefined);
     await assert.rejects(persistAgentSnapshot(bareWrapped, agent, fence), /FENCED_AGENT_WRITE_UNSUPPORTED/);
 });
 test("fault after external execution leaves effect outcome uncertain and blocks replay", async () => {

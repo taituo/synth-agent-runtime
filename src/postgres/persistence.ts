@@ -1,6 +1,6 @@
 import type { AgentId, ArtifactId, ProjectId, TaskId, WorkspaceId } from "../core/ids.js";
 import type { AgentSnapshot, Artifact, Relation, RuntimeEvent, TaskSpec } from "../core/types.js";
-import type { AgentWriteFence, DurabilityProvider, EventReadOptions, SequencedRuntimeEvent } from "../durability/types.js";
+import type { AgentWriteFence, DurabilityProvider, EventCursor, EventReadOptions, SequencedRuntimeEvent } from "../durability/types.js";
 import type {
   ClaimResult,
   DurableCommandRecord,
@@ -129,6 +129,53 @@ export class PostgresPersistence implements DurabilityProvider, RuntimeStateStor
   async pruneEvents(throughSeq: number): Promise<number> {
     const result = await this.db.query<{ seq: string | number }>(`DELETE FROM synth_events WHERE seq<=$1 RETURNING seq`, [throughSeq]);
     return result.rows.length;
+  }
+  async ackEvent(consumerId: string, throughSeq: number): Promise<EventCursor> {
+    // Clamp to the current max seq and keep the ack monotonic, mirroring
+    // ackMailbox. GREATEST on the stored value makes a regressing ack a no-op.
+    const result = await this.db.query<{ ack_seq: string | number; updated_at_ms: string | number }>(
+      `WITH max_seq AS (SELECT COALESCE(MAX(seq),0) AS seq FROM synth_events)
+       INSERT INTO synth_event_cursors(consumer_id,ack_seq,updated_at_ms)
+       SELECT $1, LEAST($2::bigint, max_seq.seq), $3 FROM max_seq
+       ON CONFLICT (consumer_id) DO UPDATE SET
+         ack_seq=GREATEST(synth_event_cursors.ack_seq, EXCLUDED.ack_seq),
+         updated_at_ms=EXCLUDED.updated_at_ms
+       RETURNING ack_seq, updated_at_ms`,
+      [consumerId, throughSeq, Date.now()],
+    );
+    const row = result.rows[0]!;
+    return { consumerId, ackSeq: Number(row.ack_seq), updatedAt: Number(row.updated_at_ms) };
+  }
+  async getEventCursor(consumerId: string): Promise<EventCursor | undefined> {
+    const result = await this.db.query<{ consumer_id: string; ack_seq: string | number; updated_at_ms: string | number }>(
+      `SELECT consumer_id,ack_seq,updated_at_ms FROM synth_event_cursors WHERE consumer_id=$1`,
+      [consumerId],
+    );
+    const row = result.rows[0];
+    return row ? { consumerId: row.consumer_id, ackSeq: Number(row.ack_seq), updatedAt: Number(row.updated_at_ms) } : undefined;
+  }
+  async listEventCursors(): Promise<EventCursor[]> {
+    const result = await this.db.query<{ consumer_id: string; ack_seq: string | number; updated_at_ms: string | number }>(
+      `SELECT consumer_id,ack_seq,updated_at_ms FROM synth_event_cursors`,
+    );
+    return result.rows.map((row) => ({ consumerId: row.consumer_id, ackSeq: Number(row.ack_seq), updatedAt: Number(row.updated_at_ms) }));
+  }
+  async forgetEventConsumer(consumerId: string): Promise<boolean> {
+    const result = await this.db.query<{ consumer_id: string }>(
+      `DELETE FROM synth_event_cursors WHERE consumer_id=$1 RETURNING consumer_id`,
+      [consumerId],
+    );
+    return result.rows.length > 0;
+  }
+  async safeEventWatermark(): Promise<number> {
+    const result = await this.db.query<{ watermark: string | number | null }>(
+      `SELECT COALESCE(MIN(ack_seq),0) AS watermark FROM synth_event_cursors`,
+    );
+    return Number(result.rows[0]?.watermark ?? 0);
+  }
+  async pruneEventsSafe(): Promise<number> {
+    const watermark = await this.safeEventWatermark();
+    return watermark <= 0 ? 0 : this.pruneEvents(watermark);
   }
 
   async putCommand(record: DurableCommandRecord): Promise<void> {

@@ -1,6 +1,6 @@
 import type { AgentId, TaskId } from "../core/ids.js";
 import type { AgentSnapshot, Relation, RuntimeEvent, TaskSpec } from "../core/types.js";
-import type { AgentWriteFence, DurabilityProvider, EventReadOptions, SequencedRuntimeEvent } from "../durability/types.js";
+import type { AgentWriteFence, DurabilityProvider, EventCursor, EventReadOptions, SequencedRuntimeEvent } from "../durability/types.js";
 import type { DurableCommandRecord, DurableEffectRecord, DurableTurnRecord, DurableWorkspaceCheckpoint, RuntimeStateStore, TurnStatus } from "../durability/runtime-state.js";
 import type { Effect, EffectContext, EffectResult, Executor } from "../execution/types.js";
 import { ChaosController } from "./faults.js";
@@ -11,6 +11,12 @@ export declare class ChaosDurabilityProvider implements DurabilityProvider {
     putAgentFenced?: (snapshot: AgentSnapshot, fence: AgentWriteFence) => Promise<boolean>;
     readEvents?: (options?: EventReadOptions) => Promise<SequencedRuntimeEvent[]>;
     pruneEvents?: (throughSeq: number) => Promise<number>;
+    ackEvent?: (consumerId: string, throughSeq: number) => Promise<EventCursor>;
+    getEventCursor?: (consumerId: string) => Promise<EventCursor | undefined>;
+    listEventCursors?: () => Promise<EventCursor[]>;
+    forgetEventConsumer?: (consumerId: string) => Promise<boolean>;
+    safeEventWatermark?: () => Promise<number>;
+    pruneEventsSafe?: () => Promise<number>;
     createAgent(v: AgentSnapshot): Promise<boolean>;
     putAgent(v: AgentSnapshot): Promise<void>;
     getAgent(id: AgentId): Promise<AgentSnapshot | undefined>;

@@ -2,6 +2,28 @@
 
 ## 1.0.0-rc.1 — abort-safety fix folded in, git ref/remote argument-injection fixed
 
+### Durable named event-consumer ACK and safe retention watermark
+
+- **`pruneEvents(throughSeq)` trusted the caller**, so a lagging named
+  consumer's unread events could be deleted — nothing computed a safe
+  retention bound from consumers' actual read positions. Added an optional
+  event-consumer ACK registry to `DurabilityProvider` (`ackEvent`,
+  `getEventCursor`, `listEventCursors`, `forgetEventConsumer`,
+  `safeEventWatermark`, `pruneEventsSafe`), implemented for the in-memory,
+  JSON-file, and PostgreSQL stores (new `synth_event_cursors` table) and
+  forwarded through `ChaosDurabilityProvider`. Acks are monotonic and clamped
+  to the current max sequence; the watermark is the minimum ack across
+  registered consumers, and `pruneEventsSafe` prunes only through it. With no
+  registered consumer the watermark is 0 and nothing is pruned, so an
+  unconfigured deployment fails closed. The raw `pruneEvents` is unchanged and
+  remains the caller-owned primitive. Verified live against PostgreSQL: two
+  consumers at 3 and 5 yield watermark 3, a clamped ack raises it to 5, and
+  safe pruning removes exactly the acked prefix. Regression tests cover the
+  watermark semantics, the fail-closed empty case, the PostgreSQL store, and
+  chaos forwarding.
+
+Root suite: 100/100 (97 + 3 new tests).
+
 ### Per-record compare-and-swap for tasks and artifacts
 
 - **Task and artifact records were last-write-wins bodies.** Project

@@ -1,6 +1,6 @@
 import type { AgentId, ArtifactId, ProjectId, TaskId, WorkspaceId } from "../core/ids.js";
 import type { AgentSnapshot, Artifact, Relation, RuntimeEvent, TaskSpec } from "../core/types.js";
-import type { AgentWriteFence, DurabilityProvider, EventReadOptions, SequencedRuntimeEvent } from "../durability/types.js";
+import type { AgentWriteFence, DurabilityProvider, EventCursor, EventReadOptions, SequencedRuntimeEvent } from "../durability/types.js";
 import type { ClaimResult, DurableCommandRecord, DurableEffectRecord, DurableTurnRecord, DurableWorkspaceCheckpoint, RuntimeStateStore, TurnStatus } from "../durability/runtime-state.js";
 import type { ArtifactCasResult, ProjectProjection, ProjectSpec, TaskCasResult, WorldCasResult, WorldStore } from "../world/types.js";
 import type { PgExecutor } from "./types.js";
@@ -29,6 +29,12 @@ export declare class PostgresPersistence implements DurabilityProvider, RuntimeS
     listEvents(): Promise<RuntimeEvent[]>;
     readEvents(options?: EventReadOptions): Promise<SequencedRuntimeEvent[]>;
     pruneEvents(throughSeq: number): Promise<number>;
+    ackEvent(consumerId: string, throughSeq: number): Promise<EventCursor>;
+    getEventCursor(consumerId: string): Promise<EventCursor | undefined>;
+    listEventCursors(): Promise<EventCursor[]>;
+    forgetEventConsumer(consumerId: string): Promise<boolean>;
+    safeEventWatermark(): Promise<number>;
+    pruneEventsSafe(): Promise<number>;
     putCommand(record: DurableCommandRecord): Promise<void>;
     getCommand(id: string): Promise<DurableCommandRecord | undefined>;
     claimCommand(record: DurableCommandRecord): Promise<ClaimResult<DurableCommandRecord>>;

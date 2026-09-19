@@ -94,6 +94,40 @@ export class PostgresPersistence {
         const result = await this.db.query(`DELETE FROM synth_events WHERE seq<=$1 RETURNING seq`, [throughSeq]);
         return result.rows.length;
     }
+    async ackEvent(consumerId, throughSeq) {
+        // Clamp to the current max seq and keep the ack monotonic, mirroring
+        // ackMailbox. GREATEST on the stored value makes a regressing ack a no-op.
+        const result = await this.db.query(`WITH max_seq AS (SELECT COALESCE(MAX(seq),0) AS seq FROM synth_events)
+       INSERT INTO synth_event_cursors(consumer_id,ack_seq,updated_at_ms)
+       SELECT $1, LEAST($2::bigint, max_seq.seq), $3 FROM max_seq
+       ON CONFLICT (consumer_id) DO UPDATE SET
+         ack_seq=GREATEST(synth_event_cursors.ack_seq, EXCLUDED.ack_seq),
+         updated_at_ms=EXCLUDED.updated_at_ms
+       RETURNING ack_seq, updated_at_ms`, [consumerId, throughSeq, Date.now()]);
+        const row = result.rows[0];
+        return { consumerId, ackSeq: Number(row.ack_seq), updatedAt: Number(row.updated_at_ms) };
+    }
+    async getEventCursor(consumerId) {
+        const result = await this.db.query(`SELECT consumer_id,ack_seq,updated_at_ms FROM synth_event_cursors WHERE consumer_id=$1`, [consumerId]);
+        const row = result.rows[0];
+        return row ? { consumerId: row.consumer_id, ackSeq: Number(row.ack_seq), updatedAt: Number(row.updated_at_ms) } : undefined;
+    }
+    async listEventCursors() {
+        const result = await this.db.query(`SELECT consumer_id,ack_seq,updated_at_ms FROM synth_event_cursors`);
+        return result.rows.map((row) => ({ consumerId: row.consumer_id, ackSeq: Number(row.ack_seq), updatedAt: Number(row.updated_at_ms) }));
+    }
+    async forgetEventConsumer(consumerId) {
+        const result = await this.db.query(`DELETE FROM synth_event_cursors WHERE consumer_id=$1 RETURNING consumer_id`, [consumerId]);
+        return result.rows.length > 0;
+    }
+    async safeEventWatermark() {
+        const result = await this.db.query(`SELECT COALESCE(MIN(ack_seq),0) AS watermark FROM synth_event_cursors`);
+        return Number(result.rows[0]?.watermark ?? 0);
+    }
+    async pruneEventsSafe() {
+        const watermark = await this.safeEventWatermark();
+        return watermark <= 0 ? 0 : this.pruneEvents(watermark);
+    }
     async putCommand(record) {
         await this.db.query(`INSERT INTO synth_commands(id,status,body,updated_at) VALUES ($1,$2,$3::jsonb,now())
        ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status, body=EXCLUDED.body, updated_at=now()

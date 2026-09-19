@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-const EMPTY = () => ({ agents: {}, agentFences: {}, tasks: {}, relations: [], events: [], nextEventSeq: 1 });
+const EMPTY = () => ({ agents: {}, agentFences: {}, tasks: {}, relations: [], events: [], eventCursors: {}, nextEventSeq: 1 });
 /** Crash-safe local DurabilityProvider for one control-plane writer. */
 export class JsonFileDurabilityProvider {
     path;
@@ -58,6 +58,41 @@ export class JsonFileDurabilityProvider {
         await this.#mutate((state) => { const before = state.events.length; state.events = state.events.filter((value) => value.seq > throughSeq); removed = before - state.events.length; });
         return removed;
     }
+    async ackEvent(consumerId, throughSeq) {
+        let cursor;
+        await this.#mutate((state) => {
+            const maxSeq = state.events.at(-1)?.seq ?? 0;
+            const ackSeq = Math.max(state.eventCursors[consumerId]?.ackSeq ?? 0, Math.min(throughSeq, maxSeq));
+            cursor = { consumerId, ackSeq, updatedAt: Date.now() };
+            state.eventCursors[consumerId] = cursor;
+        });
+        return structuredClone(cursor);
+    }
+    async getEventCursor(consumerId) {
+        const value = (await this.#read()).eventCursors[consumerId];
+        return value ? structuredClone(value) : undefined;
+    }
+    async listEventCursors() {
+        return Object.values((await this.#read()).eventCursors).map((value) => structuredClone(value));
+    }
+    async forgetEventConsumer(consumerId) {
+        let removed = false;
+        await this.#mutate((state) => { if (state.eventCursors[consumerId]) {
+            delete state.eventCursors[consumerId];
+            removed = true;
+        } });
+        return removed;
+    }
+    async safeEventWatermark() {
+        const cursors = Object.values((await this.#read()).eventCursors);
+        if (cursors.length === 0)
+            return 0;
+        return cursors.reduce((min, cursor) => Math.min(min, cursor.ackSeq), Number.POSITIVE_INFINITY);
+    }
+    async pruneEventsSafe() {
+        const watermark = await this.safeEventWatermark();
+        return watermark <= 0 ? 0 : this.pruneEvents(watermark);
+    }
     async #read() {
         try {
             const parsed = JSON.parse(await readFile(this.path, "utf8"));
@@ -73,6 +108,7 @@ export class JsonFileDurabilityProvider {
                 tasks: parsed.tasks ?? {},
                 relations: parsed.relations ?? [],
                 events: sequenced,
+                eventCursors: parsed.eventCursors ?? {},
                 nextEventSeq: parsed.nextEventSeq ?? ((sequenced.at(-1)?.seq ?? 0) + 1),
             };
         }

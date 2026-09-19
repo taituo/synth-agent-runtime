@@ -1,6 +1,6 @@
 import type { AgentId, TaskId } from "../core/ids.js";
 import type { AgentSnapshot, Relation, RuntimeEvent, TaskSpec } from "../core/types.js";
-import type { AgentWriteFence, DurabilityProvider, EventReadOptions, SequencedRuntimeEvent } from "./types.js";
+import type { AgentWriteFence, DurabilityProvider, EventCursor, EventReadOptions, SequencedRuntimeEvent } from "./types.js";
 
 export class LocalMemoryDurability implements DurabilityProvider {
   #agents = new Map<AgentId, AgentSnapshot>();
@@ -8,6 +8,7 @@ export class LocalMemoryDurability implements DurabilityProvider {
   #tasks = new Map<TaskId, TaskSpec>();
   #relations: Relation[] = [];
   #events: SequencedRuntimeEvent[] = [];
+  #eventCursors = new Map<string, EventCursor>();
   #nextSeq = 1;
 
   async createAgent(snapshot: AgentSnapshot): Promise<boolean> {
@@ -45,5 +46,33 @@ export class LocalMemoryDurability implements DurabilityProvider {
   }
   async pruneEvents(throughSeq: number): Promise<number> {
     const before = this.#events.length; this.#events = this.#events.filter((v) => v.seq > throughSeq); return before - this.#events.length;
+  }
+  async ackEvent(consumerId: string, throughSeq: number): Promise<EventCursor> {
+    const maxSeq = this.#events.at(-1)?.seq ?? 0;
+    const existing = this.#eventCursors.get(consumerId);
+    const ackSeq = Math.max(existing?.ackSeq ?? 0, Math.min(throughSeq, maxSeq));
+    const cursor: EventCursor = { consumerId, ackSeq, updatedAt: Date.now() };
+    this.#eventCursors.set(consumerId, cursor);
+    return structuredClone(cursor);
+  }
+  async getEventCursor(consumerId: string): Promise<EventCursor | undefined> {
+    const value = this.#eventCursors.get(consumerId);
+    return value ? structuredClone(value) : undefined;
+  }
+  async listEventCursors(): Promise<EventCursor[]> {
+    return [...this.#eventCursors.values()].map((value) => structuredClone(value));
+  }
+  async forgetEventConsumer(consumerId: string): Promise<boolean> {
+    return this.#eventCursors.delete(consumerId);
+  }
+  async safeEventWatermark(): Promise<number> {
+    if (this.#eventCursors.size === 0) return 0;
+    let min = Number.POSITIVE_INFINITY;
+    for (const cursor of this.#eventCursors.values()) min = Math.min(min, cursor.ackSeq);
+    return min;
+  }
+  async pruneEventsSafe(): Promise<number> {
+    const watermark = await this.safeEventWatermark();
+    return watermark <= 0 ? 0 : this.pruneEvents(watermark);
   }
 }
