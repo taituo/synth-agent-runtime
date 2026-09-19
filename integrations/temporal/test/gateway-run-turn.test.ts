@@ -72,6 +72,9 @@ test("rejects structurally invalid answers so Temporal's retry policy can decide
   assert.throws(() => parseClassifications('{"nope":1}', 1), /no "events" array/);
   assert.throws(() => parseClassifications('{"events":[{"reaction":"x"}]}', 1), /no string classification/);
   assert.throws(() => parseClassifications("I cannot help with that", 1), /not JSON/);
+  // Track 2: a model that obeys a prompt injection and replies "OK" must be
+  // rejected, not accepted as a bogus shape.
+  assert.throws(() => parseClassifications("OK", 1), /not JSON/);
 });
 
 test("a non-2xx gateway reply and an empty completion both throw", async () => {

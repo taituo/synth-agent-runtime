@@ -11,6 +11,7 @@
     "live:swarm": "tsx swarm-driver.ts",
     "live:swarm-inference": "tsx swarm-inference-driver.ts",
     "live:park": "tsx park-live.ts",
+    "live:corpus": "tsx corpus-inference-driver.ts",
     "live:flaky-gateway": "tsx flaky-gateway.ts"
   },
   "dependencies": {
