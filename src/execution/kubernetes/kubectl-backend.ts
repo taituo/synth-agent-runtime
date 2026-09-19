@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { dirname, posix } from "node:path";
 import type { KubernetesResourceClass } from "../resource-class.js";
-import { buildRestrictedNamespace, buildSandboxNetworkPolicy, buildSandboxPod } from "./manifests.js";
+import { assertValidNamespace, buildRestrictedNamespace, buildSandboxNetworkPolicy, buildSandboxPod } from "./manifests.js";
 import type { KubernetesObject, SandboxBackend, SandboxExecRequest, SandboxExecResult, SandboxIdentity } from "./types.js";
 
 export interface KubectlSandboxBackendOptions {
@@ -77,7 +77,7 @@ export class KubectlSandboxBackend implements SandboxBackend {
   #namespaceReady?: Promise<void>;
 
   constructor(options: KubectlSandboxBackendOptions = {}) {
-    this.#namespace = options.namespace ?? "synth-sandboxes";
+    this.#namespace = options.namespace === undefined ? "synth-sandboxes" : assertValidNamespace(options.namespace);
     this.#kubectl = options.kubectlBin ?? "kubectl";
     this.#context = options.context;
     this.#createTimeoutMs = options.createTimeoutMs ?? 120_000;
@@ -85,7 +85,7 @@ export class KubectlSandboxBackend implements SandboxBackend {
   }
 
   async create(resourceClass: KubernetesResourceClass, options: { labels?: Record<string, string>; namespace?: string } = {}): Promise<SandboxIdentity> {
-    const namespace = options.namespace ?? this.#namespace;
+    const namespace = options.namespace === undefined ? this.#namespace : assertValidNamespace(options.namespace);
     if (namespace === this.#namespace) await this.#ensureNamespace();
     else await this.#apply(buildRestrictedNamespace(namespace));
     const id = randomUUID();

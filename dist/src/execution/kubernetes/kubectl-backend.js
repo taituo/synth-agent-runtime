@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { dirname, posix } from "node:path";
-import { buildRestrictedNamespace, buildSandboxNetworkPolicy, buildSandboxPod } from "./manifests.js";
+import { assertValidNamespace, buildRestrictedNamespace, buildSandboxNetworkPolicy, buildSandboxPod } from "./manifests.js";
 function safeWorkspacePath(input) {
     const normalized = posix.normalize(`/${input.replace(/\\/g, "/")}`).replace(/^\/+/, "");
     if (!normalized || normalized === "." || normalized.startsWith("../") || normalized.includes("/../")) {
@@ -56,14 +56,14 @@ export class KubectlSandboxBackend {
     #defaultExecTimeoutMs;
     #namespaceReady;
     constructor(options = {}) {
-        this.#namespace = options.namespace ?? "synth-sandboxes";
+        this.#namespace = options.namespace === undefined ? "synth-sandboxes" : assertValidNamespace(options.namespace);
         this.#kubectl = options.kubectlBin ?? "kubectl";
         this.#context = options.context;
         this.#createTimeoutMs = options.createTimeoutMs ?? 120_000;
         this.#defaultExecTimeoutMs = options.defaultExecTimeoutMs ?? 10 * 60_000;
     }
     async create(resourceClass, options = {}) {
-        const namespace = options.namespace ?? this.#namespace;
+        const namespace = options.namespace === undefined ? this.#namespace : assertValidNamespace(options.namespace);
         if (namespace === this.#namespace)
             await this.#ensureNamespace();
         else

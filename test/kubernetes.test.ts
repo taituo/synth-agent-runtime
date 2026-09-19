@@ -3,11 +3,13 @@ import assert from "node:assert/strict";
 import {
   DEFAULT_KUBERNETES_RESOURCE_CLASSES,
   ExecutionBroker,
+  KubectlSandboxBackend,
   KubernetesExecutor,
   MemoryWorkspace,
   ProjectCellManager,
   WarmSandboxPool,
   WorkspaceSynchronizer,
+  assertValidNamespace,
   buildProjectServicePod,
   buildSandboxNetworkPolicy,
   buildSandboxPod,
@@ -306,6 +308,28 @@ class FakeProjectCellController implements KubernetesObjectController {
 function projectCellClass(): KubernetesResourceClass {
   return { ...DEFAULT_KUBERNETES_RESOURCE_CLASSES.find((entry) => entry.id === "project-cell")! };
 }
+
+test("caller-supplied Kubernetes namespaces are validated, not silently rewritten", async () => {
+  assert.equal(assertValidNamespace("synth-sandboxes"), "synth-sandboxes");
+  for (const bad of ["", "Bad_Namespace", "UPPER", "-leading", "trailing-", "has space", "a".repeat(64), "dotted.name"]) {
+    assert.throws(() => assertValidNamespace(bad), /Invalid Kubernetes namespace/, `expected ${JSON.stringify(bad)} to be rejected`);
+  }
+  assert.throws(() => new KubectlSandboxBackend({ namespace: "Bad_Namespace" }), /Invalid Kubernetes namespace/);
+  const backend = new KubectlSandboxBackend({ namespace: "synth-sandboxes" });
+  await assert.rejects(
+    backend.create(DEFAULT_KUBERNETES_RESOURCE_CLASSES[0]!, { namespace: "Bad_Namespace" }),
+    /Invalid Kubernetes namespace/,
+  );
+});
+
+test("project cell rejects an invalid caller-supplied namespace before applying anything", async () => {
+  const controller = new FakeProjectCellController();
+  const backend = new MockSandboxBackend();
+  const manager = new ProjectCellManager(controller, backend, [projectCellClass()]);
+  await assert.rejects(manager.ensure({ id: "cell-1", namespace: "Bad_Namespace" }), /Invalid Kubernetes namespace/);
+  assert.deepEqual(controller.applied, []);
+  assert.equal(backend.creates, 0);
+});
 
 test("project service pod honors a requested non-root runAsUser/runAsGroup/fsGroup", () => {
   const pod = buildProjectServicePod("test", "cell-1", {

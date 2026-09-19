@@ -9,6 +9,27 @@ function q(value: string | undefined): string | undefined {
   return value?.trim() || undefined;
 }
 
+const DNS1123_LABEL = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;
+
+/**
+ * Validate a caller-supplied Kubernetes namespace name.
+ *
+ * Derived names (pods, services, network policies) are sanitized by
+ * construction, so an invalid character there is rewritten. A namespace the
+ * caller names is different: it is referenced elsewhere, so silently
+ * rewriting it could target a namespace other than the one intended. Reject
+ * invalid names up front with a clear error instead of passing them to
+ * `kubectl`, where the failure is an opaque API rejection.
+ */
+export function assertValidNamespace(namespace: string): string {
+  if (namespace.length === 0 || namespace.length > 63 || !DNS1123_LABEL.test(namespace)) {
+    throw new Error(
+      `Invalid Kubernetes namespace name: ${JSON.stringify(namespace)} (expected a DNS-1123 label of at most 63 characters)`,
+    );
+  }
+  return namespace;
+}
+
 export function sandboxLabels(id: string, resourceClass: KubernetesResourceClass): Record<string, string> {
   return {
     [LABEL_MANAGED]: "true",

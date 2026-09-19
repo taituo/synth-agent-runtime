@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { buildProjectCellNetworkPolicy, buildProjectService, buildProjectServicePod, buildRestrictedNamespace } from "./manifests.js";
+import { assertValidNamespace, buildProjectCellNetworkPolicy, buildProjectService, buildProjectServicePod, buildRestrictedNamespace } from "./manifests.js";
 export class KubectlObjectController {
     #kubectl;
     #context;
@@ -88,7 +88,9 @@ export class ProjectCellManager {
         // When the caller supplies a namespace we do not own it (it may be shared
         // with other resources), so a failed ensure must not delete it.
         const ownsNamespace = spec.namespace === undefined;
-        const namespace = spec.namespace ?? `synth-cell-${spec.id}`.toLowerCase().replace(/[^a-z0-9-]/g, "-").slice(0, 63);
+        const namespace = spec.namespace === undefined
+            ? `synth-cell-${spec.id}`.toLowerCase().replace(/[^a-z0-9-]/g, "-").slice(0, 63)
+            : assertValidNamespace(spec.namespace);
         let executor;
         try {
             await this.#controller.apply(buildRestrictedNamespace(namespace, { "synth.openai.dev/project-cell": spec.id }));

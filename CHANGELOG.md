@@ -2,6 +2,27 @@
 
 ## 1.0.0-rc.1 — abort-safety fix folded in, git ref/remote argument-injection fixed
 
+### Caller-supplied Kubernetes namespaces are validated
+
+- **A caller-supplied namespace reached `kubectl` unvalidated**
+  (`src/execution/kubernetes/kubectl-backend.ts`,
+  `src/execution/kubernetes/project-cell.ts`). Derived pod/service names are
+  sanitized by construction, but a namespace the caller names
+  (`KubectlSandboxBackendOptions.namespace` / `create({ namespace })` /
+  `ProjectCellSpec.namespace`) was used as-is, so a malformed value surfaced
+  only as an opaque API rejection once `kubectl apply` ran (and a name with
+  invalid characters or more than 63 characters could never succeed). Added
+  `assertValidNamespace`, enforcing the DNS-1123 label rules with a clear error
+  before anything is applied. It validates rather than silently rewriting: a
+  caller-named namespace is referenced elsewhere, so renaming it could target
+  a different namespace than intended. `KubectlSandboxBackend` validates both
+  its constructor default and the per-`create` override; `ProjectCellManager`
+  validates `spec.namespace`. Regression tests cover a valid name, a range of
+  invalid inputs, and that no objects are applied when the namespace is
+  rejected.
+
+Root suite: 93/93 (91 + 2 new tests).
+
 ### StaticBearerAuthenticator compares bearer tokens in constant time
 
 - **Bearer tokens were matched with `Map.get`**
