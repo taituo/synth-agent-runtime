@@ -16,6 +16,8 @@ class FakePg implements PgExecutor {
   readonly commands = new Map<string, unknown>();
   readonly effects = new Map<string, unknown>();
   readonly rateLimits = new Map<string, number>();
+  readonly tasks = new Map<string, unknown>();
+  readonly artifacts = new Map<string, unknown>();
 
   async query<Row = Record<string, unknown>>(text: string, values: unknown[] = []): Promise<PgQueryResult<Row>> {
     const sql = text.replace(/\s+/g, " ").trim();
@@ -55,6 +57,30 @@ class FakePg implements PgExecutor {
       // Honor the WHERE clause on the upsert (canReplaceEffect semantics).
       if (!existing || canReplaceEffect(existing, next)) this.effects.set(id, next);
       return { rows: [] };
+    }
+    if (sql.startsWith("UPDATE synth_tasks SET body=$2::jsonb")) {
+      const id = String(values[0]);
+      const next = JSON.parse(String(values[1]));
+      const existing = this.tasks.get(id) as any;
+      if (!existing || (existing.revision ?? 0) !== Number(values[2])) return { rows: [] };
+      this.tasks.set(id, next);
+      return { rows: [{ body: next } as Row] };
+    }
+    if (sql.startsWith("SELECT body FROM synth_tasks WHERE id=$1")) {
+      const body = this.tasks.get(String(values[0]));
+      return { rows: body ? [{ body } as Row] : [] };
+    }
+    if (sql.startsWith("UPDATE synth_artifacts SET body=$2::jsonb")) {
+      const id = String(values[0]);
+      const next = JSON.parse(String(values[1]));
+      const existing = this.artifacts.get(id) as any;
+      if (!existing || (existing.revision ?? 0) !== Number(values[2])) return { rows: [] };
+      this.artifacts.set(id, next);
+      return { rows: [{ body: next } as Row] };
+    }
+    if (sql.startsWith("SELECT body FROM synth_artifacts WHERE id=$1")) {
+      const body = this.artifacts.get(String(values[0]));
+      return { rows: body ? [{ body } as Row] : [] };
     }
     if (sql.startsWith("INSERT INTO synth_rate_limits")) {
       const key = `${values[0]}@${values[1]}`;
@@ -98,6 +124,26 @@ test("Postgres effect claim prevents duplicate executor calls", async () => {
   const two = await brokerB.execute(effect, context);
   assert.equal(executions, 1);
   assert.deepEqual(two, one);
+});
+
+test("Postgres task and artifact compare-and-swap rejects a stale revision", async () => {
+  const db = new FakePg();
+  const store = new PostgresPersistence(db);
+  db.tasks.set("t1", { id: "t1", title: "t", objective: "o", status: "pending" });
+  const first = await store.compareAndSwapTask({ id: "t1", title: "t", objective: "o", status: "running" } as any, 0);
+  assert.equal(first.swapped, true);
+  assert.equal((first.task as any).revision, 1);
+  const stale = await store.compareAndSwapTask({ id: "t1", title: "t", objective: "o", status: "completed" } as any, 0);
+  assert.equal(stale.swapped, false);
+  assert.equal((stale.task as any).status, "running");
+
+  db.artifacts.set("a1", { id: "a1", type: "report", createdAt: 1, data: { v: 1 } });
+  const artifactFirst = await store.compareAndSwapArtifact({ id: "a1", type: "report", createdAt: 1, data: { v: 2 } } as any, 0);
+  assert.equal(artifactFirst.swapped, true);
+  assert.equal((artifactFirst.artifact as any).revision, 1);
+  const artifactStale = await store.compareAndSwapArtifact({ id: "a1", type: "report", createdAt: 1, data: { v: 3 } } as any, 0);
+  assert.equal(artifactStale.swapped, false);
+  assert.equal((artifactStale.artifact as any).data.v, 2);
 });
 
 test("Postgres rate limit store shares one counter across store instances", async () => {

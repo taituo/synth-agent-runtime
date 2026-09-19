@@ -47,14 +47,30 @@ export interface WorldCasResult {
     swapped: boolean;
     project: ProjectSpec;
 }
+export interface TaskCasResult {
+    swapped: boolean;
+    task: TaskSpec;
+}
+export interface ArtifactCasResult {
+    swapped: boolean;
+    artifact: Artifact;
+}
 export interface WorldStore {
     putProject(project: ProjectSpec): Promise<void>;
     compareAndSwapProject(project: ProjectSpec, expectedRevision: number): Promise<WorldCasResult>;
     getProject(id: ProjectId): Promise<ProjectSpec | undefined>;
     listProjects(): Promise<ProjectSpec[]>;
     putTask(task: TaskSpec): Promise<void>;
+    /**
+     * Optional per-record compare-and-swap, mirroring compareAndSwapProject:
+     * replace the task only when its stored revision equals expectedRevision,
+     * writing revision+1 and returning the stored task when it does not.
+     */
+    compareAndSwapTask?(task: TaskSpec, expectedRevision: number): Promise<TaskCasResult>;
     getTask(id: TaskId): Promise<TaskSpec | undefined>;
     putArtifact(artifact: Artifact): Promise<void>;
+    /** Optional per-record compare-and-swap for artifacts. */
+    compareAndSwapArtifact?(artifact: Artifact, expectedRevision: number): Promise<ArtifactCasResult>;
     getArtifact(id: ArtifactId): Promise<Artifact | undefined>;
     projection(projectId: ProjectId): Promise<ProjectProjection | undefined>;
 }

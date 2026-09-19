@@ -3,7 +3,7 @@ import { dirname } from "node:path";
 import type { ArtifactId, ProjectId, TaskId } from "../core/ids.js";
 import type { Artifact, TaskSpec } from "../core/types.js";
 import { InMemoryWorldStore } from "./in-memory-world.js";
-import type { ProjectDecision, ProjectProjection, ProjectSpec, WorldCasResult, WorldDocument, WorldStore } from "./types.js";
+import type { ArtifactCasResult, ProjectDecision, ProjectProjection, ProjectSpec, TaskCasResult, WorldCasResult, WorldDocument, WorldStore } from "./types.js";
 
 /** Single-process crash-safe world store with serialized mutations and CAS. */
 export class JsonFileWorldStore implements WorldStore {
@@ -27,8 +27,14 @@ export class JsonFileWorldStore implements WorldStore {
   getProject(id: ProjectId) { return this.memory.getProject(id); }
   listProjects() { return this.memory.listProjects(); }
   async putTask(task: TaskSpec): Promise<void> { await this.mutate(async () => this.memory.putTask(task)); }
+  async compareAndSwapTask(task: TaskSpec, expectedRevision: number): Promise<TaskCasResult> {
+    return this.mutate(async () => this.memory.compareAndSwapTask(task, expectedRevision));
+  }
   getTask(id: TaskId) { return this.memory.getTask(id); }
   async putArtifact(artifact: Artifact): Promise<void> { await this.mutate(async () => this.memory.putArtifact(artifact)); }
+  async compareAndSwapArtifact(artifact: Artifact, expectedRevision: number): Promise<ArtifactCasResult> {
+    return this.mutate(async () => this.memory.compareAndSwapArtifact(artifact, expectedRevision));
+  }
   getArtifact(id: ArtifactId) { return this.memory.getArtifact(id); }
   projection(projectId: ProjectId): Promise<ProjectProjection | undefined> { return this.memory.projection(projectId); }
   async attachTask(projectId: ProjectId, task: TaskSpec): Promise<void> { await this.mutate(async () => this.memory.attachTask(projectId, task)); }

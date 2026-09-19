@@ -1,6 +1,6 @@
 import { newProjectId, type ArtifactId, type ProjectId, type TaskId } from "../core/ids.js";
 import type { Artifact, TaskSpec } from "../core/types.js";
-import type { ProjectDecision, ProjectProjection, ProjectSpec, WorldCasResult, WorldDocument, WorldStore } from "./types.js";
+import type { ArtifactCasResult, ProjectDecision, ProjectProjection, ProjectSpec, TaskCasResult, WorldCasResult, WorldDocument, WorldStore } from "./types.js";
 
 function clone<T>(value: T): T { return structuredClone(value); }
 function normalizeProject(project: ProjectSpec | (Omit<ProjectSpec, "revision"> & { revision?: number })): ProjectSpec {
@@ -66,8 +66,24 @@ export class InMemoryWorldStore implements WorldStore {
   }
 
   async putTask(task: TaskSpec): Promise<void> { this.#tasks.set(task.id, clone(task)); }
+  async compareAndSwapTask(task: TaskSpec, expectedRevision: number): Promise<TaskCasResult> {
+    const existing = this.#tasks.get(task.id);
+    if (!existing) throw new Error(`Unknown task ${task.id}`);
+    if ((existing.revision ?? 0) !== expectedRevision) return { swapped: false, task: clone(existing) };
+    const next: TaskSpec = { ...clone(task), revision: expectedRevision + 1 };
+    this.#tasks.set(task.id, next);
+    return { swapped: true, task: clone(next) };
+  }
   async getTask(id: TaskId): Promise<TaskSpec | undefined> { const value = this.#tasks.get(id); return value ? clone(value) : undefined; }
   async putArtifact(artifact: Artifact): Promise<void> { this.#artifacts.set(artifact.id, clone(artifact)); }
+  async compareAndSwapArtifact(artifact: Artifact, expectedRevision: number): Promise<ArtifactCasResult> {
+    const existing = this.#artifacts.get(artifact.id);
+    if (!existing) throw new Error(`Unknown artifact ${artifact.id}`);
+    if ((existing.revision ?? 0) !== expectedRevision) return { swapped: false, artifact: clone(existing) };
+    const next: Artifact = { ...clone(artifact), revision: expectedRevision + 1 };
+    this.#artifacts.set(artifact.id, next);
+    return { swapped: true, artifact: clone(next) };
+  }
   async getArtifact(id: ArtifactId): Promise<Artifact | undefined> { const value = this.#artifacts.get(id); return value ? clone(value) : undefined; }
 
   async attachTask(projectId: ProjectId, task: TaskSpec): Promise<void> {

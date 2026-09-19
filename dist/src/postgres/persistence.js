@@ -53,6 +53,18 @@ export class PostgresPersistence {
     async putTask(task) {
         await upsertBody(this.db, "synth_tasks", "id", task.id, task);
     }
+    async compareAndSwapTask(task, expectedRevision) {
+        const next = { ...task, revision: expectedRevision + 1 };
+        const result = await this.db.query(`UPDATE synth_tasks SET body=$2::jsonb, updated_at=now()
+       WHERE id=$1 AND COALESCE((body->>'revision')::bigint,0)=$3
+       RETURNING body`, [task.id, encode(next), expectedRevision]);
+        if (result.rows.length)
+            return { swapped: true, task: decode(result.rows[0].body) };
+        const current = await this.getTask(task.id);
+        if (!current)
+            throw new Error(`Unknown task ${task.id}`);
+        return { swapped: false, task: current };
+    }
     async getTask(id) {
         return this.getBody("synth_tasks", "id", id);
     }
@@ -180,6 +192,18 @@ export class PostgresPersistence {
     }
     async putArtifact(artifact) {
         await upsertBody(this.db, "synth_artifacts", "id", artifact.id, artifact);
+    }
+    async compareAndSwapArtifact(artifact, expectedRevision) {
+        const next = { ...artifact, revision: expectedRevision + 1 };
+        const result = await this.db.query(`UPDATE synth_artifacts SET body=$2::jsonb, updated_at=now()
+       WHERE id=$1 AND COALESCE((body->>'revision')::bigint,0)=$3
+       RETURNING body`, [artifact.id, encode(next), expectedRevision]);
+        if (result.rows.length)
+            return { swapped: true, artifact: decode(result.rows[0].body) };
+        const current = await this.getArtifact(artifact.id);
+        if (!current)
+            throw new Error(`Unknown artifact ${artifact.id}`);
+        return { swapped: false, artifact: current };
     }
     async getArtifact(id) {
         return this.getBody("synth_artifacts", "id", id);

@@ -33,6 +33,8 @@ export interface InferenceProfile {
 
 export interface TaskSpec {
   id: TaskId;
+  /** Monotonic per-record revision for compare-and-swap updates (default 0). */
+  revision?: number;
   title: string;
   objective: string;
   constraints?: string[];
@@ -45,6 +47,8 @@ export interface TaskSpec {
 
 export interface Artifact {
   id: ArtifactId;
+  /** Monotonic per-record revision for compare-and-swap updates (default 0). */
+  revision?: number;
   type: "workspace-diff" | "patch" | "report" | "build" | "custom";
   taskId?: TaskId;
   workspaceId?: WorkspaceId;

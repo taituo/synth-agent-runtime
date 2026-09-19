@@ -20,7 +20,9 @@ import {
   ProfileRouterBackend,
   StaticBearerAuthenticator,
   createInferenceGateway,
+  type Artifact,
   type Effect,
+  type TaskSpec,
   type GatewayBackend,
   type GatewayModel,
 } from "../src/index.js";
@@ -138,6 +140,33 @@ test("world compare-and-swap rejects stale concurrent project mutation", async (
   assert.equal(stale.project.objective, "A");
   assert.equal(stale.project.revision, 1);
   await assert.rejects(() => world.putProject({ ...b, objective: "force stale" }), /WORLD_PUT_REQUIRES_NEWER_REVISION/);
+});
+
+test("world compare-and-swap rejects stale concurrent task and artifact mutation", async () => {
+  const world = new InMemoryWorldStore();
+  const task: TaskSpec = { id: "task-1" as any, title: "t", objective: "o", status: "pending" };
+  await world.putTask(task);
+  const a = (await world.getTask(task.id))!;
+  const b = (await world.getTask(task.id))!;
+  const first = await world.compareAndSwapTask!({ ...a, status: "running" }, a.revision ?? 0);
+  assert.equal(first.swapped, true);
+  assert.equal(first.task.revision, 1);
+  const stale = await world.compareAndSwapTask!({ ...b, status: "completed" }, b.revision ?? 0);
+  assert.equal(stale.swapped, false);
+  assert.equal(stale.task.status, "running");
+  assert.equal(stale.task.revision, 1);
+
+  const artifact: Artifact = { id: "art-1" as any, type: "report", createdAt: 1, data: { v: 1 } };
+  await world.putArtifact(artifact);
+  const c = (await world.getArtifact(artifact.id))!;
+  const d = (await world.getArtifact(artifact.id))!;
+  const artifactFirst = await world.compareAndSwapArtifact!({ ...c, data: { v: 2 } }, c.revision ?? 0);
+  assert.equal(artifactFirst.swapped, true);
+  assert.equal(artifactFirst.artifact.revision, 1);
+  const artifactStale = await world.compareAndSwapArtifact!({ ...d, data: { v: 3 } }, d.revision ?? 0);
+  assert.equal(artifactStale.swapped, false);
+  assert.equal((artifactStale.artifact.data as { v: number }).v, 2);
+  assert.equal(artifactStale.artifact.revision, 1);
 });
 
 test("effect reconciler resolves uncertain receipt without replay", async () => {

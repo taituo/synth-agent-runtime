@@ -1,6 +1,6 @@
 import { type ArtifactId, type ProjectId, type TaskId } from "../core/ids.js";
 import type { Artifact, TaskSpec } from "../core/types.js";
-import type { ProjectDecision, ProjectProjection, ProjectSpec, WorldCasResult, WorldDocument, WorldStore } from "./types.js";
+import type { ArtifactCasResult, ProjectDecision, ProjectProjection, ProjectSpec, TaskCasResult, WorldCasResult, WorldDocument, WorldStore } from "./types.js";
 export declare class InMemoryWorldStore implements WorldStore {
     #private;
     createProject(input: {
@@ -17,8 +17,10 @@ export declare class InMemoryWorldStore implements WorldStore {
     dump(): WorldDocument;
     restore(document: WorldDocument): void;
     putTask(task: TaskSpec): Promise<void>;
+    compareAndSwapTask(task: TaskSpec, expectedRevision: number): Promise<TaskCasResult>;
     getTask(id: TaskId): Promise<TaskSpec | undefined>;
     putArtifact(artifact: Artifact): Promise<void>;
+    compareAndSwapArtifact(artifact: Artifact, expectedRevision: number): Promise<ArtifactCasResult>;
     getArtifact(id: ArtifactId): Promise<Artifact | undefined>;
     attachTask(projectId: ProjectId, task: TaskSpec): Promise<void>;
     attachArtifact(projectId: ProjectId, artifact: Artifact): Promise<void>;

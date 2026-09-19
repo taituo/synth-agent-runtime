@@ -10,7 +10,7 @@ import type {
   RuntimeStateStore,
   TurnStatus,
 } from "../durability/runtime-state.js";
-import type { ProjectProjection, ProjectSpec, WorldCasResult, WorldStore } from "../world/types.js";
+import type { ArtifactCasResult, ProjectProjection, ProjectSpec, TaskCasResult, WorldCasResult, WorldStore } from "../world/types.js";
 import type { PgExecutor } from "./types.js";
 
 interface BodyRow { body: unknown }
@@ -77,6 +77,19 @@ export class PostgresPersistence implements DurabilityProvider, RuntimeStateStor
 
   async putTask(task: TaskSpec): Promise<void> {
     await upsertBody(this.db, "synth_tasks", "id", task.id, task);
+  }
+  async compareAndSwapTask(task: TaskSpec, expectedRevision: number): Promise<TaskCasResult> {
+    const next: TaskSpec = { ...task, revision: expectedRevision + 1 };
+    const result = await this.db.query<BodyRow>(
+      `UPDATE synth_tasks SET body=$2::jsonb, updated_at=now()
+       WHERE id=$1 AND COALESCE((body->>'revision')::bigint,0)=$3
+       RETURNING body`,
+      [task.id, encode(next), expectedRevision],
+    );
+    if (result.rows.length) return { swapped: true, task: decode<TaskSpec>(result.rows[0]!.body) };
+    const current = await this.getTask(task.id);
+    if (!current) throw new Error(`Unknown task ${task.id}`);
+    return { swapped: false, task: current };
   }
   async getTask(id: TaskId): Promise<TaskSpec | undefined> {
     return this.getBody<TaskSpec>("synth_tasks", "id", id);
@@ -237,6 +250,19 @@ export class PostgresPersistence implements DurabilityProvider, RuntimeStateStor
   }
   async putArtifact(artifact: Artifact): Promise<void> {
     await upsertBody(this.db, "synth_artifacts", "id", artifact.id, artifact);
+  }
+  async compareAndSwapArtifact(artifact: Artifact, expectedRevision: number): Promise<ArtifactCasResult> {
+    const next: Artifact = { ...artifact, revision: expectedRevision + 1 };
+    const result = await this.db.query<BodyRow>(
+      `UPDATE synth_artifacts SET body=$2::jsonb, updated_at=now()
+       WHERE id=$1 AND COALESCE((body->>'revision')::bigint,0)=$3
+       RETURNING body`,
+      [artifact.id, encode(next), expectedRevision],
+    );
+    if (result.rows.length) return { swapped: true, artifact: decode<Artifact>(result.rows[0]!.body) };
+    const current = await this.getArtifact(artifact.id);
+    if (!current) throw new Error(`Unknown artifact ${artifact.id}`);
+    return { swapped: false, artifact: current };
   }
   async getArtifact(id: ArtifactId): Promise<Artifact | undefined> {
     return this.getBody<Artifact>("synth_artifacts", "id", id);

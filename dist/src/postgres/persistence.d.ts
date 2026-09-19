@@ -2,7 +2,7 @@ import type { AgentId, ArtifactId, ProjectId, TaskId, WorkspaceId } from "../cor
 import type { AgentSnapshot, Artifact, Relation, RuntimeEvent, TaskSpec } from "../core/types.js";
 import type { AgentWriteFence, DurabilityProvider, EventReadOptions, SequencedRuntimeEvent } from "../durability/types.js";
 import type { ClaimResult, DurableCommandRecord, DurableEffectRecord, DurableTurnRecord, DurableWorkspaceCheckpoint, RuntimeStateStore, TurnStatus } from "../durability/runtime-state.js";
-import type { ProjectProjection, ProjectSpec, WorldCasResult, WorldStore } from "../world/types.js";
+import type { ArtifactCasResult, ProjectProjection, ProjectSpec, TaskCasResult, WorldCasResult, WorldStore } from "../world/types.js";
 import type { PgExecutor } from "./types.js";
 /**
  * One Postgres-backed implementation for runtime durability, transactional
@@ -21,6 +21,7 @@ export declare class PostgresPersistence implements DurabilityProvider, RuntimeS
     getAgent(id: AgentId): Promise<AgentSnapshot | undefined>;
     listAgents(): Promise<AgentSnapshot[]>;
     putTask(task: TaskSpec): Promise<void>;
+    compareAndSwapTask(task: TaskSpec, expectedRevision: number): Promise<TaskCasResult>;
     getTask(id: TaskId): Promise<TaskSpec | undefined>;
     putRelation(relation: Relation): Promise<void>;
     listRelations(): Promise<Relation[]>;
@@ -44,6 +45,7 @@ export declare class PostgresPersistence implements DurabilityProvider, RuntimeS
     getProject(id: ProjectId): Promise<ProjectSpec | undefined>;
     listProjects(): Promise<ProjectSpec[]>;
     putArtifact(artifact: Artifact): Promise<void>;
+    compareAndSwapArtifact(artifact: Artifact, expectedRevision: number): Promise<ArtifactCasResult>;
     getArtifact(id: ArtifactId): Promise<Artifact | undefined>;
     projection(projectId: ProjectId): Promise<ProjectProjection | undefined>;
     private getBody;

@@ -57,8 +57,28 @@ export class InMemoryWorldStore {
             this.#artifacts.set(artifact.id, clone(artifact));
     }
     async putTask(task) { this.#tasks.set(task.id, clone(task)); }
+    async compareAndSwapTask(task, expectedRevision) {
+        const existing = this.#tasks.get(task.id);
+        if (!existing)
+            throw new Error(`Unknown task ${task.id}`);
+        if ((existing.revision ?? 0) !== expectedRevision)
+            return { swapped: false, task: clone(existing) };
+        const next = { ...clone(task), revision: expectedRevision + 1 };
+        this.#tasks.set(task.id, next);
+        return { swapped: true, task: clone(next) };
+    }
     async getTask(id) { const value = this.#tasks.get(id); return value ? clone(value) : undefined; }
     async putArtifact(artifact) { this.#artifacts.set(artifact.id, clone(artifact)); }
+    async compareAndSwapArtifact(artifact, expectedRevision) {
+        const existing = this.#artifacts.get(artifact.id);
+        if (!existing)
+            throw new Error(`Unknown artifact ${artifact.id}`);
+        if ((existing.revision ?? 0) !== expectedRevision)
+            return { swapped: false, artifact: clone(existing) };
+        const next = { ...clone(artifact), revision: expectedRevision + 1 };
+        this.#artifacts.set(artifact.id, next);
+        return { swapped: true, artifact: clone(next) };
+    }
     async getArtifact(id) { const value = this.#artifacts.get(id); return value ? clone(value) : undefined; }
     async attachTask(projectId, task) {
         await this.putTask(task);

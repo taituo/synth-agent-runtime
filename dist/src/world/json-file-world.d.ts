@@ -1,7 +1,7 @@
 import type { ArtifactId, ProjectId, TaskId } from "../core/ids.js";
 import type { Artifact, TaskSpec } from "../core/types.js";
 import { InMemoryWorldStore } from "./in-memory-world.js";
-import type { ProjectDecision, ProjectProjection, ProjectSpec, WorldCasResult, WorldStore } from "./types.js";
+import type { ArtifactCasResult, ProjectDecision, ProjectProjection, ProjectSpec, TaskCasResult, WorldCasResult, WorldStore } from "./types.js";
 /** Single-process crash-safe world store with serialized mutations and CAS. */
 export declare class JsonFileWorldStore implements WorldStore {
     #private;
@@ -15,8 +15,10 @@ export declare class JsonFileWorldStore implements WorldStore {
     getProject(id: ProjectId): Promise<ProjectSpec | undefined>;
     listProjects(): Promise<ProjectSpec[]>;
     putTask(task: TaskSpec): Promise<void>;
+    compareAndSwapTask(task: TaskSpec, expectedRevision: number): Promise<TaskCasResult>;
     getTask(id: TaskId): Promise<TaskSpec | undefined>;
     putArtifact(artifact: Artifact): Promise<void>;
+    compareAndSwapArtifact(artifact: Artifact, expectedRevision: number): Promise<ArtifactCasResult>;
     getArtifact(id: ArtifactId): Promise<Artifact | undefined>;
     projection(projectId: ProjectId): Promise<ProjectProjection | undefined>;
     attachTask(projectId: ProjectId, task: TaskSpec): Promise<void>;

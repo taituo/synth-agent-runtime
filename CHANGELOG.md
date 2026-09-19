@@ -2,6 +2,25 @@
 
 ## 1.0.0-rc.1 — abort-safety fix folded in, git ref/remote argument-injection fixed
 
+### Per-record compare-and-swap for tasks and artifacts
+
+- **Task and artifact records were last-write-wins bodies.** Project
+  membership/decisions already had `compareAndSwapProject`, but individual
+  task/artifact updates had no equivalent, so two writers could clobber each
+  other with no conflict signal. Added an optional `revision` to `TaskSpec`
+  and `Artifact`, and optional `compareAndSwapTask`/`compareAndSwapArtifact`
+  to `WorldStore`, mirroring `compareAndSwapProject`: replace only when the
+  stored revision equals `expectedRevision`, write `revision + 1`, and return
+  the current record when it does not. Implemented for the in-memory,
+  JSON-file, and PostgreSQL stores; the PostgreSQL path uses the same
+  `body->>'revision'` guard as projects, so no schema change is needed and
+  `putTask`/`putArtifact` stay last-write-wins for callers that do not opt in.
+  Verified live against PostgreSQL (a stale-revision write is rejected for
+  both a task and an artifact). Regression tests cover stale-revision
+  rejection in the in-memory and PostgreSQL stores.
+
+Root suite: 97/97 (95 + 2 new tests).
+
 ### Shared (cross-replica) tenant rate limiting
 
 - **Tenant rate limiting was per-process only.** `InMemoryTenantRateLimitPolicy`

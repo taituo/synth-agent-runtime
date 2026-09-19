@@ -31,8 +31,14 @@ export class JsonFileWorldStore {
     getProject(id) { return this.memory.getProject(id); }
     listProjects() { return this.memory.listProjects(); }
     async putTask(task) { await this.mutate(async () => this.memory.putTask(task)); }
+    async compareAndSwapTask(task, expectedRevision) {
+        return this.mutate(async () => this.memory.compareAndSwapTask(task, expectedRevision));
+    }
     getTask(id) { return this.memory.getTask(id); }
     async putArtifact(artifact) { await this.mutate(async () => this.memory.putArtifact(artifact)); }
+    async compareAndSwapArtifact(artifact, expectedRevision) {
+        return this.mutate(async () => this.memory.compareAndSwapArtifact(artifact, expectedRevision));
+    }
     getArtifact(id) { return this.memory.getArtifact(id); }
     projection(projectId) { return this.memory.projection(projectId); }
     async attachTask(projectId, task) { await this.mutate(async () => this.memory.attachTask(projectId, task)); }
