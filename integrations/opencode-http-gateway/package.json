@@ -1,0 +1,12 @@
+{
+  "name": "@synth-agent-runtime/opencode-http-gateway-contract",
+  "private": true,
+  "type": "module",
+  "description": "Abort-safety contract for the OpenCode/Pi HTTP gateway adapter",
+  "scripts": {
+    "test": "tsx --test test/*.test.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0"
+  }
+}

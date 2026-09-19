@@ -1,0 +1,11 @@
+{
+  "name": "@synth-agent-runtime/kubernetes-live-contract",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "tsx": "^4.19.0"
+  },
+  "scripts": {
+    "kill-chaos": "tsx kill-chaos.ts"
+  }
+}

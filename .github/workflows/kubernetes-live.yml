@@ -1,0 +1,21 @@
+name: kubernetes-gvisor-live
+on:
+  workflow_dispatch:
+jobs:
+  kill-contract:
+    # Intentionally requires a runner already attached to a disposable cluster
+    # with kubectl and the configured RuntimeClass (usually gvisor).
+    runs-on: [self-hosted, linux, synth-gvisor]
+    env:
+      SYNTH_EXECUTOR_IMAGE: ${{ secrets.SYNTH_EXECUTOR_IMAGE }}
+      SYNTH_RUNTIME_CLASS: gvisor
+      SYNTH_K8S_LIVE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - run: npm install
+        working-directory: integrations/kubernetes
+      - run: integrations/kubernetes/node_modules/.bin/tsx integrations/kubernetes/kill-chaos.ts

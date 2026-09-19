@@ -1,0 +1,27 @@
+name: pi-e2e
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 4 * * 1"
+jobs:
+  pi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: synth
+      - uses: actions/checkout@v4
+        with:
+          repository: earendil-works/pi
+          ref: 36b60d2e8985899743c4cf5bd5f8929832a3f05d
+          path: pi
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+        working-directory: pi
+      - run: bash synth/integrations/pi-e2e/install-test.sh "$GITHUB_WORKSPACE/pi"
+      - run: bash synth/integrations/pi-e2e/install-memory-test.sh "$GITHUB_WORKSPACE/pi"
+      - run: pnpm vitest packages/agent/test/synth-runtime-pi.e2e.test.ts packages/agent/test/synth-runtime-memory.e2e.test.ts
+        working-directory: pi

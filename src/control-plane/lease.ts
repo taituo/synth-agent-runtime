@@ -1,0 +1,110 @@
+export interface LeaseRecord {
+  resourceId: string;
+  ownerId: string;
+  fencingToken: number;
+  acquiredAt: number;
+  updatedAt: number;
+  expiresAt: number;
+}
+
+export interface LeaseClaimResult {
+  acquired: boolean;
+  lease: LeaseRecord;
+}
+
+export interface LeaseStore {
+  acquireLease(resourceId: string, ownerId: string, ttlMs: number, now?: number): Promise<LeaseClaimResult>;
+  renewLease(resourceId: string, ownerId: string, fencingToken: number, ttlMs: number, now?: number): Promise<LeaseRecord | undefined>;
+  releaseLease(resourceId: string, ownerId: string, fencingToken: number): Promise<boolean>;
+  getLease(resourceId: string): Promise<LeaseRecord | undefined>;
+  /**
+   * Authoritative lease validation. Distributed stores should evaluate expiry
+   * with the datastore clock rather than a worker-local clock.
+   */
+  validateLease(resourceId: string, ownerId: string, fencingToken: number, now?: number): Promise<LeaseRecord | undefined>;
+}
+
+function copy<T>(value: T): T { return structuredClone(value); }
+
+/** Deterministic single-process lease store used by tests/local mode. */
+export class InMemoryLeaseStore implements LeaseStore {
+  readonly #leases = new Map<string, LeaseRecord>();
+  readonly #tokens = new Map<string, number>();
+  constructor(private readonly clock: () => number = Date.now) {}
+
+  async acquireLease(resourceId: string, ownerId: string, ttlMs: number, now = this.clock()): Promise<LeaseClaimResult> {
+    validateTtl(ttlMs);
+    const existing = this.#leases.get(resourceId);
+    if (existing && existing.expiresAt > now) return { acquired: false, lease: copy(existing) };
+    const fencingToken = (this.#tokens.get(resourceId) ?? existing?.fencingToken ?? 0) + 1;
+    this.#tokens.set(resourceId, fencingToken);
+    const lease: LeaseRecord = { resourceId, ownerId, fencingToken, acquiredAt: now, updatedAt: now, expiresAt: now + ttlMs };
+    this.#leases.set(resourceId, lease);
+    return { acquired: true, lease: copy(lease) };
+  }
+
+  async renewLease(resourceId: string, ownerId: string, fencingToken: number, ttlMs: number, now = this.clock()): Promise<LeaseRecord | undefined> {
+    validateTtl(ttlMs);
+    const existing = this.#leases.get(resourceId);
+    if (!existing || existing.ownerId !== ownerId || existing.fencingToken !== fencingToken || existing.expiresAt <= now) return undefined;
+    const renewed = { ...existing, updatedAt: now, expiresAt: now + ttlMs };
+    this.#leases.set(resourceId, renewed);
+    return copy(renewed);
+  }
+
+  async releaseLease(resourceId: string, ownerId: string, fencingToken: number): Promise<boolean> {
+    const existing = this.#leases.get(resourceId);
+    if (!existing || existing.ownerId !== ownerId || existing.fencingToken !== fencingToken) return false;
+    this.#leases.delete(resourceId);
+    return true;
+  }
+
+  async getLease(resourceId: string): Promise<LeaseRecord | undefined> {
+    const existing = this.#leases.get(resourceId);
+    return existing ? copy(existing) : undefined;
+  }
+
+  async validateLease(resourceId: string, ownerId: string, fencingToken: number, now = this.clock()): Promise<LeaseRecord | undefined> {
+    const existing = this.#leases.get(resourceId);
+    if (!existing || existing.ownerId !== ownerId || existing.fencingToken !== fencingToken || existing.expiresAt <= now) return undefined;
+    return copy(existing);
+  }
+}
+
+/**
+ * Runs work while holding a renewable fencing lease. Loss of the lease aborts
+ * the supplied signal; callers must propagate that signal to external work.
+ */
+export async function withRenewingLease<T>(options: {
+  store: LeaseStore;
+  resourceId: string;
+  ownerId: string;
+  ttlMs: number;
+  renewEveryMs?: number;
+  run(lease: LeaseRecord, signal: AbortSignal): Promise<T>;
+}): Promise<T> {
+  const claim = await options.store.acquireLease(options.resourceId, options.ownerId, options.ttlMs);
+  if (!claim.acquired) throw new Error(`LEASE_HELD:${options.resourceId}:${claim.lease.ownerId}`);
+  const controller = new AbortController();
+  const intervalMs = Math.max(1, Math.min(options.renewEveryMs ?? Math.max(1, Math.floor(options.ttlMs / 3)), Math.max(1, Math.floor(options.ttlMs / 2))));
+  let renewing = false;
+  const timer = setInterval(() => {
+    if (renewing || controller.signal.aborted) return;
+    renewing = true;
+    void options.store.renewLease(options.resourceId, options.ownerId, claim.lease.fencingToken, options.ttlMs)
+      .then((renewed) => { if (!renewed) controller.abort(new Error(`LEASE_LOST:${options.resourceId}`)); })
+      .catch((error) => controller.abort(error))
+      .finally(() => { renewing = false; });
+  }, intervalMs);
+  timer.unref?.();
+  try {
+    return await options.run(claim.lease, controller.signal);
+  } finally {
+    clearInterval(timer);
+    await options.store.releaseLease(options.resourceId, options.ownerId, claim.lease.fencingToken).catch(() => false);
+  }
+}
+
+function validateTtl(ttlMs: number): void {
+  if (!Number.isFinite(ttlMs) || ttlMs <= 0) throw new Error(`Invalid lease ttl: ${ttlMs}`);
+}

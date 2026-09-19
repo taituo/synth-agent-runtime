@@ -1,0 +1,33 @@
+{
+  "name": "synth-agent-runtime",
+  "version": "1.0.0-rc.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test dist/test/*.test.js",
+    "demo": "npm run build && node dist/examples/demo.js",
+    "gateway:demo": "npm run build && node dist/examples/gateway-demo.js",
+    "k8s:demo": "npm run build && node dist/examples/kubernetes-demo.js",
+    "super:demo": "npm run build && node dist/examples/supervisor-demo.js",
+    "transaction:demo": "npm run build && node dist/examples/transaction-demo.js",
+    "recovery:demo": "npm run build && node dist/examples/recovery-demo.js",
+    "durable-transaction:demo": "npm run build && node dist/examples/durable-transaction-demo.js",
+    "chaos:demo": "npm run build && node dist/examples/chaos-demo.js",
+    "postgres:contract": "npm run build && node --test dist/test/postgres.test.js",
+    "chaos:matrix": "npm run build && node scripts/chaos-matrix.mjs",
+    "process-crash:contract": "npm run build && node --test dist/test/process-crash.test.js",
+    "responses:contract": "npm run build && node --test dist/test/responses.test.js",
+    "integrations:syntax": "node scripts/check-integrations.mjs",
+    "live:proof": "node scripts/live-proof.mjs",
+    "distributed:contract": "npm run build && node --test dist/test/v08.test.js",
+    "release-hardening:contract": "npm run build && node --test dist/test/v09.test.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.4",
+    "typescript": "5.9.3"
+  }
+}

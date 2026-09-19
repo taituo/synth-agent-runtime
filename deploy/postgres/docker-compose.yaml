@@ -1,0 +1,18 @@
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    environment:
+      POSTGRES_USER: synth
+      POSTGRES_PASSWORD: synth
+      POSTGRES_DB: synth
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U synth -d synth"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    volumes:
+      - synth-postgres:/var/lib/postgresql/data
+volumes:
+  synth-postgres: {}

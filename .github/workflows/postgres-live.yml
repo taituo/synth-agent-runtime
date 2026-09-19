@@ -1,0 +1,37 @@
+name: postgres-live
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+jobs:
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: synth
+          POSTGRES_PASSWORD: synth
+          POSTGRES_DB: synth
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U synth -d synth"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      SYNTH_POSTGRES_URL: postgres://synth:synth@127.0.0.1:5432/synth
+      SYNTH_POSTGRES_WORKERS: 32
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - run: npm install
+        working-directory: integrations/postgres
+      - run: npm run smoke
+        working-directory: integrations/postgres
+      - run: npm run concurrency
+        working-directory: integrations/postgres

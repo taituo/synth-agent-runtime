@@ -1,0 +1,17 @@
+{
+  "name": "@synth-agent-runtime/postgres-adapter",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "pg": "^8.13.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.0",
+    "typescript": "^5.8.0",
+    "tsx": "^4.19.0"
+  },
+  "scripts": {
+    "smoke": "tsx smoke.ts",
+    "concurrency": "tsx concurrency.ts"
+  }
+}

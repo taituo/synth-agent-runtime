@@ -1,0 +1,6 @@
+{
+  "name": "pi-opencode-stack-router",
+  "private": true,
+  "type": "module",
+  "description": "Transparent OpenCode Go multi-account pool for Pi with manual provider fallbacks"
+}

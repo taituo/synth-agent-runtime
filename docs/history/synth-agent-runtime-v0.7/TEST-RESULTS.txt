@@ -1,0 +1,67 @@
+Synth Agent Runtime v0.7 verification
+=====================================
+
+EXECUTED IN THIS ARTIFACT ENVIRONMENT
+
+PASS  npm test
+      49 tests, 49 passed, 0 failed
+      Includes:
+      - actual child-process SIGKILL recovery contract
+      - actual Node HTTP gateway /v1/responses contract
+      - durable turn/effect recovery and semantic-exposure barriers
+      - serialized turn-record ordering under deliberately delayed durability writes
+      - fail-closed logical command exception semantics
+      - ordered AgentRuntime streamed events + listener isolation
+      - Kubernetes manifest/pool/workspace-sync contracts with fake backend
+      - warm-pool concurrent acquire/double-lease regression
+      - Postgres SQL/claim contract with deterministic fake driver
+      - Responses text/tool/reasoning/incomplete event encoder contracts
+      - router cancellation/session affinity/model-scoped health contracts
+      - HTTP upstream AbortSignal + hop-by-hop header contract
+      - native Git checkout-less/batch hydration contract
+
+PASS  npm run process-crash:contract
+      1 test, 1 passed
+      Separate Node child is killed with SIGKILL and recovered from persisted JSON state.
+
+PASS  npm run responses:contract
+      6 tests, 6 passed
+
+PASS  npm run integrations:syntax
+      25 TypeScript integration files, 0 syntax diagnostics
+      4 shell files pass `bash -n`
+
+PASS  npm run live:proof (available/local portions)
+      PASS core build + unit/contracts
+      PASS integration syntax
+      PASS process SIGKILL recovery
+      PASS Responses contracts
+
+EXTERNAL CONTRACTS BUNDLED BUT NOT EXECUTED HERE
+
+SKIPPED  Live PostgreSQL smoke + multi-connection contention
+         Reason: SYNTH_POSTGRES_URL not set; no local PostgreSQL/Docker/psql service available.
+         Sources: integrations/postgres/smoke.ts, integrations/postgres/concurrency.ts
+         CI: .github/workflows/postgres-live.yml
+
+SKIPPED  Pi monorepo E2E contracts
+         Reason: PI_REPO not set / no local Pi checkout.
+         Sources:
+         - integrations/pi-e2e/pi-harness.e2e.test.ts
+         - integrations/pi-e2e/pi-memory-env.e2e.test.ts
+         Pinned Pi baseline: 36b60d2e8985899743c4cf5bd5f8929832a3f05d
+         CI: .github/workflows/pi-e2e.yml
+
+SKIPPED  Live Kubernetes/gVisor forced-Pod-kill contract
+         Reason: SYNTH_K8S_LIVE != 1; no kubectl/cluster available.
+         Source: integrations/kubernetes/kill-chaos.ts
+         CI: .github/workflows/kubernetes-live.yml (manual/self-hosted gVisor runner)
+
+SKIPPED  Live external gateway/OpenCode-provider probe
+         Reason: SYNTH_GATEWAY_URL not set; no external credentials embedded.
+         Source: integrations/opencode-live/probe.mjs
+
+NOT CLAIMED
+
+- No live PostgreSQL, Pi checkout, Kubernetes/gVisor cluster, Temporal server, or paid/provider credential path was available in this artifact environment.
+- Their presence as source/CI contracts is not reported as runtime proof here.

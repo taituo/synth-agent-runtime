@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: synth-egress
+  labels:
+    synth.openai.dev/egress: "true"
+    pod-security.kubernetes.io/enforce: restricted
