@@ -23,7 +23,8 @@ Everything below is design/subsystem detail, in rough reading order.
 ## Infrastructure
 
 - [`POSTGRES.md`](POSTGRES.md) — PostgreSQL durability/distributed-state backend.
-- [`KUBERNETES.md`](KUBERNETES.md) — Kubernetes + gVisor execution backend.
+- [`KUBERNETES.md`](KUBERNETES.md) — Kubernetes + gVisor execution backend design.
+- [`KUBERNETES-RUN.md`](KUBERNETES-RUN.md) — real, executed run guide: install gVisor, wire it into k3s, prove isolation, run the kill contract.
 - [`TEMPORAL.md`](TEMPORAL.md) — Temporal durability adapter.
 - [`OBSERVABILITY.md`](OBSERVABILITY.md) — tracing.
 - [`UPGRADE.md`](UPGRADE.md) — upgrade notes.

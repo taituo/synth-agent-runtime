@@ -39,7 +39,7 @@ The physical executor materializes the synthetic workspace, runs the command, co
 
 `integrations/kubernetes/kill-chaos.ts` force-deletes an executor Pod while `kubectl exec` is active and requires the operation not to report success. `.github/workflows/kubernetes-live.yml` is intentionally manual/self-hosted because it requires a runner backed by a real gVisor-configured cluster.
 
-The current artifact environment had no Kubernetes cluster or `kubectl`, so this contract is bundled but reported as skipped here.
+For the exact, executed, copy-pasteable procedure (installing gVisor, wiring it into k3s/containerd, the RuntimeClass isolation proof, digest-pinning the executor image, running the kill contract, and troubleshooting) see [`KUBERNETES-RUN.md`](KUBERNETES-RUN.md) — verified 3/3 green on a real cluster for `v1.0.0-rc.1`.
 
 ## Production gaps
 
