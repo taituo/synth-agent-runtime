@@ -39,6 +39,32 @@ The scenario creates multiple independent connections and requires exactly one c
 
 This exact scenario was run live against a real PostgreSQL instance for `v1.0.0-rc.1`: 16 concurrent workers, deliberate database-clock skew (absurd past/future worker timestamps that do not affect lease ownership), and a two-generation hard agent takeover where the stale generation cannot publish. See `README.md`'s "Tests executed for this artifact" section and `CHANGELOG.md` for the exact figures. In an environment without `SYNTH_POSTGRES_URL` set, the same scenario is still packaged and runnable, but `npm run live:proof` correctly reports it as SKIP rather than PASS.
 
+## Scaling under real load
+
+A benchmark/soak suite (32-256 concurrent workers, 15-45s sustained soaks,
+real PostgreSQL) was run against `v1.0.0-rc.1`. Every contention-critical
+primitive held cleanly through 256-way concurrency: atomic agent creation
+(exactly 1 winner), lease contention, command claim, and project CAS all
+scored 100/100 or better across rounds with 0 errors.
+
+A separate partitioned-vs-hot-row comparison at 128 workers, run directly
+against the database (bypassing an `kubectl port-forward` tunnel, which
+was itself a throughput ceiling in an earlier pass — see `CHANGELOG.md`),
+gives the number that matters for real workloads: **~11.8k fenced
+writes/s when each worker owns a distinct agent and lease**, the normal
+shape of real usage since fencing is scoped per-agent. Forcing all
+workers to contend for one shared row instead drops throughput to
+~1.9k/s — expected Postgres single-row lock behavior, not a defect in
+this runtime. In short: this layer scales close to linearly with however
+the workload naturally partitions; a bottleneck only appears if something
+is specifically designed to hammer one row from many workers.
+
+This same benchmark pass also found and fixed a real concurrent
+schema-install race (many replicas bootstrapping a fresh database at
+once could hit `duplicate key ... pg_type_typname_nsp_index`); see
+`CHANGELOG.md` for the fix (`pg_advisory_xact_lock` around
+`installPostgresSchema`).
+
 ## Important operational caveats
 
 PostgreSQL lease acquire, renew, release, and validity checks derive time from `clock_timestamp()`. Caller timestamps are ignored by the PostgreSQL lease implementation.

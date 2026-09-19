@@ -25,10 +25,15 @@ The release question is no longer "can a stale replica overwrite the current age
     full live-matrix run)
 [x] cross-replica race coverage for duplicate spawn and duplicate mailbox
     steer (two replicas sharing one durability provider)
-[ ] >= 2 control-plane replicas under *sustained* race/load (soak, not
-    just a bounded repro)
+[~] sustained race/load, not just a bounded repro — proven for the
+    distributed-state/durability layer directly (32-256 concurrent
+    workers against real PostgreSQL, 15-45s soaks, 100/100+ contention
+    rounds, 0 errors; see CHANGELOG). Still open: running this against
+    >= 2 actual control-plane/gateway service replicas under sustained
+    traffic, not just many client connections against one durable store.
 [ ] rolling schema/application upgrade test
-[ ] soak test with forced worker/provider/pod restarts
+[ ] soak test with forced worker/provider/pod restarts — the sustained
+    load above did not include chaos (killed workers/pods) mid-soak
 [ ] production IAM + shared rate limiting + durable audit — tenant rate
     limiting is currently per-process only, see CHANGELOG known issues
 [ ] durable named event-consumer ACK + safe retention watermark — mailbox

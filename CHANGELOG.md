@@ -2,6 +2,59 @@
 
 ## 1.0.0-rc.1 — abort-safety fix folded in, git ref/remote argument-injection fixed
 
+### Fixes from a real concurrent-load benchmark (32-256 workers, real PostgreSQL, real k3s+gVisor)
+
+A benchmark/soak suite was run against a fresh clone of this tag: atomic
+create, lease contention, command claim, mailbox throughput, project CAS,
+and real-clock lease-expiry-and-takeover all held cleanly through 256-way
+concurrency (100/100 or better on every contention round, 0 errors). Three
+real bugs surfaced that no prior test caught, all fixed and verified
+failing-first:
+
+- **NetworkPolicy leak on every sandbox destroy**
+  (`src/execution/kubernetes/kubectl-backend.ts`). `kubectl delete pod X
+  networkpolicy Y` does not delete both resources — kubectl reads the
+  first token as the resource type and every following token as another
+  name of that same type, so it silently tries (and, with
+  `--ignore-not-found`, silently fails) to delete pods named X,
+  "networkpolicy", and Y. The real NetworkPolicy was never targeted and
+  leaked on every destroy. Fixed with explicit `type/name` argv tokens;
+  verified live against a real cluster (5 confirmed orphaned policies
+  before the fix, none after).
+- **Concurrent schema-install race** (`src/postgres/schema.ts`). Many
+  replicas bootstrapping against a fresh database at once raced on
+  Postgres's own system catalog even though every DDL statement is
+  individually `IF NOT EXISTS` (`duplicate key ...
+  pg_type_typname_nsp_index`). Fixed with a transaction-scoped advisory
+  lock (`pg_advisory_xact_lock`) around schema install so concurrent
+  installers queue instead of racing. Reproduced live: 40-way fresh
+  concurrent bootstrap failed 39/40 before the fix, passed 40/40 after.
+- **A 413 poisoned a reused keep-alive connection**
+  (`src/inference/gateway/server.ts`). An oversized request returned 413
+  without draining the rest of the body or closing the connection; the
+  client's next request on that reused socket raced the leftover bytes
+  and got `ECONNRESET`. Fixed by sending `Connection: close` and
+  destroying the request stream on this path; reproduced live with a
+  real single-socket keep-alive agent before fixing, confirmed gone
+  after.
+
+### Scaling clarification
+
+The benchmark's first pass reported Postgres throughput saturating around
+~6k ops/s at high concurrency and attributed it to the database. Re-run
+against the Postgres pod's IP directly (bypassing the `kubectl
+port-forward` tunnel used for the first pass) showed the tunnel itself
+was the ceiling: 64 workers reached 9,052 ops/s direct vs 5,059 ops/s
+through the tunnel. A follow-up partitioned-vs-hot-row comparison at
+128 workers direct is the more useful number for real workloads: **11,778
+fenced writes/s when each worker owns a distinct agent+lease** (the
+normal shape of real usage, since fencing is scoped per-agent), versus
+1,943/s when every worker contends for the same single row — which is
+expected Postgres single-row lock behavior, not a runtime defect. In
+short: this runtime's distributed-state layer scales close to linearly
+with the workload's natural partitioning; a shared bottleneck only
+appears if something is designed to hammer one row from many workers.
+
 - Folded the abort-safety fix into the release-candidate tree: a client
   disconnecting mid-stream (`ReadableStream.cancel()`) while the upstream
   event loop was still in flight could throw an uncaught
