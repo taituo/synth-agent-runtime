@@ -21,12 +21,37 @@ const { runTurn } = proxyActivities<AgentActivities>({
   },
 });
 
+// Temporal's workflow sandbox does not expose the global `structuredClone`
+// (it runs in a restricted V8 isolate, not a full Node/browser global scope).
+// A JSON round-trip is sandbox-safe and sufficient here: DurableAgentState is
+// plain JSON-serializable data (strings/numbers/arrays/plain objects), never
+// Date/Map/Set/functions.
+function clone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+// Temporal wraps an activity's thrown error as a generic ActivityFailure
+// ("Activity task failed"); the actual application error is nested under
+// `.cause` (possibly several levels deep through retry/child wrapping).
+// Surface the innermost message so recovery/debugging sees the real cause.
+function rootCauseMessage(error: unknown): string {
+  let current: unknown = error;
+  let message = error instanceof Error ? error.message : String(error);
+  while (current && typeof current === "object" && "cause" in current) {
+    const cause = (current as { cause?: unknown }).cause;
+    if (!cause) break;
+    current = cause;
+    if (current instanceof Error) message = current.message;
+  }
+  return message;
+}
+
 /**
  * Durable logical agent loop. The workflow owns lifecycle/mailbox state; the
  * actual Pi/model/tool turn executes as an activity in a normal worker process.
  */
 export async function durableAgentWorkflow(initial: DurableAgentState): Promise<DurableAgentState> {
-  const state: DurableAgentState = structuredClone(initial);
+  const state: DurableAgentState = clone(initial);
   let cancelled = false;
   let wake = state.mailbox.length > 0;
 
@@ -39,30 +64,39 @@ export async function durableAgentWorkflow(initial: DurableAgentState): Promise<
     cancelled = true;
     wake = true;
   });
-  setHandler(getAgentState, () => structuredClone(state));
+  setHandler(getAgentState, () => clone(state));
 
   while (!cancelled && state.status !== "completed" && state.status !== "failed") {
-    await condition(() => wake || cancelled);
+    // Also wake on leftover mailbox content (not just a fresh signal): a
+    // message that arrived mid-turn and survived the splice below must be
+    // processed on the next iteration without waiting for another signal.
+    await condition(() => wake || cancelled || state.mailbox.length > 0);
     if (cancelled) break;
     wake = false;
     if (state.mailbox.length === 0) continue;
 
     state.status = "running";
     state.updatedAt = Date.now();
+    // Snapshot exactly which messages this turn is being given. New signals
+    // can still append to state.mailbox while the activity below is in
+    // flight; only the messages present at snapshot time were "consumed" by
+    // this turn.
+    const consumedCount = state.mailbox.length;
     try {
-      const result = await runTurn({ agentId: state.agentId, messages: structuredClone(state.mailbox) });
+      const result = await runTurn({ agentId: state.agentId, messages: clone(state.mailbox) });
       state.lastResult = result.result;
       state.status = result.state ?? "idle";
       state.updatedAt = Date.now();
-      if (state.status === "idle" && state.mailbox.length > 0) {
-        // Activities decide which messages they consumed in the external store.
-        // A production binding normally stores a durable cursor rather than
-        // clearing blindly; this compact example treats one run as one batch.
-        state.mailbox.length = 0;
+      if (state.status === "idle") {
+        // Remove exactly the messages this turn consumed. Anything appended
+        // by a signal that arrived while the activity was running (i.e.
+        // beyond consumedCount) must survive to be processed by the next
+        // iteration, not be silently discarded.
+        state.mailbox.splice(0, consumedCount);
       }
     } catch (error) {
       state.status = "failed";
-      state.lastError = error instanceof Error ? error.message : String(error);
+      state.lastError = rootCauseMessage(error);
       state.updatedAt = Date.now();
     }
   }

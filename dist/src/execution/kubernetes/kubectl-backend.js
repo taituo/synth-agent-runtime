@@ -166,6 +166,10 @@ export class KubectlSandboxBackend {
             sandbox.podName,
             "--",
             "git",
+            // Same "dubious ownership" issue as materialize()'s baseline commit:
+            // /workspace is root-owned, the pod runs as a non-root uid by design.
+            "-c",
+            "safe.directory=/workspace",
             "-C",
             "/workspace",
             "status",
