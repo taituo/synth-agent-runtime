@@ -7,7 +7,8 @@
     "build": "tsc -p tsconfig.json",
     "test": "tsx --test test/*.test.ts",
     "live:interceptors": "tsx interceptors-live.ts",
-    "live:driver": "tsx event-driver.ts"
+    "live:driver": "tsx event-driver.ts",
+    "live:swarm": "tsx swarm-driver.ts"
   },
   "dependencies": {
     "@temporalio/activity": "^1.13.0",

@@ -3,9 +3,12 @@ import assert from "node:assert/strict";
 import type { DurableAgentState } from "../src/contracts.js";
 import {
   EVENT_SCRIPT,
+  SWARM_SCRIPTS,
   isDeterministicReplay,
+  logCorrelationViolations,
   projectFinalState,
   sequenceFromTrace,
+  swarmIsolationViolations,
   type TraceLikeEvent,
 } from "../event-script.js";
 
@@ -64,6 +67,49 @@ test("sequenceFromTrace returns the processed kinds in order, per agent", () => 
   assert.deepEqual(sequenceFromTrace(events, "agt_a"), ["news", "social_post", "untyped", "news"]);
   assert.deepEqual(sequenceFromTrace(events, "agt_b"), ["incident"]);
   assert.deepEqual(sequenceFromTrace(events, "agt_missing"), []);
+});
+
+test("SWARM_SCRIPTS defines 2-3 distinct small schedules", () => {
+  assert.ok(SWARM_SCRIPTS.length >= 2 && SWARM_SCRIPTS.length <= 3, "small swarm");
+  assert.equal(new Set(SWARM_SCRIPTS.map((entry) => entry.name)).size, SWARM_SCRIPTS.length, "names are unique");
+  for (const entry of SWARM_SCRIPTS) {
+    assert.ok(entry.script.length >= 3 && entry.script.length <= 5, `${entry.name}: 3-5 events`);
+    assert.equal(entry.script[0]!.delayMs, 0);
+  }
+  const signatures = SWARM_SCRIPTS.map((entry) => entry.script.map((event) => event.kind).join(","));
+  assert.equal(new Set(signatures).size, SWARM_SCRIPTS.length, "schedules differ so contamination is visible");
+});
+
+test("swarmIsolationViolations flags mismatched agent/workflow pairs", () => {
+  const clean: TraceLikeEvent[] = [
+    { name: "temporal.activity.runTurn", phase: "start", attributes: { agentId: "agt_a", workflowId: "agent/agt_a" } },
+    { name: "temporal.activity.runTurn", phase: "end", attributes: { agentId: "agt_b", workflowId: "agent/agt_b" } },
+  ];
+  assert.deepEqual(swarmIsolationViolations(clean, ["agt_a", "agt_b"]), []);
+
+  const crossed: TraceLikeEvent[] = [
+    { name: "temporal.activity.runTurn", phase: "start", attributes: { agentId: "agt_a", workflowId: "agent/agt_b" } },
+  ];
+  assert.equal(swarmIsolationViolations(crossed, ["agt_a", "agt_b"]).length, 1);
+
+  const foreign: TraceLikeEvent[] = [
+    { name: "temporal.activity.runTurn", phase: "start", attributes: { agentId: "agt_other", workflowId: "agent/agt_other" } },
+  ];
+  assert.equal(swarmIsolationViolations(foreign, ["agt_a", "agt_b"]).length, 1);
+});
+
+test("logCorrelationViolations flags logs whose workflow id and agent id disagree", () => {
+  const clean = [
+    { message: "synth.workflow.signal", meta: { agentId: "agt_a", workflowId: "agent/agt_a" } },
+    { message: "Worker registered", meta: { taskQueue: "tq" } },
+  ];
+  assert.deepEqual(logCorrelationViolations(clean, ["agt_a"]), []);
+
+  const crossed = [{ message: "synth.activity.runTurn", meta: { agentId: "agt_b", workflowId: "agent/agt_a" } }];
+  assert.equal(logCorrelationViolations(crossed, ["agt_a", "agt_b"]).length, 1);
+
+  const missingAgent = [{ message: "synth.activity.runTurn", meta: { workflowId: "agent/agt_a" } }];
+  assert.equal(logCorrelationViolations(missingAgent, ["agt_a"]).length, 1);
 });
 
 test("isDeterministicReplay compares final state and processed sequence", () => {

@@ -2,6 +2,24 @@
 
 ## 1.0.0-rc.1 — abort-safety fix folded in, git ref/remote argument-injection fixed
 
+### Small concurrent swarm with correlation-isolation proof
+
+- **Concurrent durable agents had never been checked for telemetry
+  cross-contamination.** Added `integrations/temporal/swarm-driver.ts`, a
+  runnable tool that starts three separate `durableAgentWorkflow` instances at
+  once, each fed its own distinct typed-event schedule from the new
+  `SWARM_SCRIPTS`, then asserts (a) each instance processed exactly its own
+  ordered kinds and (b) no trace event or worker log ever pairs one instance's
+  `agentId` with another's `workflowId`. The pure checks
+  (`swarmIsolationViolations`, `logCorrelationViolations`) are unit-tested
+  against synthetic crossed/foreign/missing-agent cases, and the shared
+  worker/client harness was factored into `event-runner.ts` so the single-agent
+  `event-driver.ts` and the swarm use the same path. Verified live against a
+  Temporal dev server (`npm run live:swarm`): all three instances drained to
+  `idle` with their own sequences (`news`→…, `incident`→…, `social_post`→…),
+  `sequenceOk: true`, `isolationOk: true`, zero trace/log violations; the
+  refactored single-agent driver still reports deterministic replay.
+
 ### Scripted typed-event driver for the Temporal integration
 
 - **There was no way to exercise a durable agent against an ordered event
