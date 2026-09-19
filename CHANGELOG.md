@@ -2,6 +2,41 @@
 
 ## 1.0.0-rc.1 — abort-safety fix folded in, git ref/remote argument-injection fixed
 
+### ProjectCellManager concurrency and cleanup fixes; gVisor + non-root user support for project-cell services
+
+- **Concurrent `ensure`/`lease`/`reap`/`destroy` for the same cell id
+  raced** (`src/execution/kubernetes/project-cell.ts`). Two concurrent
+  `ensure()` calls for a cell that didn't exist yet could each create
+  their own executor sandbox — one became unreachable via `#cells` and
+  leaked. A `destroy()` racing a `lease()` could delete the namespace a
+  just-created cell was using, since both derive the same namespace name
+  from the cell id. Fixed with a per-cell-id lock serializing all four
+  operations; `reap()` re-checks idleness under the same lock a
+  concurrent `lease()` would hold, so a cell that just became leased is
+  never reaped out from under it. Verified failing-first with a
+  deterministic race test (a gated `destroy()` that blocks mid-teardown
+  while a `lease()` for the same id runs concurrently).
+- **A failed `ensure()` leaked its half-built cell.** If cell creation
+  failed partway through (e.g. a service pod never became ready, or the
+  resource class was unknown) after the namespace/network-policy/some
+  service pods were already applied, the cell was never registered in
+  `#cells` — so it could never be found by `reap()` or `destroy()` and
+  the partial resources were orphaned forever. Fixed by rolling back
+  (destroying the executor if one was created, deleting the namespace)
+  on failure — but only when this call created the namespace itself; a
+  caller-supplied namespace is never deleted on failure, since it may be
+  shared with other resources this call doesn't own.
+- **Project-cell services couldn't run non-root-unfriendly images.**
+  The cell namespace enforces `runAsNonRoot: true`, so an image whose own
+  `USER` is root (most database/cache images, e.g. official `postgres`)
+  fails to start with `CreateContainerConfigError`. `ProjectCellService`
+  gained optional `runAsUser`/`runAsGroup`/`fsGroup` fields, wired into
+  `buildProjectServicePod`, so a deployment can pin the image's intended
+  non-root uid/gid instead of being unable to run it at all.
+
+Root suite: 86/86 (78 + 8 new tests, including the concurrency race
+test above).
+
 ### Fixes from adversarial testing of previously-uncovered paths (Temporal, Kubernetes workspace-sync)
 
 Neither `integrations/temporal` nor the Kubernetes physical-execution

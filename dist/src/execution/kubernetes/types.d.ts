@@ -55,6 +55,18 @@ export interface ProjectCellService {
      * must never be emitted into the manifest (the API server rejects it).
      */
     runtimeClassName?: string;
+    /**
+     * Optional numeric uid/gid for the service container and fsGroup for its
+     * volumes. The cell namespace enforces the restricted PodSecurity profile
+     * with `runAsNonRoot: true`, so images whose own USER is root (databases,
+     * caches, ...) fail to start with `CreateContainerConfigError` unless a
+     * non-root uid is pinned here. Set these to the image's intended non-root
+     * user (e.g. 70 for the official postgres image). Left unset, the image's
+     * own USER is used.
+     */
+    runAsUser?: number;
+    runAsGroup?: number;
+    fsGroup?: number;
     resources?: {
         cpuRequest?: string;
         cpuLimit?: string;

@@ -5,15 +5,18 @@ import {
   ExecutionBroker,
   KubernetesExecutor,
   MemoryWorkspace,
+  ProjectCellManager,
   WarmSandboxPool,
   WorkspaceSynchronizer,
-  buildSandboxNetworkPolicy,
   buildProjectServicePod,
+  buildSandboxNetworkPolicy,
   buildSandboxPod,
   deletePodAndPolicyArgs,
   type Effect,
   type EffectContext,
   type Executor,
+  type KubernetesObject,
+  type KubernetesObjectController,
   type KubernetesResourceClass,
   type SandboxBackend,
   type SandboxExecRequest,
@@ -276,6 +279,156 @@ test("project service pod omits an empty RuntimeClass instead of emitting an inv
       `runtimeClassName must be omitted when ${JSON.stringify(runtimeClassName)}`,
     );
   }
+});
+
+class FakeProjectCellController implements KubernetesObjectController {
+  applied: string[] = [];
+  deleted: string[] = [];
+  activeNamespaces = new Set<string>();
+  failWait = false;
+  delayMs = 0;
+  async apply(object: KubernetesObject): Promise<void> {
+    if (this.delayMs) await new Promise((resolve) => setTimeout(resolve, this.delayMs));
+    const name = String((object.metadata as { name: string }).name);
+    if (object.kind === "Namespace") this.activeNamespaces.add(name);
+    this.applied.push(`${String(object.kind)}/${name}`);
+  }
+  async waitPodReady(_namespace: string, podName: string): Promise<void> {
+    if (this.delayMs) await new Promise((resolve) => setTimeout(resolve, this.delayMs));
+    if (this.failWait) throw new Error(`Pod ${podName} not ready`);
+  }
+  async deleteNamespace(namespace: string): Promise<void> {
+    this.activeNamespaces.delete(namespace);
+    this.deleted.push(namespace);
+  }
+}
+
+function projectCellClass(): KubernetesResourceClass {
+  return { ...DEFAULT_KUBERNETES_RESOURCE_CLASSES.find((entry) => entry.id === "project-cell")! };
+}
+
+test("project service pod honors a requested non-root runAsUser/runAsGroup/fsGroup", () => {
+  const pod = buildProjectServicePod("test", "cell-1", {
+    name: "db",
+    image: "postgres:16-alpine",
+    runAsUser: 70,
+    runAsGroup: 70,
+    fsGroup: 70,
+  }) as any;
+  assert.equal(pod.spec.securityContext.fsGroup, 70);
+  assert.equal(pod.spec.containers[0].securityContext.runAsUser, 70);
+  assert.equal(pod.spec.containers[0].securityContext.runAsGroup, 70);
+  assert.equal(pod.spec.containers[0].securityContext.runAsNonRoot, true);
+});
+
+test("project service pod omits user/group overrides when not requested", () => {
+  const pod = buildProjectServicePod("test", "cell-1", { name: "db", image: "postgres:16-alpine" }) as any;
+  assert.ok(!("fsGroup" in pod.spec.securityContext));
+  assert.ok(!("runAsUser" in pod.spec.containers[0].securityContext));
+  assert.ok(!("runAsGroup" in pod.spec.containers[0].securityContext));
+});
+
+test("project cell ensure is single-flight across concurrent callers", async () => {
+  const controller = new FakeProjectCellController();
+  controller.delayMs = 10;
+  const backend = new MockSandboxBackend();
+  const manager = new ProjectCellManager(controller, backend, [projectCellClass()]);
+
+  const [first, second] = await Promise.all([manager.ensure({ id: "cell-1" }), manager.ensure({ id: "cell-1" })]);
+  assert.equal(first.executor.id, second.executor.id);
+  assert.equal(backend.creates, 1, "concurrent ensure must create exactly one executor sandbox");
+});
+
+test("project cell ensure rolls back a half-built cell when a service never becomes ready", async () => {
+  const controller = new FakeProjectCellController();
+  controller.failWait = true;
+  const backend = new MockSandboxBackend();
+  const manager = new ProjectCellManager(controller, backend, [projectCellClass()]);
+
+  await assert.rejects(
+    manager.ensure({ id: "cell-1", services: [{ name: "db", image: "postgres:16-alpine" }] }),
+    /not ready/,
+  );
+  assert.deepEqual(controller.deleted, ["synth-cell-cell-1"], "failed ensure must delete the leaked namespace");
+
+  // A failed ensure must not poison the cell id: a later attempt can still succeed.
+  controller.failWait = false;
+  const handle = await manager.ensure({ id: "cell-1", services: [{ name: "db", image: "postgres:16-alpine" }] });
+  assert.equal(handle.id, "cell-1");
+  assert.equal(backend.creates, 1);
+});
+
+test("project cell ensure does not delete a caller-provided namespace on failure", async () => {
+  const controller = new FakeProjectCellController();
+  controller.failWait = true;
+  const backend = new MockSandboxBackend();
+  const manager = new ProjectCellManager(controller, backend, [projectCellClass()]);
+
+  await assert.rejects(
+    manager.ensure({ id: "cell-1", namespace: "shared-ns", services: [{ name: "db", image: "postgres:16-alpine" }] }),
+    /not ready/,
+  );
+  assert.deepEqual(controller.deleted, [], "must not delete a namespace the caller supplied");
+});
+
+test("project cell destroy waits for an in-flight create before tearing down", async () => {
+  const controller = new FakeProjectCellController();
+  controller.delayMs = 10;
+  const backend = new MockSandboxBackend();
+  const manager = new ProjectCellManager(controller, backend, [projectCellClass()]);
+
+  const creating = manager.ensure({ id: "cell-1" });
+  await manager.destroy("cell-1");
+  await creating;
+  assert.equal(backend.destroys, 1);
+  assert.deepEqual(controller.deleted, ["synth-cell-cell-1"]);
+});
+
+test("project cell reap cannot delete a namespace a concurrent lease just recreated", async () => {
+  const controller = new FakeProjectCellController();
+  let releaseDestroy!: () => void;
+  const destroyGate = new Promise<void>((resolve) => { releaseDestroy = resolve; });
+  class GatedDestroyBackend extends MockSandboxBackend {
+    override async destroy(): Promise<void> {
+      await destroyGate;
+      return super.destroy();
+    }
+  }
+  const backend = new GatedDestroyBackend();
+  const manager = new ProjectCellManager(controller, backend, [projectCellClass()]);
+  const spec = { id: "cell-1", idleTtlMs: 0 };
+  await manager.ensure(spec);
+
+  // reap decides the cell is idle and enters destroy, then blocks on the gate.
+  const reaping = manager.reap(Date.now() + 1);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  // A lease arrives while destroy is in flight; it must not end up pointing at
+  // a namespace the stale destroy then deletes (same derived namespace name).
+  const leasing = manager.lease(spec);
+  releaseDestroy();
+  const lease = await leasing;
+  await reaping;
+
+  assert.ok(
+    controller.activeNamespaces.has(lease.handle.namespace),
+    "the leased cell's namespace must still exist after a concurrent reap",
+  );
+});
+
+test("project cell reap destroys only idle, unleased cells", async () => {
+  const controller = new FakeProjectCellController();
+  const backend = new MockSandboxBackend();
+  const manager = new ProjectCellManager(controller, backend, [projectCellClass()]);
+
+  const spec = { id: "cell-1", idleTtlMs: 1_000 };
+  await manager.ensure(spec);
+  const lease = await manager.lease(spec);
+  await manager.reap(Date.now() + 5_000);
+  assert.equal(backend.destroys, 0, "a leased cell must not be reaped");
+  await lease.release();
+  await manager.reap(Date.now() + 5_000);
+  assert.equal(backend.destroys, 1);
+  assert.deepEqual(controller.deleted, ["synth-cell-cell-1"]);
 });
 
 test("sandbox manifest omits an empty runtimeClassName instead of emitting an invalid pod", () => {

@@ -194,6 +194,7 @@ export function buildProjectServicePod(namespace, cellId, service) {
             automountServiceAccountToken: false,
             securityContext: {
                 runAsNonRoot: true,
+                ...(service.fsGroup !== undefined ? { fsGroup: service.fsGroup } : {}),
                 seccompProfile: { type: "RuntimeDefault" },
             },
             containers: [
@@ -216,6 +217,8 @@ export function buildProjectServicePod(namespace, cellId, service) {
                         privileged: false,
                         allowPrivilegeEscalation: false,
                         runAsNonRoot: true,
+                        ...(service.runAsUser !== undefined ? { runAsUser: service.runAsUser } : {}),
+                        ...(service.runAsGroup !== undefined ? { runAsGroup: service.runAsGroup } : {}),
                         capabilities: { drop: ["ALL"] },
                         seccompProfile: { type: "RuntimeDefault" },
                     },

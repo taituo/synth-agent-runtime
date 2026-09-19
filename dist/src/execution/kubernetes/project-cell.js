@@ -56,73 +56,121 @@ export class ProjectCellManager {
     #sandboxBackend;
     #classes;
     #cells = new Map();
+    /**
+     * Per-cell lifecycle lock. `ensure`, `lease`, `reap` and `destroy` for the
+     * same cell id are serialized. Without it, two concurrent `ensure()` calls
+     * each create an executor sandbox (one leaks, unreachable via `#cells`), and
+     * a `destroy` racing a `lease` can delete the namespace that the new cell
+     * just created under the same derived name.
+     */
+    #locks = new Map();
     constructor(controller, sandboxBackend, classes) {
         this.#controller = controller;
         this.#sandboxBackend = sandboxBackend;
         this.#classes = new Map(classes.map((entry) => [entry.id, entry]));
     }
     async ensure(spec) {
+        return this.#withCellLock(spec.id, () => this.#ensureLocked(spec));
+    }
+    #withCellLock(id, run) {
+        const previous = this.#locks.get(id) ?? Promise.resolve();
+        const next = previous.then(run, run);
+        this.#locks.set(id, next.catch(() => { }));
+        return next;
+    }
+    async #ensureLocked(spec) {
         const existing = this.#cells.get(spec.id);
         if (existing)
             return existing.handle;
+        return this.#createCell(spec);
+    }
+    async #createCell(spec) {
+        // When the caller supplies a namespace we do not own it (it may be shared
+        // with other resources), so a failed ensure must not delete it.
+        const ownsNamespace = spec.namespace === undefined;
         const namespace = spec.namespace ?? `synth-cell-${spec.id}`.toLowerCase().replace(/[^a-z0-9-]/g, "-").slice(0, 63);
-        await this.#controller.apply(buildRestrictedNamespace(namespace, { "synth.openai.dev/project-cell": spec.id }));
-        await this.#controller.apply(buildProjectCellNetworkPolicy(namespace, spec.id));
-        const serviceNames = [];
-        for (const service of spec.services ?? []) {
-            const pod = buildProjectServicePod(namespace, spec.id, service);
-            await this.#controller.apply(pod);
-            const podName = String(pod.metadata.name);
-            await this.#controller.waitPodReady(namespace, podName);
-            const serviceObject = buildProjectService(namespace, spec.id, service);
-            if (serviceObject) {
-                await this.#controller.apply(serviceObject);
-                serviceNames.push(String(serviceObject.metadata.name));
+        let executor;
+        try {
+            await this.#controller.apply(buildRestrictedNamespace(namespace, { "synth.openai.dev/project-cell": spec.id }));
+            await this.#controller.apply(buildProjectCellNetworkPolicy(namespace, spec.id));
+            const serviceNames = [];
+            for (const service of spec.services ?? []) {
+                const pod = buildProjectServicePod(namespace, spec.id, service);
+                await this.#controller.apply(pod);
+                const podName = String(pod.metadata.name);
+                await this.#controller.waitPodReady(namespace, podName);
+                const serviceObject = buildProjectService(namespace, spec.id, service);
+                if (serviceObject) {
+                    await this.#controller.apply(serviceObject);
+                    serviceNames.push(String(serviceObject.metadata.name));
+                }
             }
+            const classId = spec.resourceClassId ?? "project-cell";
+            const resourceClass = this.#classes.get(classId);
+            if (!resourceClass)
+                throw new Error(`Unknown project cell resource class: ${classId}`);
+            executor = await this.#sandboxBackend.create({ ...resourceClass, network: { ...resourceClass.network, mode: "none" } }, {
+                namespace,
+                labels: { "synth.openai.dev/project-cell": spec.id },
+            });
+            const handle = {
+                id: spec.id,
+                namespace,
+                executor,
+                serviceNames,
+                createdAt: Date.now(),
+            };
+            this.#cells.set(spec.id, { handle, leases: 0, lastUsedAt: Date.now(), idleTtlMs: spec.idleTtlMs ?? 30 * 60_000 });
+            return handle;
         }
-        const classId = spec.resourceClassId ?? "project-cell";
-        const resourceClass = this.#classes.get(classId);
-        if (!resourceClass)
-            throw new Error(`Unknown project cell resource class: ${classId}`);
-        const executor = await this.#sandboxBackend.create({ ...resourceClass, network: { ...resourceClass.network, mode: "none" } }, {
-            namespace,
-            labels: { "synth.openai.dev/project-cell": spec.id },
-        });
-        const handle = {
-            id: spec.id,
-            namespace,
-            executor,
-            serviceNames,
-            createdAt: Date.now(),
-        };
-        this.#cells.set(spec.id, { handle, leases: 0, lastUsedAt: Date.now(), idleTtlMs: spec.idleTtlMs ?? 30 * 60_000 });
-        return handle;
+        catch (error) {
+            // A failed ensure must not leave a half-built cell (namespace, policy,
+            // service pods, or executor sandbox) behind for a cell that was never
+            // registered and therefore can never be reaped or destroyed.
+            if (executor)
+                await this.#sandboxBackend.destroy(executor).catch(() => { });
+            if (ownsNamespace)
+                await this.#controller.deleteNamespace(namespace).catch(() => { });
+            throw error;
+        }
     }
     async lease(spec) {
-        const handle = await this.ensure(spec);
-        const record = this.#cells.get(spec.id);
-        record.leases++;
-        record.lastUsedAt = Date.now();
-        let released = false;
-        return {
-            handle,
-            release: async () => {
-                if (released)
-                    return;
-                released = true;
-                record.leases = Math.max(0, record.leases - 1);
-                record.lastUsedAt = Date.now();
-            },
-        };
+        return this.#withCellLock(spec.id, async () => {
+            const handle = await this.#ensureLocked(spec);
+            const record = this.#cells.get(spec.id);
+            record.leases++;
+            record.lastUsedAt = Date.now();
+            let released = false;
+            return {
+                handle,
+                release: async () => {
+                    if (released)
+                        return;
+                    released = true;
+                    record.leases = Math.max(0, record.leases - 1);
+                    record.lastUsedAt = Date.now();
+                },
+            };
+        });
     }
     async reap(now = Date.now()) {
-        for (const [id, record] of this.#cells) {
-            if (record.leases > 0 || now - record.lastUsedAt < record.idleTtlMs)
-                continue;
-            await this.destroy(id);
+        for (const id of [...this.#cells.keys()]) {
+            // Re-check idleness under the same lock a concurrent lease would hold,
+            // so a cell that just became leased is never reaped.
+            await this.#withCellLock(id, async () => {
+                const record = this.#cells.get(id);
+                if (!record)
+                    return;
+                if (record.leases > 0 || now - record.lastUsedAt < record.idleTtlMs)
+                    return;
+                await this.#destroyLocked(id);
+            });
         }
     }
     async destroy(id) {
+        return this.#withCellLock(id, () => this.#destroyLocked(id));
+    }
+    async #destroyLocked(id) {
         const record = this.#cells.get(id);
         if (!record)
             return;
