@@ -1,18 +1,22 @@
 # Synth Agent Runtime
 
-Synth Agent Runtime is a distributed runtime for autonomous AI agents. It
-gives agent state a durable, crash-safe control plane (in-memory, JSON-file,
-PostgreSQL, or Temporal-backed) with lease-based ownership and hard
-write-fencing, a choice of execution backends (in-memory for tests,
-Kubernetes + gVisor-sandboxed pods for real untrusted workloads), and an
-OpenAI Chat Completions / Responses-compatible inference gateway with
-streaming, tool calls, and multi-turn continuations. The core guarantee: a
-stale worker, a killed pod, or a network partition can never silently
-corrupt agent state or double-execute an effect — the current lease holder
-is the only writer that can durably commit, and every other write is
-rejected, not raced.
+**Infrastructure for running AI agents as durable, distributed workloads.**
 
-**Current version: `1.0.0-rc.1`.**
+Synth Agent Runtime is a runtime and control plane for long-running AI agents. It turns an agent from a process-bound chat session into a durable entity with its own state, lifecycle, mailbox, execution environment, recovery semantics, and ownership rules.
+
+The runtime is designed for agents that may run unattended for minutes, hours, or longer; move between workers; survive process and machine failures; receive steering while they are already running; spawn or coordinate other agents; and eventually act on external systems. The agent itself can remain relatively simple. The runtime is responsible for making its execution reliable.
+
+At the center of the design is a separation between **agent reasoning, durable state, and physical execution**. An agent can work against a fast in-memory workspace, a persistent project environment, or an isolated Kubernetes/gVisor sandbox without changing the higher-level agent model. Expensive or consequential operations can be pushed behind explicit execution and effect boundaries rather than being implicit side effects of an LLM conversation.
+
+For distributed deployments, Synth provides durable agent state, mailboxes, revisions, leases, fencing tokens, command and effect coordination, crash recovery, and continuation state. Multiple control-plane replicas can operate against the same durable backend while stale workers are prevented from publishing state after ownership has moved elsewhere. PostgreSQL is the primary distributed persistence implementation, with in-memory, JSON-file, and Temporal-oriented adapters also included.
+
+The runtime also includes an inference layer with OpenAI-compatible Chat Completions and Responses endpoints, streaming and tool-call support, continuation handling, routing, and provider abstraction. This allows agent execution to remain independent of a particular model provider or client surface.
+
+Synth is **not an agent framework, prompt library, or a new model SDK**. Existing agent harnesses can sit on top of it. Pi, OpenCode-style clients, supervisors, workflow systems, or custom agents can use the runtime while Synth handles the less visible systems problems underneath them: ownership, persistence, isolation, recovery, concurrency, and safe interaction with the outside world.
+
+The broader goal is to make agents behave more like normal distributed workloads: cheap to create, safe to interrupt, recoverable after failure, movable between execution environments, and able to continue working independently of the client that started them.
+
+**Current release: `1.0.0-rc.1`.** The release candidate has been exercised against real PostgreSQL concurrency, a pinned Pi integration, Kubernetes with gVisor isolation, and a live external inference provider. Remaining work toward `1.0.0` is primarily operational hardening and sustained production-shape testing rather than a change to the core runtime model.
 
 > **Release-candidate status.** This tree folds together the external v0.9
 > audit fixes, the second review's cross-replica race fixes (atomic agent
@@ -114,6 +118,16 @@ Clients / OpenCode / Pi / Temporal / Supervisor
  synthetic RAM          physical sandbox
  MemoryWorkspace       Kubernetes / gVisor
 ```
+
+### Agent and provider integrations
+
+Synth Agent Runtime is independent of any particular agent harness or model provider.
+
+It can be embedded underneath existing agents and coding harnesses, or used with custom workers that implement the runtime interfaces. Pi and OpenCode-related paths are included as integrations and have been used for end-to-end validation, but neither is required to use the runtime.
+
+The inference gateway is provider-agnostic and exposes OpenAI-compatible Chat Completions and Responses interfaces. OpenCode Go is one provider path that has been tested against the runtime; other compatible or custom providers can be used instead.
+
+Provider credentials are not bundled with Synth. Deployments supply and manage their own credentials and are responsible for complying with the terms and usage policies of the provider they choose.
 
 ## Tests executed for this artifact
 
