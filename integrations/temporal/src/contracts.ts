@@ -19,6 +19,13 @@ export interface DurableAgentState {
   lastResult?: unknown;
   lastError?: string;
   updatedAt: number;
+  /**
+   * Optional per-agent park backoff override. When a transient turn failure
+   * exhausts the activity retry policy the agent parks (`waiting`) and retries
+   * with exponential backoff; this overrides the defaults (5s initial, x2,
+   * capped at 5 min). Omitted by legacy callers, which get the defaults.
+   */
+  parkBackoff?: { initialMs: number; maxMs: number };
 }
 
 export interface RunTurnInput {

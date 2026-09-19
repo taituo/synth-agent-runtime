@@ -14,6 +14,15 @@ Temporal workflow code runs in a restricted V8 isolate, not a full Node/browser 
 
 The mailbox is consumed with an explicit per-turn count, not cleared wholesale: `runTurn` receives a snapshot of the mailbox, and only the messages present at snapshot time are removed afterward (`state.mailbox.splice(0, consumedCount)`). A message a signal appends while the activity is still in flight survives and is processed on the next loop iteration, rather than being silently discarded. (An earlier version cleared the whole mailbox unconditionally on the idle transition; that could drop a message that should have ended the loop, leaving the workflow waiting forever.) For a durable multi-consumer deployment, a persisted cursor/idempotency key is still the production shape this compact example approximates.
 
+## Failure semantics: park vs. fail
+
+A turn failure is classified before the workflow decides what to do:
+
+- **Permanent** (`ApplicationFailure.nonRetryable`; the gateway activity marks HTTP 400/401/403/404/422 this way) ends the agent immediately: `status = "failed"`, exactly one activity call, cause in `lastError`.
+- **Transient** (HTTP 408/409/425/429/5xx, timeouts, network errors, empty or malformed completions) is first retried by Temporal's activity retry policy (`maximumAttempts: 3`). If retries are exhausted the agent **parks** instead of dying: `status = "waiting"`, the failed turn's messages stay in the mailbox, and `lastError` holds the root cause. It waits with exponential backoff (default 5s initial, x2, capped at 5 min; override per agent with the optional `parkBackoff` on the initial state) and retries the same turn. A successful turn clears `lastError`, resets the backoff, and resumes normal flow.
+
+Parking is cancellation-aware (`condition(() => cancelled, backoffMs)`), so `cancelAgent` on a parked agent takes effect promptly rather than waiting out the backoff. New messages arriving while parked do **not** cut the wait short — the provider is presumably still down — they queue and are processed after it. An agent that parks and retries forever grows workflow history, so a production deployment should Continue-As-New at a history threshold (out of scope here).
+
 ## Observability: correlation and interceptors
 
 `src/worker.ts`'s `runTemporalWorker()` installs Synth's own interceptors by default: `activity-interceptors.ts` (worker-side; attaches `agentId`/`workflowId`/`activityType`/`attempt`/`retryReason` to every activity log line and metric, and emits one trace span per attempt to an optional `SynthTraceSink`) and `workflow-interceptors.ts` (bundled into the workflow isolate; attaches the same correlation fields to `workflow.log` lines and emits `synth.workflow.execute.*`/`synth.workflow.signal` lifecycle lines). Field names in `src/correlation.ts` mirror `docs/OBSERVABILITY.md`'s correlation model rather than inventing a second naming scheme. Pass `interceptors: { trace, maxAttempts, traceIdFor }` to `runTemporalWorker()` to wire in a trace sink; pass `workflowInterceptorModules: []` to disable the workflow-side interceptor.

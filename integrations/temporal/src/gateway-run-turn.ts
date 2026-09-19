@@ -1,5 +1,13 @@
-import { Context as ActivityContext } from "@temporalio/activity";
+import { ApplicationFailure, Context as ActivityContext } from "@temporalio/activity";
 import type { AgentActivities, DurableMailboxMessage, RunTurnInput, RunTurnResult } from "./contracts.js";
+
+/**
+ * HTTP statuses that will never succeed on retry (bad request, auth, missing
+ * route/model, validation). Everything else — 408/409/425/429, 5xx, timeouts,
+ * network errors, empty or malformed completions — is treated as transient and
+ * left to Temporal's retry policy and, after that, the workflow's park/backoff.
+ */
+const PERMANENT_HTTP_STATUSES = new Set([400, 401, 403, 404, 422]);
 
 /**
  * A `runTurn` activity that does REAL inference through an OpenAI-compatible
@@ -152,7 +160,13 @@ export function createGatewayRunTurn(options: GatewayRunTurnOptions): AgentActiv
         }),
       });
       const text = await response.text();
-      if (!response.ok) throw new Error(`gateway returned HTTP ${response.status}: ${text.slice(0, 300)}`);
+      if (!response.ok) {
+        const message = `gateway returned HTTP ${response.status}: ${text.slice(0, 300)}`;
+        if (PERMANENT_HTTP_STATUSES.has(response.status)) {
+          throw ApplicationFailure.nonRetryable(message, `GatewayHTTP${response.status}`);
+        }
+        throw new Error(message);
+      }
       body = JSON.parse(text);
     } finally {
       clearInterval(timer);

@@ -92,6 +92,28 @@ test("a non-2xx gateway reply and an empty completion both throw", async () => {
   await assert.rejects(empty({ agentId: "a", messages: [message("x")] }), /no message content/);
 });
 
+test("classifies gateway HTTP errors as permanent (non-retryable) or transient", async () => {
+  const make = (status: number) =>
+    createGatewayRunTurn({
+      baseUrl: "http://gw.test",
+      model: "m",
+      heartbeat: () => {},
+      fetchImpl: (async () => new Response("nope", { status })) as unknown as typeof fetch,
+    });
+  for (const status of [400, 401, 403, 404, 422]) {
+    await assert.rejects(make(status)({ agentId: "a", messages: [message("x")] }), (error: unknown) => {
+      assert.equal((error as { nonRetryable?: boolean }).nonRetryable, true, `HTTP ${status} should be permanent`);
+      return true;
+    });
+  }
+  for (const status of [408, 409, 425, 429, 500, 502, 503]) {
+    await assert.rejects(make(status)({ agentId: "a", messages: [message("x")] }), (error: unknown) => {
+      assert.notEqual((error as { nonRetryable?: boolean }).nonRetryable, true, `HTTP ${status} should be transient`);
+      return true;
+    });
+  }
+});
+
 test("heartbeats while waiting on a slow model (the workflow enforces a heartbeat timeout)", async () => {
   let beats = 0;
   const runTurn = createGatewayRunTurn({

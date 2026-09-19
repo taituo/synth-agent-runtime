@@ -113,6 +113,11 @@ export async function main(): Promise<void> {
   const apiKey = process.env.GATEWAY_API_KEY;
   const perAgentTimeoutMs = Number(process.env.SWARM_TIMEOUT_MS ?? 300_000);
   const requestTimeoutMs = process.env.GATEWAY_TIMEOUT_MS ? Number(process.env.GATEWAY_TIMEOUT_MS) : undefined;
+  // Fault mode: the provider stays down for the whole run, so a healthy
+  // agent now ends PARKED (`waiting`) rather than dead. Expect that instead of
+  // the normal all-classified outcome.
+  const expectParked = process.env.EXPECT_PARKED === "1";
+  const expectParkedError = process.env.EXPECT_PARKED_ERROR;
 
   await preflight(baseUrl, model);
 
@@ -170,16 +175,29 @@ export async function main(): Promise<void> {
   const totalCorrect = perAgent.reduce((sum, agent) => sum + agent.correct, 0);
   const accuracy = totalEvents === 0 ? 0 : totalCorrect / totalEvents;
 
-  const agentsHealthy = perAgent.every(
+  const parkedOk = perAgent.every(
     (agent) =>
-      agent.orderOk &&
-      !agent.timedOut &&
-      !agent.workflowEndedEarly &&
-      agent.lastError === null &&
-      agent.finalMailboxLength === 0,
+      agent.finalStatus === "waiting" &&
+      agent.timedOut &&
+      typeof agent.lastError === "string" &&
+      agent.lastError.length > 0 &&
+      (!expectParkedError || agent.lastError.includes(expectParkedError)),
   );
+  const agentsHealthy = expectParked
+    ? parkedOk
+    : perAgent.every(
+        (agent) =>
+          agent.orderOk &&
+          !agent.timedOut &&
+          !agent.workflowEndedEarly &&
+          agent.lastError === null &&
+          agent.finalMailboxLength === 0,
+      );
   const isolationOk = traceViolations.length === 0 && logViolations.length === 0;
-  const ok = agentsHealthy && isolationOk && accuracy >= ACCURACY_GATE;
+  const parkedLogs = runner.logs.filter((entry) => entry.message === "synth.workflow.parked").length;
+  const ok = expectParked
+    ? agentsHealthy && isolationOk && parkedLogs > 0
+    : agentsHealthy && isolationOk && accuracy >= ACCURACY_GATE;
 
   console.log(
     JSON.stringify(
@@ -194,6 +212,8 @@ export async function main(): Promise<void> {
         tokens: records.reduce((sum, record) => sum + (record.usage?.total_tokens ?? 0), 0),
         accuracy: Number(accuracy.toFixed(3)),
         accuracyGate: ACCURACY_GATE,
+        expectParked,
+        parkedLogs,
         agents: perAgent,
         isolationOk,
         traceViolations,

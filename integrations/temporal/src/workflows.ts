@@ -2,11 +2,12 @@ import {
   condition,
   defineQuery,
   defineSignal,
+  log,
   proxyActivities,
   setHandler,
 } from "@temporalio/workflow";
 import type { AgentActivities, DurableAgentState } from "./contracts.js";
-import { clone, rootCauseMessage } from "./correlation.js";
+import { clone, isNonRetryableFailure, nextParkBackoffMs, rootCauseMessage } from "./correlation.js";
 
 export const sendMessage = defineSignal<[DurableAgentState["mailbox"][number]]>("sendMessage");
 export const cancelAgent = defineSignal("cancelAgent");
@@ -30,6 +31,9 @@ export async function durableAgentWorkflow(initial: DurableAgentState): Promise<
   const state: DurableAgentState = clone(initial);
   let cancelled = false;
   let wake = state.mailbox.length > 0;
+  // Consecutive transient failures, used to grow the park backoff. Reset on a
+  // successful turn.
+  let parkAttempt = 0;
 
   setHandler(sendMessage, (message) => {
     state.mailbox.push(message);
@@ -62,7 +66,9 @@ export async function durableAgentWorkflow(initial: DurableAgentState): Promise<
       const result = await runTurn({ agentId: state.agentId, messages: clone(state.mailbox) });
       state.lastResult = result.result;
       state.status = result.state ?? "idle";
+      state.lastError = undefined;
       state.updatedAt = Date.now();
+      parkAttempt = 0;
       if (state.status === "idle") {
         // Remove exactly the messages this turn consumed. Anything appended
         // by a signal that arrived while the activity was running (i.e.
@@ -71,9 +77,30 @@ export async function durableAgentWorkflow(initial: DurableAgentState): Promise<
         state.mailbox.splice(0, consumedCount);
       }
     } catch (error) {
-      state.status = "failed";
-      state.lastError = rootCauseMessage(error);
+      const cause = rootCauseMessage(error);
+      if (isNonRetryableFailure(error)) {
+        // Permanent failure (bad credentials, malformed request, ...): no
+        // amount of waiting will help, so end immediately.
+        state.status = "failed";
+        state.lastError = cause;
+        state.updatedAt = Date.now();
+        break;
+      }
+      // Transient failure with retries exhausted: PARK, do not die. The
+      // mailbox is left intact so the same turn is retried after a backoff.
+      // (An unbounded park/retry loop grows workflow history; Continue-As-New
+      // is the production remedy and is out of scope here.)
+      parkAttempt += 1;
+      const backoffMs = nextParkBackoffMs(parkAttempt, state.parkBackoff);
+      state.status = "waiting";
+      state.lastError = cause;
       state.updatedAt = Date.now();
+      log.warn("synth.workflow.parked", { attempt: parkAttempt, backoffMs, error: cause });
+      // Wake early only for cancellation: new messages do NOT cut the backoff
+      // short, because the provider is presumably still down. Messages that
+      // arrive meanwhile stay queued and are picked up after the wait.
+      await condition(() => cancelled, backoffMs);
+      if (cancelled) break;
     }
   }
 

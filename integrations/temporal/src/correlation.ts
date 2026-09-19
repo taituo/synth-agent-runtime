@@ -104,6 +104,49 @@ export function compactCorrelation(correlation: SynthCorrelation): Record<string
   return out;
 }
 
+/**
+ * True when the failure, or any cause in its chain, is marked non-retryable
+ * (e.g. an `ApplicationFailure.nonRetryable` raised by the gateway activity).
+ * Sandbox-safe: inspects plain properties only, no SDK imports.
+ */
+export function isNonRetryableFailure(error: unknown): boolean {
+  let current: unknown = error;
+  const seen = new Set<unknown>();
+  while (current && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    if ((current as { nonRetryable?: unknown }).nonRetryable === true) return true;
+    current = "cause" in current ? (current as { cause?: unknown }).cause : undefined;
+  }
+  return false;
+}
+
+/** Exponential park backoff bounds for transient turn failures. */
+export interface ParkBackoff {
+  initialMs: number;
+  maxMs: number;
+}
+
+/** Defaults: 5s initial, doubling, capped at 5 minutes. */
+export const DEFAULT_PARK_BACKOFF: ParkBackoff = { initialMs: 5_000, maxMs: 300_000 };
+
+/**
+ * Backoff before the `attempt`-th consecutive park (1-based). `initialMs * 2^(attempt-1)`,
+ * capped at `maxMs`. Invalid/absent overrides fall back to the defaults so a
+ * malformed `parkBackoff` can never produce a zero or negative wait.
+ */
+export function nextParkBackoffMs(attempt: number, override?: ParkBackoff): number {
+  const initialMs =
+    override && Number.isFinite(override.initialMs) && override.initialMs > 0
+      ? override.initialMs
+      : DEFAULT_PARK_BACKOFF.initialMs;
+  const maxMs =
+    override && Number.isFinite(override.maxMs) && override.maxMs > 0
+      ? override.maxMs
+      : DEFAULT_PARK_BACKOFF.maxMs;
+  const raw = initialMs * 2 ** Math.max(0, attempt - 1);
+  return Math.min(raw, Math.max(initialMs, maxMs));
+}
+
 /** Walk an error's `cause` chain and return the innermost message. */
 export function rootCauseMessage(error: unknown): string {
   let current: unknown = error;

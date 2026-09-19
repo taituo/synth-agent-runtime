@@ -5,7 +5,9 @@ import {
   agentIdFromArgs,
   agentIdFromWorkflowId,
   compactCorrelation,
+  isNonRetryableFailure,
   messageKindFromArgs,
+  nextParkBackoffMs,
   rootCauseMessage,
 } from "../src/correlation.js";
 import { createSynthActivityInterceptors, type SynthTraceEvent } from "../src/activity-interceptors.js";
@@ -50,6 +52,35 @@ test("messageKindFromArgs reads the kind of the last message, and tolerates lega
   // A non-string or empty kind is ignored rather than leaked into telemetry.
   assert.equal(messageKindFromArgs([{ messages: [{ kind: 7 }] }]), undefined);
   assert.equal(messageKindFromArgs([{ messages: [{ kind: "" }] }]), undefined);
+});
+
+test("isNonRetryableFailure walks the cause chain for the nonRetryable marker", () => {
+  assert.equal(isNonRetryableFailure(new Error("transient")), false);
+  assert.equal(isNonRetryableFailure({ nonRetryable: true }), true);
+  assert.equal(isNonRetryableFailure({ nonRetryable: false }), false);
+  // Temporal wraps an activity failure: the marker sits on a nested cause.
+  const permanent = Object.assign(new Error("invalid credentials"), { nonRetryable: true });
+  const wrapped = new Error("Activity task failed", { cause: permanent });
+  assert.equal(isNonRetryableFailure(wrapped), true);
+  assert.equal(isNonRetryableFailure(new Error("outer", { cause: new Error("inner") })), false);
+  // A self-referential cause chain must not loop forever.
+  const cyclic: { cause?: unknown; nonRetryable?: boolean } = {};
+  cyclic.cause = cyclic;
+  assert.equal(isNonRetryableFailure(cyclic), false);
+});
+
+test("nextParkBackoffMs grows exponentially, caps, and honours overrides", () => {
+  assert.equal(nextParkBackoffMs(1), 5_000);
+  assert.equal(nextParkBackoffMs(2), 10_000);
+  assert.equal(nextParkBackoffMs(3), 20_000);
+  assert.equal(nextParkBackoffMs(20), 300_000, "capped at 5 minutes");
+  assert.equal(nextParkBackoffMs(1, { initialMs: 400, maxMs: 1600 }), 400);
+  assert.equal(nextParkBackoffMs(2, { initialMs: 400, maxMs: 1600 }), 800);
+  assert.equal(nextParkBackoffMs(3, { initialMs: 400, maxMs: 1600 }), 1600);
+  assert.equal(nextParkBackoffMs(9, { initialMs: 400, maxMs: 1600 }), 1600, "override cap");
+  // A malformed override must never yield a zero/negative wait.
+  assert.equal(nextParkBackoffMs(1, { initialMs: 0, maxMs: -1 }), 5_000);
+  assert.equal(nextParkBackoffMs(0), 5_000);
 });
 
 test("rootCauseMessage surfaces the innermost nested cause", () => {

@@ -2,6 +2,38 @@
 
 ## 1.0.0-rc.1 — abort-safety fix folded in, git ref/remote argument-injection fixed
 
+### Park transient turn failures instead of dying
+
+- **A short provider outage killed a durable agent permanently.** Any `runTurn`
+  activity failure that exhausted the workflow's retry policy set
+  `status = "failed"` and ended the loop, so roughly three seconds of
+  flaky/rate-limited inference was fatal — the opposite of what a durable agent
+  is for. The workflow now classifies the failure first. A **permanent** failure
+  (`ApplicationFailure.nonRetryable`; the gateway activity marks HTTP
+  400/401/403/404/422 this way) still ends the agent immediately with one
+  attempt. A **transient** one (HTTP 408/409/425/429/5xx, timeouts, network
+  errors, empty or malformed completions) now **parks** the agent instead:
+  `status = "waiting"`, the failed turn's messages stay in the mailbox, and
+  `lastError` holds the root cause (visible through `getAgentState`). It waits
+  with exponential backoff — default 5s initial, x2, capped at 5 min, overridable
+  per agent via the new optional `parkBackoff` on the initial state — then
+  retries the same turn. On success the backoff resets and `lastError` is
+  cleared. The wait is cancellation-aware (`condition(() => cancelled,
+  backoffMs)`), so cancelling a parked agent is prompt; new messages do not cut
+  the backoff short because the provider is presumably still down. Each park
+  logs `synth.workflow.parked` with `{attempt, backoffMs, error}` through the
+  existing interceptors. Added sandbox-safe `isNonRetryableFailure` (cause-chain
+  walk) and `nextParkBackoffMs` helpers to `src/correlation.ts`. Unit tests cover
+  the cause-chain walk (including a cyclic chain), the backoff growth/cap/override
+  and the gateway's permanent-vs-transient HTTP classification. `park-live.ts`
+  proves it against a real dev server: a transient outage outlasting one retry
+  cycle parks (mailbox intact, cause visible) then recovers to `idle` with
+  `lastError` cleared; a non-retryable failure ends `failed` in exactly one call;
+  cancelling while parked reaches `cancelled` in ~60 ms. The inference swarm
+  driver gained an `EXPECT_PARKED` mode so an always-down provider is asserted as
+  parked, not failed. An agent that parks and retries forever grows workflow
+  history; Continue-As-New is the production remedy and is out of scope here.
+
 ### Swarm against real inference, with injected faults
 
 - **The swarm had only ever run against an instant echo stub.** The typed-event
@@ -40,14 +72,6 @@
   recovered); with every request failing, all three agents ended `failed` after
   three attempts each, reported the real cause (`gateway returned HTTP 502`),
   and the driver returned in 4 s instead of hanging.
-- **Known limitation, found by this work and not changed here:** an agent whose
-  inference exhausts the workflow's retry policy ends permanently `failed`.
-  For a long-lived agent that means a short provider outage kills it. The same
-  thing happens if the per-call timeout is set below real model latency
-  (verified: `GATEWAY_TIMEOUT_MS=3000` against ~8 s calls failed all three
-  agents in 12 s). Whether a
-  failed turn should instead park the agent as `waiting` and retry later is a
-  workflow-semantics decision.
 - Also removed `integrations/temporal/dist/` from version control (it had been
   committed by accident in an earlier commit and was already stale) and
   ignored `integrations/*/dist/`.
