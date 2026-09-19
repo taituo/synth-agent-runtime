@@ -34,8 +34,11 @@ The release question is no longer "can a stale replica overwrite the current age
 [ ] rolling schema/application upgrade test
 [ ] soak test with forced worker/provider/pod restarts — the sustained
     load above did not include chaos (killed workers/pods) mid-soak
-[ ] production IAM + shared rate limiting + durable audit — tenant rate
-    limiting is currently per-process only, see CHANGELOG known issues
+[~] production IAM + shared rate limiting + durable audit — shared
+    rate limiting is closed (`SharedTenantRateLimitPolicy` +
+    `PostgresRateLimitStore`, atomic per-tenant/window upsert, verified live
+    against PostgreSQL). A real identity provider and a durable audit sink
+    are still open.
 [x] durable named event-consumer ACK + safe retention watermark — the event
     log now has a named-consumer ACK registry (`ackEvent`/`getEventCursor`/
     `listEventCursors`/`forgetEventConsumer`) and `safeEventWatermark`/
@@ -44,7 +47,6 @@ The release question is no longer "can a stale replica overwrite the current age
     The raw `pruneEvents(throughSeq)` remains available and caller-owned.
 [x] task/artifact per-record revision/CAS or equivalent ownership rule —
     `compareAndSwapTask`/`compareAndSwapArtifact` mirror `compareAndSwapProject`
-[ ] continuation size, encryption, retention, and cleanup policy
 [ ] continuation size, encryption, retention, and cleanup policy
 ```
 

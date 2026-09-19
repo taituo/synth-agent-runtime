@@ -299,35 +299,29 @@ appears if something is designed to hammer one row from many workers.
   builds.
 - Package version is `1.0.0-rc.1`.
 
-### Known issues carried into this RC (not blockers, tracked for follow-up)
+### Known issues carried into this RC — all since closed
 
-- `ChaosDurabilityProvider` (`src/chaos/wrappers.ts`) does not forward the
-  optional `putAgentFenced`/`readEvents`/`pruneEvents` members, so wrapping
-  a fencing-capable provider (e.g. Postgres) for chaos testing makes every
-  fenced write fail with `FENCED_AGENT_WRITE_UNSUPPORTED` regardless of the
-  inner provider's real capability. This only affects the chaos-testing
-  harness itself, not production write paths. Fix: forward those methods
-  when `inner` implements them, mirroring the existing pattern already used
-  for `claimCommand`/`claimEffect` in `ChaosRuntimeStateStore`.
-- Tenant rate limiting (`src/inference/gateway/tenant-policy.ts`,
-  `InMemoryTenantRateLimitPolicy`) is per-process only; there is no
-  distributed counterpart, so a tenant's effective limit scales with
-  replica count in a horizontally-scaled gateway deployment.
-- The durable event log's `pruneEvents(throughSeq)` is not wired to
-  mailbox named-consumer ACK cursors: `throughSeq` is caller-supplied, so
-  nothing today computes a safe watermark from consumers' actual read
-  positions before pruning. A caller could prune events a lagging
-  consumer hasn't read yet. See `docs/RELEASE-GATE.md`.
-- Project-cell service pods (`buildProjectServicePod` in
-  `src/execution/kubernetes/manifests.ts`) have no `runtimeClassName` field
-  and never run under gVisor, unlike sandbox executor pods.
-- Caller-supplied Kubernetes `namespace` values (`project-cell.ts`,
-  `kubectl-backend.ts`) are not sanitized the way derived pod/service names
-  are; no current in-repo caller passes untrusted data here, but embedders
-  deriving `namespace` from tenant input should sanitize it themselves for
-  now.
-- Bearer token comparison (`StaticBearerAuthenticator`) is a plain string
-  equality check, not constant-time.
+Every item originally listed here was fixed in later same-day commits;
+kept as a record of what was once open, each with a pointer to its fix
+(all appear chronologically above this entry):
+
+- ~~`ChaosDurabilityProvider` does not forward `putAgentFenced`/`readEvents`/
+  `pruneEvents`~~ — fixed: "Forward the optional durability surface through
+  ChaosDurabilityProvider".
+- ~~Tenant rate limiting is per-process only~~ — a distributed option now
+  exists (`SharedTenantRateLimitPolicy` + `PostgresRateLimitStore`); see
+  "Add shared cross-replica tenant rate limiting".
+  `InMemoryTenantRateLimitPolicy` itself is unchanged and still per-process
+  by design, for single-process deployments that don't need the shared store.
+- ~~The durable event log's `pruneEvents` is not wired to named-consumer ACK
+  cursors~~ — fixed: "Add durable named event-consumer ACK and safe
+  retention watermark".
+- ~~Project-cell service pods have no `runtimeClassName` field~~ — fixed:
+  "Add gVisor support for project-cell services".
+- ~~Caller-supplied Kubernetes `namespace` values aren't sanitized~~ —
+  fixed: "Validate caller-supplied Kubernetes namespaces".
+- ~~Bearer token comparison isn't constant-time~~ — fixed: "Compare bearer
+  tokens in constant time in StaticBearerAuthenticator".
 
 ## v0.9.1-review — audit merge + second review
 
