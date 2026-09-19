@@ -187,6 +187,10 @@ export function buildProjectServicePod(namespace, cellId, service) {
         metadata: { namespace, name, labels },
         spec: {
             restartPolicy: "Always",
+            // An empty string is rejected by the API server ("resource name may not
+            // be empty"); omit the key instead of emitting an invalid pod. Mirrors
+            // buildSandboxPod's runtimeClassName handling.
+            ...(service.runtimeClassName ? { runtimeClassName: service.runtimeClassName } : {}),
             automountServiceAccountToken: false,
             securityContext: {
                 runAsNonRoot: true,

@@ -48,3 +48,7 @@ A useful invariant is that a user-visible agent answer can be traced backwards t
 ## v0.8 correlation fields
 
 Distributed traces should carry tenant, logical resource ID, lease owner, fencing token, command/effect ID, project revision, mailbox sequence, and event sequence. These make stale-writer and replay incidents diagnosable.
+
+## Temporal
+
+The optional `integrations/temporal` package has its own correlation model in `src/correlation.ts` (`agentId`, `workflowId`, `activityType`, `attempt`, `retryReason`, ...), intentionally using the same field names as this document rather than a second scheme. `runTemporalWorker()` installs interceptors by default that attach these fields to every worker/workflow log line and emit a trace span per activity attempt to an optional `SynthTraceSink` (same shape as `TraceEvent`/`TraceSink` above — pass this runtime's own `InMemoryTraceSink`/`JsonlTraceSink` directly). See `docs/TEMPORAL.md` for details and a live verification script.

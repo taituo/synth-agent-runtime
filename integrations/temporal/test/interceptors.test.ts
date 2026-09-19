@@ -1,0 +1,146 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import type { ActivityContext } from "@temporalio/activity";
+import {
+  agentIdFromArgs,
+  agentIdFromWorkflowId,
+  compactCorrelation,
+  rootCauseMessage,
+} from "../src/correlation.js";
+import { createSynthActivityInterceptors, type SynthTraceEvent } from "../src/activity-interceptors.js";
+import { interceptors as workflowInterceptors } from "../src/workflow-interceptors.js";
+
+function activityContext(overrides: Record<string, unknown> = {}): ActivityContext {
+  return {
+    info: {
+      activityId: "1",
+      activityType: "runTurn",
+      attempt: 1,
+      taskQueue: "synth-agent-runtime",
+      workflowType: "durableAgentWorkflow",
+      workflowExecution: { workflowId: "agent/agt_123", runId: "run-1" },
+      ...overrides,
+    },
+  } as unknown as ActivityContext;
+}
+
+test("correlation helpers derive Synth ids from workflow ids and inputs", () => {
+  assert.equal(agentIdFromWorkflowId("agent/agt_123"), "agt_123");
+  assert.equal(agentIdFromWorkflowId("agt_456"), "agt_456");
+  assert.equal(agentIdFromWorkflowId(undefined), undefined);
+  assert.equal(agentIdFromArgs([{ agentId: "agt_789" }]), "agt_789");
+  assert.equal(agentIdFromArgs([{ messages: [] }]), undefined);
+  assert.equal(agentIdFromArgs([]), undefined);
+  assert.deepEqual(compactCorrelation({ agentId: "a", attempt: undefined }), { agentId: "a" });
+});
+
+test("rootCauseMessage surfaces the innermost nested cause", () => {
+  const inner = new Error("synthetic activity failure");
+  const wrapped = new Error("Activity task failed", { cause: inner });
+  assert.equal(rootCauseMessage(wrapped), "synthetic activity failure");
+  assert.equal(rootCauseMessage("plain"), "plain");
+});
+
+test("activity interceptor attaches correlation to logs and emits a trace span", async () => {
+  const events: SynthTraceEvent[] = [];
+  const factory = createSynthActivityInterceptors({ trace: { emit: (event) => { events.push(event); } }, maxAttempts: 3 });
+  const interceptor = factory(activityContext());
+
+  const result = await interceptor.inbound!.execute!(
+    { args: [{ agentId: "agt_123", messages: [] }], headers: {} },
+    async () => "turn-result",
+  );
+  assert.equal(result, "turn-result");
+
+  const attrs = interceptor.outbound!.getLogAttributes!({ base: "x" }, (input) => input);
+  assert.deepEqual(attrs, {
+    base: "x",
+    agentId: "agt_123",
+    workflowId: "agent/agt_123",
+    workflowType: "durableAgentWorkflow",
+    runId: "run-1",
+    taskQueue: "synth-agent-runtime",
+    activityId: "1",
+    activityType: "runTurn",
+    attempt: 1,
+  });
+
+  assert.deepEqual(events.map((event) => event.phase), ["start", "end"]);
+  assert.equal(events[0]!.name, "temporal.activity.runTurn");
+  assert.equal(events[0]!.traceId, "agent/agt_123");
+  assert.equal(events[0]!.attributes?.agentId, "agt_123");
+  assert.equal(events[1]!.attributes?.durationMs !== undefined, true);
+
+  const tags = interceptor.outbound!.getMetricTags!({}, (input) => input);
+  assert.equal(tags.agentId, "agt_123");
+  assert.equal(tags.activityType, "runTurn");
+  assert.equal(tags.attempt, 1);
+});
+
+test("activity interceptor reports the retry reason and willRetry on a failed attempt", async () => {
+  const events: SynthTraceEvent[] = [];
+  const factory = createSynthActivityInterceptors({ trace: { emit: (event) => { events.push(event); } }, maxAttempts: 3 });
+
+  // Attempt 1 fails.
+  const first = factory(activityContext());
+  await assert.rejects(
+    first.inbound!.execute!(
+      { args: [{ agentId: "agt_123", messages: [] }], headers: {} },
+      async () => { throw new Error("synthetic activity failure"); },
+    ),
+    /synthetic activity failure/,
+  );
+  assert.deepEqual(events.map((event) => event.phase), ["start", "error"]);
+  assert.equal(events[1]!.attributes?.error, "synthetic activity failure");
+  assert.equal(events[1]!.attributes?.willRetry, true);
+
+  // Attempt 2 is a retry: it must know why it is being retried.
+  const second = factory(activityContext({ attempt: 2 }));
+  const retryAttrs = second.outbound!.getLogAttributes!({}, (input) => input);
+  assert.equal(retryAttrs.attempt, 2);
+  assert.equal(retryAttrs.retryReason, "synthetic activity failure");
+
+  // A successful retry clears the recorded failure.
+  const third = factory(activityContext({ attempt: 3 }));
+  const thirdAttrs = third.outbound!.getLogAttributes!({}, (input) => input);
+  assert.equal(thirdAttrs.retryReason, "synthetic activity failure");
+  await third.inbound!.execute!({ args: [{ agentId: "agt_123" }], headers: {} }, async () => "ok");
+  const fourth = factory(activityContext({ attempt: 4 }));
+  assert.equal(fourth.outbound!.getLogAttributes!({}, (input) => input).retryReason, undefined);
+});
+
+test("a final (non-retryable) failure does not leak its entry in the retry-reason map", async () => {
+  // Regression: the original implementation only cleared a recorded failure
+  // on success. An activity that fails on every attempt up to maxAttempts
+  // (never succeeds) left its entry in the module-level map forever, a slow
+  // memory leak in a long-lived worker process. It must be cleared as soon
+  // as we know there is no future retry to report it to (willRetry === false).
+  const uniqueActivityId = `leak-check-${Date.now()}`;
+  const factory = createSynthActivityInterceptors({ maxAttempts: 2 });
+
+  const last = factory(activityContext({ activityId: uniqueActivityId, attempt: 2 }));
+  await assert.rejects(
+    last.inbound!.execute!(
+      { args: [{ agentId: "agt_leak" }], headers: {} },
+      async () => { throw new Error("final failure"); },
+    ),
+    /final failure/,
+  );
+
+  // A later attempt for the SAME activity (attempt > 1, so the interceptor
+  // actually consults the map) must see no leftover retryReason: the failed
+  // final attempt's entry must be gone, not merely overwritten.
+  const laterAttempt = factory(activityContext({ activityId: uniqueActivityId, attempt: 5 }));
+  const attrs = laterAttempt.outbound!.getLogAttributes!({}, (input) => input);
+  assert.equal(attrs.retryReason, undefined);
+});
+
+test("workflow interceptor module exports a factory with inbound and outbound hooks", () => {
+  const interceptors = workflowInterceptors();
+  assert.equal(interceptors.inbound?.length, 1);
+  assert.equal(interceptors.outbound?.length, 1);
+  assert.equal(typeof interceptors.inbound![0]!.execute, "function");
+  assert.equal(typeof interceptors.inbound![0]!.handleSignal, "function");
+  assert.equal(typeof interceptors.outbound![0]!.getLogAttributes, "function");
+  assert.equal(typeof interceptors.outbound![0]!.scheduleActivity, "function");
+});

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULT_KUBERNETES_RESOURCE_CLASSES, ExecutionBroker, KubernetesExecutor, MemoryWorkspace, WarmSandboxPool, WorkspaceSynchronizer, buildSandboxNetworkPolicy, buildSandboxPod, deletePodAndPolicyArgs, } from "../src/index.js";
+import { DEFAULT_KUBERNETES_RESOURCE_CLASSES, ExecutionBroker, KubernetesExecutor, MemoryWorkspace, WarmSandboxPool, WorkspaceSynchronizer, buildSandboxNetworkPolicy, buildProjectServicePod, buildSandboxPod, deletePodAndPolicyArgs, } from "../src/index.js";
 class MockSandboxBackend {
     creates = 0;
     resets = 0;
@@ -215,6 +215,26 @@ test("workspace sync-back is atomic when sandbox output exceeds limits", async (
     assert.equal(await workspace.readText("existing.txt"), "keep");
     assert.equal(await workspace.readText("first.txt"), undefined);
     assert.equal(await workspace.readText("huge.txt"), undefined);
+});
+test("project service pod carries a requested RuntimeClass", () => {
+    const pod = buildProjectServicePod("test", "cell-1", {
+        name: "db",
+        image: "postgres:16-alpine",
+        runtimeClassName: "gvisor",
+    });
+    assert.equal(pod.spec.runtimeClassName, "gvisor");
+    assert.equal(pod.spec.restartPolicy, "Always");
+    assert.equal(pod.spec.automountServiceAccountToken, false);
+});
+test("project service pod omits an empty RuntimeClass instead of emitting an invalid pod", () => {
+    for (const runtimeClassName of [undefined, ""]) {
+        const pod = buildProjectServicePod("test", "cell-1", {
+            name: "db",
+            image: "postgres:16-alpine",
+            ...(runtimeClassName === undefined ? {} : { runtimeClassName }),
+        });
+        assert.ok(!("runtimeClassName" in pod.spec) || pod.spec.runtimeClassName === undefined, `runtimeClassName must be omitted when ${JSON.stringify(runtimeClassName)}`);
+    }
 });
 test("sandbox manifest omits an empty runtimeClassName instead of emitting an invalid pod", () => {
     const cls = { ...DEFAULT_KUBERNETES_RESOURCE_CLASSES[0], runtimeClassName: "" };

@@ -6,6 +6,7 @@ import {
   setHandler,
 } from "@temporalio/workflow";
 import type { AgentActivities, DurableAgentState } from "./contracts.js";
+import { clone, rootCauseMessage } from "./correlation.js";
 
 export const sendMessage = defineSignal<[DurableAgentState["mailbox"][number]]>("sendMessage");
 export const cancelAgent = defineSignal("cancelAgent");
@@ -20,31 +21,6 @@ const { runTurn } = proxyActivities<AgentActivities>({
     maximumInterval: "30 seconds",
   },
 });
-
-// Temporal's workflow sandbox does not expose the global `structuredClone`
-// (it runs in a restricted V8 isolate, not a full Node/browser global scope).
-// A JSON round-trip is sandbox-safe and sufficient here: DurableAgentState is
-// plain JSON-serializable data (strings/numbers/arrays/plain objects), never
-// Date/Map/Set/functions.
-function clone<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
-}
-
-// Temporal wraps an activity's thrown error as a generic ActivityFailure
-// ("Activity task failed"); the actual application error is nested under
-// `.cause` (possibly several levels deep through retry/child wrapping).
-// Surface the innermost message so recovery/debugging sees the real cause.
-function rootCauseMessage(error: unknown): string {
-  let current: unknown = error;
-  let message = error instanceof Error ? error.message : String(error);
-  while (current && typeof current === "object" && "cause" in current) {
-    const cause = (current as { cause?: unknown }).cause;
-    if (!cause) break;
-    current = cause;
-    if (current instanceof Error) message = current.message;
-  }
-  return message;
-}
 
 /**
  * Durable logical agent loop. The workflow owns lifecycle/mailbox state; the

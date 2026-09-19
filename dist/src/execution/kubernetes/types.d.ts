@@ -49,6 +49,12 @@ export interface ProjectCellService {
     image: string;
     ports?: number[];
     env?: Record<string, string>;
+    /**
+     * Optional Kubernetes RuntimeClass for the service pod (e.g. "gvisor").
+     * Omit or leave empty to use the cluster default runtime; an empty string
+     * must never be emitted into the manifest (the API server rejects it).
+     */
+    runtimeClassName?: string;
     resources?: {
         cpuRequest?: string;
         cpuLimit?: string;

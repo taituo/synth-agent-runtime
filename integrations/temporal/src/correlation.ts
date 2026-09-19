@@ -1,0 +1,88 @@
+/**
+ * Synth correlation fields for Temporal logs and traces.
+ *
+ * This module is imported from BOTH the workflow isolate (via the bundled
+ * workflow-interceptors module) and normal Node worker code (activity
+ * interceptors), so it must stay sandbox-safe: no `node:*` imports, no I/O,
+ * no globals outside the ECMAScript baseline.
+ *
+ * The field names mirror the correlation model in `docs/OBSERVABILITY.md`
+ * (`agent_id`, `workflow_id`, `turn_id`, `attempt_id`, ...) so Temporal
+ * telemetry lines up with the runtime's own `TraceEvent.attributes` rather
+ * than inventing a second naming scheme.
+ */
+export interface SynthCorrelation {
+  /** Synth agent id; the logical resource the workflow/activity serves. */
+  agentId?: string;
+  /** Temporal workflow id (the durable `agent/<agentId>` handle). */
+  workflowId?: string;
+  /** Temporal workflow type (e.g. `durableAgentWorkflow`). */
+  workflowType?: string;
+  /** Temporal workflow run id. */
+  runId?: string;
+  /** Temporal task queue. */
+  taskQueue?: string;
+  /** Temporal activity id. */
+  activityId?: string;
+  /** Temporal activity type (e.g. `runTurn`). */
+  activityType?: string;
+  /** 1-based activity attempt; >1 means this execution is a retry. */
+  attempt?: number;
+  /** Root-cause message of the previous failed attempt, when this is a retry. */
+  retryReason?: string;
+}
+
+/** Header used to carry correlation from a workflow into its activities. */
+export const SYNTH_CORRELATION_HEADER = "x-synth-correlation";
+
+/**
+ * Temporal's workflow sandbox does not expose the global `structuredClone`
+ * (it runs in a restricted V8 isolate, not a full Node/browser global scope).
+ * A JSON round-trip is sandbox-safe and sufficient for plain JSON-serializable
+ * state (strings/numbers/arrays/plain objects, never Date/Map/Set/functions).
+ */
+export function clone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+const AGENT_WORKFLOW_PREFIX = "agent/";
+
+/** `agent/agt_123` -> `agt_123`; a bare id is returned unchanged. */
+export function agentIdFromWorkflowId(workflowId: string | undefined): string | undefined {
+  if (!workflowId) return undefined;
+  return workflowId.startsWith(AGENT_WORKFLOW_PREFIX) ? workflowId.slice(AGENT_WORKFLOW_PREFIX.length) : workflowId;
+}
+
+/** Pull `agentId` off a `{ agentId, ... }` activity/workflow input, if present. */
+export function agentIdFromArgs(args: readonly unknown[] | undefined): string | undefined {
+  const first = args?.[0];
+  if (first && typeof first === "object" && "agentId" in first) {
+    const value = (first as { agentId?: unknown }).agentId;
+    if (typeof value === "string" && value.length > 0) return value;
+  }
+  return undefined;
+}
+
+/** Drop undefined fields so log attributes stay clean. */
+export function compactCorrelation(correlation: SynthCorrelation): Record<string, string | number> {
+  const out: Record<string, string | number> = {};
+  for (const [key, value] of Object.entries(correlation)) {
+    if (value !== undefined) out[key] = value;
+  }
+  return out;
+}
+
+/** Walk an error's `cause` chain and return the innermost message. */
+export function rootCauseMessage(error: unknown): string {
+  let current: unknown = error;
+  let message = error instanceof Error ? error.message : String(error);
+  const seen = new Set<unknown>();
+  while (current && typeof current === "object" && "cause" in current && !seen.has(current)) {
+    seen.add(current);
+    const cause = (current as { cause?: unknown }).cause;
+    if (!cause) break;
+    current = cause;
+    if (current instanceof Error) message = current.message;
+  }
+  return message;
+}
