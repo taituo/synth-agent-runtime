@@ -1,5 +1,11 @@
 # v0.9 external-fix second review
 
+> **Status: historical snapshot.** This is a point-in-time review of the
+> v0.9 → v0.9.1 audit cycle. Its closing "Remaining release evidence"
+> section describes what was still required before `1.0.0-rc.1` at the time
+> it was written; that work has since been completed. For current release
+> status, see `docs/RELEASE-GATE.md`.
+
 The external adversarial audit was valuable and its nine-file fix bundle was reviewed independently against pristine v0.9. The supplied fixes build cleanly and all 69 supplied tests pass, but two claimed correctness fixes were incomplete under concurrency.
 
 ## Accepted fixes

@@ -8,6 +8,10 @@ The cooperative v0.8 agent lease is now enforced at the durable write boundary. 
 
 This document defines the v0.9 multi-replica contracts.
 
+## Agent identity contract
+
+`DurabilityProvider.createAgent(snapshot): Promise<boolean>` is the atomic agent-identity-creation boundary, not a read-then-write preflight check. Every implementer makes the winning insertion atomic: `LocalMemory` and the JSON-file provider perform the existence check and insert inside their own serialization boundary, PostgreSQL uses `INSERT ... ON CONFLICT DO NOTHING RETURNING id`, and the Temporal adapter passes the call through to its underlying store. `AgentRuntime.spawn()` treats a `false` (non-insertion) result as `AGENT_ALREADY_EXISTS`, so two concurrent `spawn()` calls for the same agent ID — whether on one runtime or on two runtimes sharing one durability provider — can never both succeed. This closes a race where a `listAgents()`-based existence preflight could let both calls observe absence before either persisted.
+
 ## Lease contract
 
 A lease is `{resourceId, ownerId, fencingToken, expiresAt}`. The token is monotonic for the lifetime of the resource key. Expiration permits a new owner; it does not make an old owner trustworthy again.
@@ -59,6 +63,8 @@ Unknown does not mean retry.
 Each agent message has a durable message ID and an ordered sequence. Appending the same message ID is idempotent. Consumers own named ACK cursors.
 
 An ACK beyond the currently existing mailbox is clamped rather than creating a skip over future messages.
+
+`MailboxStore.appendMailbox(agentId, message): Promise<{ envelope, inserted }>` reports whether this specific call performed the durable insertion. When two runtime replicas share one durable mailbox and race to append the same message ID, only the replica whose call actually inserted the row (`inserted: true`) steers the live `AgentEngine`; the other replica receives the already-committed envelope (`inserted: false`) and does not steer again. PostgreSQL implements this with `ON CONFLICT DO NOTHING`, reading back the committed existing envelope in a second statement on conflict. This is what prevents duplicate cross-replica steering — a race that a purely local re-check of one replica's own in-memory mailbox snapshot cannot catch, since each replica only sees its own snapshot.
 
 ## World CAS contract
 

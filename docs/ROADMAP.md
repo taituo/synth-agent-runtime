@@ -1,18 +1,18 @@
-# Roadmap after v0.9
+# Roadmap: RC to GA
 
-v0.9 closes the two largest distributed correctness gaps left by v0.8: hard agent-state fencing and PostgreSQL database-clock lease semantics. The next milestone should not introduce another broad runtime abstraction layer. It should be a release-candidate program driven by live proof and operational hardening.
+`v1.0.0-rc.1` closes the distributed correctness/security gaps found across two independent audit passes: hard agent-state fencing, PostgreSQL database-clock lease semantics, atomic agent-identity creation, cross-replica mailbox double-steer, a gateway abort-crash, and a git ref/remote argument-injection issue. It has also been verified against real infrastructure: PostgreSQL concurrency/fencing, a pinned Pi checkout E2E, Kubernetes + gVisor pod-kill, and a live external provider matrix (see `docs/RELEASE-GATE.md` and `CHANGELOG.md`).
 
-## Candidate path to `1.0.0-rc.1`
+The next milestone is not another broad runtime abstraction layer. It is a GA hardening program driven by the unchecked items in `docs/RELEASE-GATE.md`:
 
-1. **Promote live PostgreSQL proof to mandatory.** Run the existing contention suite against a real PostgreSQL service in CI/staging and require the DB-clock skew and stale-agent generation tests to pass.
-2. **Promote Pi E2E to mandatory.** Keep the Pi revision pinned for reproducibility, then add a separately tracked compatibility run against the chosen moving branch.
-3. **Promote Kubernetes/gVisor destruction tests to mandatory.** Run active workload Pod kills, warm-pool reset verification, and workspace recovery against a disposable cluster.
-4. **Production gateway security.** External identity/API keys, tenant-scoped secrets, shared quotas/rate limits, and durable audit.
-5. **Durable event-consumer registry.** Named ACK cursors plus a safe global retention watermark.
-6. **Per-record task/artifact concurrency.** Revision/CAS or equivalent ownership rules instead of last-write-wins bodies.
-7. **Continuation operations.** Size limits, encryption/retention policy, cleanup jobs, and optional blob/compression storage.
-8. **Multi-replica soak and rolling-upgrade proof.** Keep at least two control-plane replicas racing while killing/restarting workers, providers, and executor Pods.
+## Path to `1.0.0` GA
+
+1. **Sustained multi-replica soak/load testing.** Keep two or more control-plane replicas racing under *sustained* load, not just a bounded repro, including forced worker/provider/pod restarts.
+2. **Rolling schema/application upgrade testing.** Prove a rolling upgrade of schema and application code against a live deployment without correctness loss.
+3. **Distributed rate limiting.** Replace the current per-process `InMemoryTenantRateLimitPolicy` with a shared, distributed quota/rate-limit implementation so a tenant's effective limit does not scale with replica count.
+4. **Per-record task/artifact CAS.** Extend revision/compare-and-swap ownership rules to individual task/artifact records, which are currently last-write-wins bodies (project membership/decisions already have CAS).
+5. **Continuation retention/encryption policy.** Add size limits, encryption/retention policy, and cleanup scheduling for Responses continuation state; TTL already exists.
+6. **Production IAM + durable audit.** A real identity provider, scoped secret handling, and a durable audit sink to replace the reference `StaticBearerAuthenticator`.
 
 ## Release criterion
 
-The next version should be called `1.0.0-rc.1` only when the live matrix in `RELEASE-GATE.md` is green without infrastructure SKIPs in the release environment. Until then, v0.9 remains the hardened internal-beta/developer-preview line.
+`1.0.0` GA should ship only when the remaining unchecked items in `docs/RELEASE-GATE.md` are closed and the live infrastructure matrix continues to run green in CI/staging, not just once during the RC audit.

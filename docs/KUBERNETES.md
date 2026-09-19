@@ -45,7 +45,4 @@ For the exact, executed, copy-pasteable procedure (installing gVisor, wiring it 
 
 Before direct production use, enforce digest-pinned executor images, validate cluster-specific DNS/egress policy, use scoped secret references/broker, test admission policies, and run repeated reset/pod-kill tests on the actual target cluster. See `CODE-REVIEW.md` CR-R10.
 
-
-## v0.8 control-plane ownership
-
-Kubernetes executor leases and control-plane agent/command leases are separate. A long-lived logical agent may change control-plane owner and physical sandbox independently. Sandbox reset/isolation rules from v0.7 remain in force.
+Kubernetes executor leases and control-plane agent/command leases are independent: a long-lived logical agent can change control-plane owner and physical sandbox without those two ownership changes being coupled. The sandbox reset/isolation rules above remain in force regardless of which control-plane replica currently owns the agent.

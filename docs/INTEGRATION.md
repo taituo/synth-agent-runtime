@@ -24,6 +24,8 @@ SYNTH_POSTGRES_URL=postgres://... npm run live:proof
 
 ## Pi
 
+Pi and OpenCode-style clients are an optional, tested integration path, not a requirement to use the runtime — the runtime is independent of any particular agent harness or model provider (see `README.md`'s "Agent and provider integrations" section).
+
 The Pi E2E integration lives in `integrations/pi-e2e/`. The package keeps normal Pi read/write/edit/bash tool semantics while substituting the synthetic execution environment. Set `PI_REPO` for the live-proof script to run against a checkout.
 
 ## OpenCode / OpenAI-compatible clients
@@ -39,3 +41,7 @@ The existing v0.7 Kubernetes/gVisor resource classes and warm-pool integration r
 ## v0.9 ownership integration
 
 For multi-replica agent execution, route runs through `LeasedAgentRunner`. Custom lease stores must implement `validateLease()`. Custom distributed durability stores should implement `putAgentFenced()` so stale generations are rejected atomically with the state mutation.
+
+## Git-backed workspace trust boundary
+
+`NativeGitSource`'s `ref` and `remote` inputs are treated as trust-boundary inputs, not passed to git unchecked: any code path that lets a task or tenant choose a workspace source ref is handling potentially untrusted data. An option-like value (one starting with `-`, such as `--upload-pack=<cmd>`) is rejected outright before it reaches git, and the underlying `git fetch` call additionally uses an end-of-options (`--`) separator as defense in depth. Both layers are verified independently by `test/native-git-source-security.test.ts`.

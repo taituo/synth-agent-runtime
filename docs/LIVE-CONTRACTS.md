@@ -23,3 +23,5 @@ v0.9 retains the live-system contract approach and adds hard-fencing/database-cl
 - external gateway/provider probe
 
 `npm run live:proof` is the canonical aggregator. Missing infrastructure produces SKIP.
+
+For `v1.0.0-rc.1`, the full infra-dependent contract set above (PostgreSQL, Kubernetes + gVisor, Pi, external provider) was actually executed and passed live, not just described — see `README.md`'s "Tests executed for this artifact" section and `CHANGELOG.md` for the specifics; this document intentionally does not restate the exact numbers to avoid drift.

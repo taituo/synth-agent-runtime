@@ -16,9 +16,9 @@ Everything below is design/subsystem detail, in rough reading order.
 - [`HARDENING.md`](HARDENING.md) — agent-state fencing, lease model.
 - [`RECOVERY.md`](RECOVERY.md) — crash/SIGKILL recovery.
 - [`CHAOS.md`](CHAOS.md) — chaos-testing harness.
-- [`CODE-REVIEW.md`](CODE-REVIEW.md) — prioritized findings from the backward code review.
-- [`SECOND-REVIEW.md`](SECOND-REVIEW.md) — external-audit second-review findings (SR-P1/SR-P2).
-- [`RELEASE-GATE.md`](RELEASE-GATE.md) — checklist gating `1.0.0` GA.
+- [`CODE-REVIEW.md`](CODE-REVIEW.md) — *historical snapshot* (point-in-time v0.9 review); prioritized findings from the backward code review, with pointers to current status.
+- [`SECOND-REVIEW.md`](SECOND-REVIEW.md) — *historical snapshot*; external-audit second-review findings (SR-P1/SR-P2) from the v0.9 → v0.9.1 audit cycle.
+- [`RELEASE-GATE.md`](RELEASE-GATE.md) — **canonical, current**: checklist gating `1.0.0` GA.
 
 ## Infrastructure
 
@@ -27,7 +27,7 @@ Everything below is design/subsystem detail, in rough reading order.
 - [`KUBERNETES-RUN.md`](KUBERNETES-RUN.md) — real, executed run guide: install gVisor, wire it into k3s, prove isolation, run the kill contract.
 - [`TEMPORAL.md`](TEMPORAL.md) — Temporal durability adapter.
 - [`OBSERVABILITY.md`](OBSERVABILITY.md) — tracing.
-- [`UPGRADE.md`](UPGRADE.md) — upgrade notes.
+- [`UPGRADE.md`](UPGRADE.md) — *historical*: a specific `v0.8 → v0.9` migration note, correct as-is for that transition.
 
 ## Inference gateway
 
@@ -38,4 +38,4 @@ Everything below is design/subsystem detail, in rough reading order.
 
 - [`INTEGRATION.md`](INTEGRATION.md) — third-party integration notes.
 - [`ROADMAP.md`](ROADMAP.md) — forward-looking plans.
-- [`history/`](history/) — full archived Markdown sets from prior releases (v0.1–v0.8), kept for reference only; not maintained.
+- [`history/`](history/) — *fully historical archive*: complete Markdown sets from prior releases (v0.1–v0.8), kept for reference only; not maintained and not reconciled with current status.

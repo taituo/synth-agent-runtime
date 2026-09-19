@@ -1,5 +1,12 @@
 # Backward code review — v0.1 → v0.9
 
+> **Status: point-in-time review.** This review was written against v0.9 and
+> distinguishes closed correctness problems from remaining
+> production-hardening work as of that point. Later audit passes (see
+> `docs/SECOND-REVIEW.md`) and the `v1.0.0-rc.1` live-infrastructure runs
+> closed several of the items this review lists as remaining. For current
+> release status, the authoritative source is `docs/RELEASE-GATE.md`.
+
 This review follows the failure boundaries backward from the current runtime and distinguishes closed correctness problems from remaining production-hardening work.
 
 ## P1 findings closed by v0.9
@@ -51,9 +58,9 @@ A stale worker that wakes after takeover receives `AGENT_FENCE_REJECTED`; it doe
 
 The gateway has authentication/ACL/rate-policy seams, but bundled implementations are reference-grade. A public multi-tenant release still needs a production identity provider, distributed quota/rate limiting, scoped secret policy, and durable audit records.
 
-### Live infrastructure matrix is not proven in this artifact environment
+### Live infrastructure matrix
 
-The code paths exist, but this build environment did not provide live PostgreSQL, a Pi checkout, a gVisor Kubernetes cluster, or external provider credentials. Those tests are correctly reported as `SKIP`, not PASS. A release candidate should require them green in CI/staging.
+At the time this review was written, the build environment did not provide live PostgreSQL, a Pi checkout, a gVisor Kubernetes cluster, or external provider credentials, so those tests were correctly reported as `SKIP`, not PASS. This gap is now closed: `v1.0.0-rc.1` was independently verified with real PostgreSQL concurrency/fencing, a real pinned Pi checkout E2E, a real Kubernetes + gVisor pod-kill, and a full external-provider matrix all live and passing — see `README.md`'s "Tests executed for this artifact" section and `docs/RELEASE-GATE.md`. A bare CI/sandbox run without the relevant environment variables/credentials still correctly reports `SKIP` for these checks (see `docs/LIVE-PROOF.md`); that is expected behavior, not a regression.
 
 ## Remaining P2
 
@@ -63,7 +70,7 @@ Terminal agent state is hard-fenced. Streaming output/tool events are still an e
 
 ### Event retention has no durable named-consumer watermark registry
 
-`afterSeq` reads and pruning exist, but there is no global safe-prune calculation across named durable consumers.
+**Resolved, see `docs/RELEASE-GATE.md`** ("durable named event-consumer ACK + safe retention watermark" is checked off as closed for this RC). At the time this review was written, `afterSeq` reads and pruning existed but there was no global safe-prune calculation across named durable consumers.
 
 ### Task/artifact records are last-write-wins
 
@@ -83,4 +90,4 @@ A physical `process.exec` with network access or credentials may change external
 
 ## Current assessment
 
-v0.9 closes the two distributed correctness gaps that most directly blocked an internal release candidate: stale agent-state overwrite and process-clock lease ownership. The architecture is now at the point where the next milestone should be driven primarily by **live infrastructure proof, multi-tenant security, operational policy, and soak/upgrade testing**, not another large runtime rewrite.
+v0.9 closed the two distributed correctness gaps that most directly blocked an internal release candidate: stale agent-state overwrite and process-clock lease ownership. Live infrastructure proof has since been completed for `v1.0.0-rc.1` (see `docs/RELEASE-GATE.md`); the remaining path to GA `1.0.0` is multi-tenant security, operational policy, and soak/upgrade testing, not another large runtime rewrite.

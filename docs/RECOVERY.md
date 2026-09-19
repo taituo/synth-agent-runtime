@@ -1,6 +1,6 @@
 # Recovery and reconciliation
 
-## v0.9 recovery ownership note
+## Recovery ownership
 
 Recovery of a durable agent state in a distributed PostgreSQL deployment must occur under a current agent lease when it needs to mutate an already-fenced `AgentSnapshot`. `AgentRecoveryOptions.fence` can supply that ownership proof. Unfenced local/JSON recovery remains available for explicitly single-writer deployments.
 
@@ -24,4 +24,4 @@ A stale `started` command requires `CommandCoordinator.reconcile()`. A stale eff
 
 ## Agent run leases
 
-`LeasedAgentRunner` adds renewable ownership around a logical run and cancels the runtime if renewal is lost. This is a meaningful concurrency boundary, but the current code review still calls for atomically checking the fencing generation on every durable agent-state mutation in a fully adversarial multi-replica deployment.
+`LeasedAgentRunner` adds renewable ownership around a logical run and cancels the runtime if renewal is lost. The fencing generation it carries is checked atomically against `synth_leases` on every durable agent-state mutation in PostgreSQL (`putAgentFenced()`), not only cooperatively in the runtime; a stale generation is rejected with `AGENT_FENCE_REJECTED` rather than silently applied. See `docs/ARCHITECTURE.md` and `docs/HARDENING.md` for the full fencing model.
