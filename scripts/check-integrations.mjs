@@ -47,5 +47,17 @@ for (const file of shellFiles) {
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
 
-console.log(JSON.stringify({ ok: diagnostics === 0, typescriptFiles: tsFiles.length, syntaxDiagnostics: diagnostics, shellFiles: shellFiles.length }));
+const pythonFiles = await files("integrations", ".py");
+for (const file of pythonFiles) {
+  const result = spawnSync("python3", ["-m", "py_compile", file], { stdio: "inherit" });
+  if (result.status !== 0) process.exit(result.status ?? 1);
+}
+
+console.log(JSON.stringify({
+  ok: diagnostics === 0,
+  typescriptFiles: tsFiles.length,
+  syntaxDiagnostics: diagnostics,
+  shellFiles: shellFiles.length,
+  pythonFiles: pythonFiles.length,
+}));
 if (diagnostics) process.exit(1);
