@@ -2,6 +2,25 @@
 
 ## 1.0.0-rc.1 — abort-safety fix folded in, git ref/remote argument-injection fixed
 
+### Scripted typed-event driver for the Temporal integration
+
+- **There was no way to exercise a durable agent against an ordered event
+  timeline**, only one-off signals, so a realistic sequence of typed events
+  (and whether it replays deterministically) could not be tested. Added a
+  runnable tool, `integrations/temporal/event-driver.ts`, that fires a fixed,
+  four-event schedule (`news` → `social_post` → `incident` → `news`, spaced
+  250-400 ms apart) into one running `durableAgentWorkflow`, then queries the
+  final state and recovers the ordered kinds of the turns actually processed
+  from the activity trace spans. Running it twice asserts deterministic replay:
+  both sessions must produce the same processed-signal sequence and the same
+  volatile-field-free final-state projection. The pure schedule/projection/
+  sequence helpers live in `event-script.ts` and are unit-tested without a
+  server (four new tests: schedule shape, projection stripping ids/timestamps,
+  per-agent ordered sequence, replay comparison). Verified live against a
+  Temporal dev server (`npm run live:driver`): both runs processed
+  `["news","social_post","incident","news"]`, drained the mailbox to `idle`,
+  and reported identical final state.
+
 ### Typed mailbox signals in the Temporal integration
 
 - **The durable agent's `sendMessage` signal carried no event type**, so a
