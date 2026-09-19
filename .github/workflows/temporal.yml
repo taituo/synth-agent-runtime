@@ -1,0 +1,33 @@
+name: temporal
+on:
+  push:
+    paths:
+      - "integrations/temporal/**"
+      - "integrations/hermes-temporal-bridge/**"
+      - "integrations/openclaw-temporal-bridge/**"
+      - ".github/workflows/temporal.yml"
+  pull_request:
+    paths:
+      - "integrations/temporal/**"
+      - "integrations/hermes-temporal-bridge/**"
+      - "integrations/openclaw-temporal-bridge/**"
+      - ".github/workflows/temporal.yml"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: integrations/temporal/package-lock.json
+      - run: npm ci
+        working-directory: integrations/temporal
+      - run: npm run build
+        working-directory: integrations/temporal
+      - run: npm test
+        working-directory: integrations/temporal
+      - run: python3 -m py_compile integrations/hermes-temporal-bridge/hermes_temporal_bridge.py
+      - run: node scripts/check-integrations.mjs
