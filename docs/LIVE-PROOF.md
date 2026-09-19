@@ -1,4 +1,4 @@
-# Live proof v0.9
+# Live proof
 
 `npm run live:proof` runs every proof available in the current environment and prints PASS/SKIP separately.
 

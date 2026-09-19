@@ -1,4 +1,4 @@
-# Integration guide v0.9
+# Integration guide
 
 ## Local contracts
 

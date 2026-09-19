@@ -1,4 +1,4 @@
-# Architecture v0.9
+# Architecture
 
 ## v0.9 release-hardening delta
 

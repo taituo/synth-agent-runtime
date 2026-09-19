@@ -1,6 +1,6 @@
-# v0.9 Release Gate
+# Release Gate
 
-v0.9 changes the release question from “can a stale replica overwrite the current agent?” to “have we proven the whole stack under real infrastructure and operational load?”
+The release question is no longer "can a stale replica overwrite the current agent?" (closed — see `HARDENING.md`) but "have we proven the whole stack under real infrastructure and operational load?"
 
 ## Closed correctness gates
 
