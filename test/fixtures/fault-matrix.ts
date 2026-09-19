@@ -87,7 +87,8 @@ export const FAULT_MATRIX: readonly FaultRow[] = [
     synthetic: "ESCALATION_REQUIRED (cannot run processes)",
     real: "exit 0, stdout captured",
     differentiates: true,
-    evidence: "test/fault-matrix.test.ts (synthetic) + integrations/kubernetes/fault-rungs.ts (real)",
+    evidence:
+      "EXECUTED 2026-09-19: integrations/kubernetes/fault-rungs.ts against live k3s/gVisor with docker.io/alpine/git pinned by digest (execSuccess true); synthetic side: test/fault-matrix.test.ts",
   },
   {
     id: "exec-timeout",
@@ -96,7 +97,8 @@ export const FAULT_MATRIX: readonly FaultRow[] = [
     synthetic: "ESCALATION_REQUIRED",
     real: "ok:false, EXECUTION_TIMEOUT",
     differentiates: true,
-    evidence: "integrations/kubernetes/fault-rungs.ts",
+    evidence:
+      "EXECUTED 2026-09-19: integrations/kubernetes/fault-rungs.ts against live k3s/gVisor with alpine/git pinned by digest (execTimeout expected true)",
   },
   {
     id: "exec-sigkill",
@@ -105,25 +107,26 @@ export const FAULT_MATRIX: readonly FaultRow[] = [
     synthetic: "ESCALATION_REQUIRED",
     real: "ok:false (exit 137), never a false success",
     differentiates: true,
-    evidence: "integrations/kubernetes/kill-chaos.ts + fault-rungs.ts",
+    evidence:
+      "EXECUTED 2026-09-19: integrations/kubernetes/fault-rungs.ts (execSigkill expected true) + kill-chaos.ts (exitCode 137) against live k3s/gVisor with alpine/git pinned by digest",
   },
   {
     id: "worker-sigkill-mid-turn",
     category: "temporal",
     fault: "worker process SIGKILLed while a turn is in flight",
-    synthetic: "committed effects replay; in-flight stays uncertain",
-    real: "committed effects replay; in-flight stays uncertain",
+    synthetic: "UNPROVEN (planned Track 6)",
+    real: "UNPROVEN (planned Track 6)",
     differentiates: false,
-    evidence: "root test/process-crash.test.ts + Track 6 (planned)",
+    evidence: "NOT COVERED: planned Track 6 (root process-crash.test.ts covers the runtime, not a Temporal worker restart)",
   },
   {
     id: "two-workers-race",
     category: "temporal",
     fault: "two workers on the same task queue race one agent",
-    synthetic: "Temporal delivers each task to one worker; one effect execution",
-    real: "Temporal delivers each task to one worker; one effect execution",
+    synthetic: "UNPROVEN (planned Track 6)",
+    real: "UNPROVEN (planned Track 6)",
     differentiates: false,
-    evidence: "Track 6 (planned)",
+    evidence: "NOT COVERED: planned Track 6",
   },
   {
     id: "clock-jump",

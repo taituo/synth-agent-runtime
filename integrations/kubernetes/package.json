@@ -6,6 +6,7 @@
     "tsx": "^4.19.0"
   },
   "scripts": {
-    "kill-chaos": "tsx kill-chaos.ts"
+    "kill-chaos": "tsx kill-chaos.ts",
+    "fault-rungs": "tsx fault-rungs.ts"
   }
 }

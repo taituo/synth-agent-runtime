@@ -6,12 +6,19 @@
  * exec (which also proves workspace materialize/syncBack), a timeout, and a
  * force-delete (SIGKILL) mid-exec that must never report success.
  *
- * Skips cleanly (exit 0, `skipped:true`) when the K8s sandbox is not configured,
- * so it never passes vacuously and never fails for a missing environment.
+ * Exit codes: 0 = every real-rung expectation held; 1 = a real-rung
+ * expectation failed; 2 = SKIPPED because the sandbox is not configured. A
+ * skip is a distinct outcome, never reported as `ok:true`, so a caller (e.g.
+ * the `fault-rungs` npm script) cannot mistake it for a pass.
  *
- *   SYNTH_EXECUTOR_IMAGE=docker.io/library/busybox@sha256:... \
+ * The image MUST be git-capable and pinned by digest: the executor's
+ * WorkspaceSynchronizer commits a git baseline in the sandbox, so a plain
+ * `busybox` fails with `sh: git: not found`. Use e.g. `alpine/git` pinned by
+ * digest (verified live 2026-09-19):
+ *
+ *   SYNTH_EXECUTOR_IMAGE=docker.io/alpine/git@sha256:0b5f57d2... \
  *   SYNTH_RUNTIME_CLASS=gvisor SYNTH_KUBERNETES_NAMESPACE=synth-audit-gvisor \
- *   integrations/temporal/node_modules/.bin/tsx integrations/kubernetes/fault-rungs.ts
+ *   npm run fault-rungs   # from integrations/kubernetes
  */
 import { spawn } from "node:child_process";
 import {
@@ -27,8 +34,14 @@ const namespace = process.env.SYNTH_KUBERNETES_NAMESPACE ?? "synth-audit-gvisor"
 const context = process.env.SYNTH_KUBECTL_CONTEXT;
 
 if (!image) {
-  console.log(JSON.stringify({ ok: true, skipped: true, reason: "SYNTH_EXECUTOR_IMAGE not set" }));
-  process.exit(0);
+  // Distinct skip outcome: exit 2, and deliberately NO `ok` field.
+  console.error(
+    JSON.stringify({
+      skipped: true,
+      reason: "SYNTH_EXECUTOR_IMAGE not set; must be a git-capable image pinned by digest (e.g. alpine/git@sha256:...)",
+    }),
+  );
+  process.exit(2);
 }
 
 const base = DEFAULT_KUBERNETES_RESOURCE_CLASSES.find((entry) => entry.id === "sandbox-small");
