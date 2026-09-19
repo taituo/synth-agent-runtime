@@ -1,13 +1,30 @@
+import { createHash, timingSafeEqual } from "node:crypto";
+/** SHA-256 digest of a token, used for fixed-length constant-time comparison. */
+function tokenDigest(token) {
+    return createHash("sha256").update(token, "utf8").digest();
+}
 export class StaticBearerAuthenticator {
     #tokens;
     constructor(tokens) {
-        this.#tokens = tokens instanceof Map ? tokens : new Map(Object.entries(tokens));
+        const entries = tokens instanceof Map ? [...tokens.entries()] : Object.entries(tokens);
+        this.#tokens = entries.map(([token, principal]) => ({ digest: tokenDigest(token), principal }));
     }
     authenticate(request) {
         const header = request.headers.get("authorization");
         if (!header?.toLowerCase().startsWith("bearer "))
             return undefined;
-        const principal = this.#tokens.get(header.slice(7));
+        // Compare SHA-256 digests with timingSafeEqual rather than a Map lookup so
+        // comparison time does not depend on how many leading characters of the
+        // presented token match a known one. Digesting first keeps both sides a
+        // fixed 32 bytes, so a length mismatch neither leaks nor throws. The loop
+        // has no early exit, so its cost is independent of which (or whether any)
+        // token matched.
+        const presented = tokenDigest(header.slice(7));
+        let principal;
+        for (const entry of this.#tokens) {
+            if (timingSafeEqual(presented, entry.digest))
+                principal = entry.principal;
+        }
         return principal ? structuredClone(principal) : undefined;
     }
 }

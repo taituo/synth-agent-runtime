@@ -2,6 +2,21 @@
 
 ## 1.0.0-rc.1 — abort-safety fix folded in, git ref/remote argument-injection fixed
 
+### StaticBearerAuthenticator compares bearer tokens in constant time
+
+- **Bearer tokens were matched with `Map.get`**
+  (`src/inference/gateway/tenant-policy.ts`), a non-constant-time lookup that
+  can leak, via response timing, how many leading characters of a presented
+  token match a known one — a token oracle against a static shared secret.
+  Each known token is now stored as a SHA-256 digest and the presented token
+  is digested and compared with `crypto.timingSafeEqual`, with no early exit,
+  so comparison cost does not depend on the matching prefix and a length
+  mismatch can neither throw nor leak. Regression test covers valid and
+  invalid tokens of equal and differing lengths, a missing header, and a
+  non-Bearer scheme.
+
+Root suite: 91/91 (90 + 1 new test).
+
 ### ChaosDurabilityProvider now forwards the optional durability surface
 
 - **`ChaosDurabilityProvider` silently dropped

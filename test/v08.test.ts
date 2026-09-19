@@ -245,6 +245,26 @@ test("durability event cursors resume and retention prunes old events", async ()
   assert.deepEqual((await durability.readEvents!()).map((e) => e.seq), [3]);
 });
 
+test("static bearer authenticator compares tokens safely across lengths", () => {
+  const auth = new StaticBearerAuthenticator({
+    "secret-token-value": { tenantId: "t1", subject: "u1" },
+    short: { tenantId: "t2", subject: "u2" },
+  });
+  const request = (token: string) => new Request("http://gateway/v1/models", { headers: { authorization: `Bearer ${token}` } });
+
+  assert.equal(auth.authenticate(request("secret-token-value"))?.tenantId, "t1");
+  assert.equal(auth.authenticate(request("short"))?.tenantId, "t2");
+  // Same length, wrong token.
+  assert.equal(auth.authenticate(request("secret-token-valuX")), undefined);
+  // Different lengths must return undefined rather than throw (timingSafeEqual
+  // requires equal-length inputs; the digest step makes them fixed-length).
+  assert.equal(auth.authenticate(request("x")), undefined);
+  assert.equal(auth.authenticate(request("secret-token-value-and-then-some")), undefined);
+  // Missing / wrong scheme.
+  assert.equal(auth.authenticate(new Request("http://gateway/v1/models")), undefined);
+  assert.equal(auth.authenticate(new Request("http://gateway/v1/models", { headers: { authorization: "Basic secret-token-value" } })), undefined);
+});
+
 test("gateway enforces bearer auth, model ACL and tenant rate limit", async () => {
   const backend: GatewayBackend = {
     async listModels() { return [{ id: "allowed" }]; },
