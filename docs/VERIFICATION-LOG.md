@@ -35,3 +35,26 @@ commit that carries the test, the mutation, and the observed failure text.
 - The `d8bb6b9` canary is a deliberate inverse: it asserts the known-open gap
   (`EffectResult.artifact` is never populated), so it fails the day a writer
   lands and the known-open entry must be removed on purpose.
+
+## Solidification rounds on the gym scorer (real repo + fuzz)
+
+These rounds add no features; they pin the scorer on a real pinned repo and
+fuzz the two places the round-3 review attacked.
+
+| test | what it pins | how it can fail |
+|---|---|---|
+| `test/gym-real-task.test.ts` round 1 | the held-out test FAILS on the materialized `he` bug and PASSES once fixed | run the hidden test directly on each checkout; a vacuous hidden test would return 0 on both |
+| `test/gym-real-task.test.ts` round 2 | golden reverse patch `passed`; partial fix `failed`; visible-test edit `tampered`; top-level `exit(0)` not `passed`; bad patch `errored` | score each real patch through `scoreGymPatch` |
+| `test/gym-patch-paths.test.ts` | 200 seeded patch shapes: every path git touches is in `patchTargetPaths`, both rename sides are exposed, protected paths are flagged | differential against `git apply --numstat -z` |
+| `test/gym-vacuity.test.ts` | a hidden test with no marker or a guessed marker is `errored`; agent-printed forged marker does not rescue a failing test; real marker + correct fix `passed` | each shape scored through `scoreGymPatch` |
+
+The real-task round immediately caught a bug in the round's own helper: it
+inherited `NODE_TEST_CONTEXT` from the outer `node --test`, so the child skipped
+every file and exited 0 — the same false-pass the scorer strips. The round-1
+assertion (the hidden test must FAIL on the bugged repo) is what exposed it;
+the helper now strips the variable. That is the discipline working: the test
+was able to fail for the reason it claimed.
+
+The patch-path fuzz's first run failed on an over-strict assertion (a rename may
+pick the same old and new name), not on the implementation; the assertion now
+checks both rename sides only when they differ.

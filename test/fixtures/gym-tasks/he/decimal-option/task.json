@@ -1,0 +1,9 @@
+{
+  "repo": "he",
+  "commit": "36afe179392226cf1b6ccdb16ebbb7a5a844d93a",
+  "bugPatch": "bug.patch",
+  "visibleTestPath": "test/gym-visible.test.mjs",
+  "hiddenTest": "hidden.test.mjs",
+  "expectedHiddenTests": 1,
+  "description": "he.encode ignores the decimal option: every escape is emitted in hex even when options.decimal is true."
+}
