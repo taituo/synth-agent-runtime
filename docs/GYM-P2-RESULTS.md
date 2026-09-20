@@ -172,3 +172,13 @@ final patch was not persisted (the pre-checkpoint 502/429/timeout/worker-restart
 rows) all recorded exactly 358 bytes, and this task has a unique deterministic
 minimal diff (the reviewer measured the golden at 358 bytes); that patch passes
 the isolated scorer. The matrix therefore stands on the unforgeable scorer.
+
+## SIGKILL under the isolated scorer (fresh 4 samples)
+
+After the zero-cost re-score showed no verdict change, the same SIGKILL run was
+repeated with the hardened scorer and the bounded-wait/logging harness.
+
+| sample | plain | durable | calls | resumedFrom | patch |
+|---|---|---|---|---|---|
+| 1 | lost | **passed** | 3 | 2 | 358 B |
+| 2 | lost | **passed** | 6 | 2 | 358 B |
