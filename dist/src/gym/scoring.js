@@ -32,9 +32,9 @@
  *   - Zero cases is `errored`, not a vacuous pass.
  */
 import { execFile, spawn } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
 import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 /** Paths an agent must not change: the visible test and the runner config. */
@@ -202,6 +202,45 @@ async function permissionArgs(node, workDir) {
     throw new Error("Node has no permission model; refusing to run the scoring worker unsandboxed");
 }
 /**
+ * A symlink inside the checkout can name a path outside it, and Node's
+ * permission model follows the link before deciding, so an allowlisted read can
+ * still reach the held-out vectors through a link the patch planted (review
+ * round six survivor). Resolve every symlink's real path and refuse if it
+ * escapes the checkout; a broken link is refused too, since its target cannot
+ * be shown to be inside.
+ */
+async function findEscapingSymlink(root) {
+    const base = await realpath(root);
+    const walk = async (dir) => {
+        const entries = await readdir(dir, { withFileTypes: true });
+        for (const entry of entries) {
+            if (entry.name === ".git")
+                continue;
+            const path = join(dir, entry.name);
+            if (entry.isSymbolicLink()) {
+                let target;
+                try {
+                    target = await realpath(path);
+                }
+                catch {
+                    return path;
+                }
+                const rel = relative(base, target);
+                if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel))
+                    return path;
+                continue;
+            }
+            if (entry.isDirectory()) {
+                const found = await walk(path);
+                if (found)
+                    return found;
+            }
+        }
+        return undefined;
+    };
+    return walk(root);
+}
+/**
  * Apply the agent's patch to a fresh clone and decide `passed`/`failed`/
  * `tampered`/`timed-out`/`errored` from the verifier's own comparison.
  */
@@ -236,6 +275,12 @@ export async function isolatedScoreGymPatch(options) {
                 return { outcome: "errored", touchedPaths, cases: [], detail: `patch does not apply: ${error.message}` };
             }
             await git(clone, "apply", patchFile);
+        }
+        // A patch may plant a symlink that names the held-out vectors; refuse the
+        // checkout before the worker can follow it.
+        const escaping = await findEscapingSymlink(clone);
+        if (escaping) {
+            return { outcome: "tampered", touchedPaths, cases: [], detail: `checkout contains a symlink that escapes it: ${relative(clone, escaping)}` };
         }
         const workerPath = join(work, "worker.mjs");
         await writeFile(workerPath, WORKER_SOURCE);

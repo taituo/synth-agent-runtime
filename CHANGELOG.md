@@ -21,9 +21,15 @@
   `cases: GymCase[]`. The `he/decimal-option` task fixture ships
   `hidden.cases.json` in place of the in-clone TAP test. The `HIDDEN_HARNESS_*`
   exports are removed.
+- A patch could plant a leaf symlink inside the checkout pointing at the
+  held-out vectors; Node's permission model follows the link before deciding, so
+  the read was allowed and the bug scored `passed`. The scorer now resolves every
+  symlink in the applied checkout and returns `tampered` if any escapes it (or is
+  broken) before the worker starts. A worker cannot create a link at runtime
+  because it has no write permission.
 - Every demonstrated forgery is a permanent regression test in
-  `test/gym-vacuity.test.ts` (FORGE 1-5b, including the signing oracle and the
-  `/proc/<ppid>/cwd` vector read).
+  `test/gym-vacuity.test.ts` (FORGE 1-6, including the signing oracle, the
+  `/proc/<ppid>/cwd` vector read, and the leaf symlink).
 
 ## 1.0.0-rc.1 — abort-safety fix folded in, git ref/remote argument-injection fixed
 
