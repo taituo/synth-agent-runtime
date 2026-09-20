@@ -65,6 +65,21 @@ test("a request past its lane deadline rejects with a Retry-After", async () => 
   );
 });
 
+test("an unknown lane uses the default lane's deadline, not a 1 ms one", async () => {
+  const scheduler = new LaneScheduler([{ id: "batch", priority: 1, weight: 1, maxWaitMs: 5_000 }], { capacity: 1, defaultLane: "batch" });
+  const policy = new PriorityLanePolicy(scheduler, { defaultLane: "batch" });
+  await policy.authorize(principal("seed", "batch"));
+  const pending = policy.authorize(principal("u", "unknown-lane"));
+  let rejected = false;
+  pending.catch(() => {
+    rejected = true;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(rejected, false, "an unknown lane must not be deadline-rejected immediately");
+  policy.release();
+  await pending;
+});
+
 test("CompositeTenantPolicy forwards release to every sub-policy", async () => {
   const spies: GatewayTenantPolicy[] = [];
   const spy = () => {

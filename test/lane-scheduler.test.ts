@@ -123,6 +123,16 @@ test("a queued request past its lane deadline is rejected, not admitted", () => 
   assert.equal(scheduler.pending().length, 0);
 });
 
+test("release never admits a request past its lane deadline", () => {
+  let now = 1_000;
+  const scheduler = new LaneScheduler([{ id: "short", priority: 1, weight: 1, maxWaitMs: 20 }], { capacity: 1, now: () => now });
+  scheduler.admit(request("short", "seed"));
+  scheduler.admit(request("short", "waiting"));
+  now += 50;
+  assert.equal(scheduler.release(), undefined, "an expired request must not be admitted");
+  assert.equal(scheduler.pending().length, 0, "and it is dropped");
+});
+
 test("constructor rejects bad configuration", () => {
   assert.throws(() => new LaneScheduler([], { capacity: 1 }), /at least one lane/);
   assert.throws(() => new LaneScheduler(LANES, { capacity: 0 }), /Invalid capacity/);

@@ -148,6 +148,15 @@ export class LaneScheduler {
 
   #takeNext(): Queued | undefined {
     if (this.#queue.length === 0) return undefined;
+    // Never admit a request that has already passed its lane deadline, even
+    // when release() is called directly (S6). The policy's timer also cancels
+    // such tickets, but the scheduler's own guarantee must hold on its own.
+    const now = this.#now();
+    this.#queue = this.#queue.filter((entry) => {
+      const lane = this.#lanes.get(entry.request.lane) ?? this.#lanes.get(this.#defaultLane)!;
+      return !(lane.maxWaitMs > 0 && now - entry.enqueuedAt > lane.maxWaitMs);
+    });
+    if (this.#queue.length === 0) return undefined;
     const priorityOf = (entry: Queued): number => this.#lanes.get(entry.request.lane)?.priority ?? 0;
     const weightOf = (lane: LaneId): number => {
       const weight = this.#lanes.get(lane)?.weight ?? 1;
@@ -233,7 +242,11 @@ export class PriorityLanePolicy {
     if (decision.outcome === "admit") return;
     if (decision.outcome === "reject") throw laneError(decision.reason, decision.retryAfterMs);
 
-    const maxWaitMs = this.#scheduler.lane(lane)?.maxWaitMs ?? 0;
+    // An unknown lane is queued under the default lane by `admit`, so its
+    // deadline must come from the default lane too, not from a missing lane
+    // (which would fire a 1 ms deadline) (S7).
+    const spec = this.#scheduler.lane(lane) ?? this.#scheduler.lane(this.#defaultLane);
+    const maxWaitMs = spec?.maxWaitMs ?? 0;
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.#waiters.delete(decision.ticket);
