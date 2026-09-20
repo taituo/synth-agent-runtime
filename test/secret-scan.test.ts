@@ -14,6 +14,8 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 const SCANNER = fileURLToPath(new URL("../../scripts/secret-scan.mjs", import.meta.url));
+// Built at runtime so this test's own source does not trip the scanner it tests.
+const FAKE_AWS_KEY = ["AKIA", "FAKE", "FAKE", "FAKE", "FAKE"].join("");
 
 async function git(cwd: string, ...args: string[]): Promise<void> {
   await execFileAsync("git", args, { cwd });
@@ -34,7 +36,7 @@ test("the scanner catches a staged fake credential and passes once removed", asy
   try {
     await git(repo, "init", "-q");
     const file = join(repo, "config.txt");
-    await writeFile(file, 'aws_key = "AKIAFAKEFAKEFAKEFAKE"\n');
+    await writeFile(file, `aws_key = "${FAKE_AWS_KEY}"\n`);
     await git(repo, "add", "config.txt");
     const caught = await scan(repo);
     assert.equal(caught.code, 1, "a planted AWS key must fail the scan");
@@ -45,7 +47,7 @@ test("the scanner catches a staged fake credential and passes once removed", asy
     assert.equal((await scan(repo)).code, 1, "the index, not the working tree, is scanned");
 
     // A deliberate placeholder can be exempted, explicitly.
-    await writeFile(file, 'aws_key = "AKIAFAKEFAKEFAKEFAKE" # secret-scan:allow\n');
+    await writeFile(file, `aws_key = "${FAKE_AWS_KEY}" # secret-scan:allow\n`);
     await git(repo, "add", "config.txt");
     assert.equal((await scan(repo)).code, 0, "an allow-marked line is exempt");
 
