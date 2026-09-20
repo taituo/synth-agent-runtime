@@ -133,6 +133,75 @@ test("release never admits a request past its lane deadline", () => {
   assert.equal(scheduler.pending().length, 0, "and it is dropped");
 });
 
+/** Deterministic PRNG so a property failure is reproducible from the seed. */
+function mulberry32(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+test("property: release() never admits a request past its lane deadline", () => {
+  const rand = mulberry32(0xc0ffee);
+  const laneId = (i: number) => `l${i}`;
+  for (let trial = 0; trial < 300; trial++) {
+    const laneCount = 1 + Math.floor(rand() * 3);
+    const lanes: LaneSpec[] = [];
+    for (let i = 0; i < laneCount; i++) {
+      lanes.push({
+        id: laneId(i),
+        priority: Math.floor(rand() * 3),
+        weight: 1 + Math.floor(rand() * 3),
+        maxWaitMs: Math.floor(rand() * 50),
+      });
+    }
+    const capacity = 1 + Math.floor(rand() * 3);
+    let now = 0;
+    const scheduler = new LaneScheduler(lanes, { capacity, now: () => now });
+    const specByLane = new Map(lanes.map((lane) => [lane.id, lane]));
+    const enqueuedAt = new Map<string, number>();
+    const laneOfTicket = new Map<string, LaneSpec>();
+
+    const check = (released: { ticket: string; request: { lane: string } }): void => {
+      const spec = laneOfTicket.get(released.ticket)!;
+      const waited = now - enqueuedAt.get(released.ticket)!;
+      assert.ok(
+        waited <= spec.maxWaitMs,
+        `trial ${trial}: ${released.ticket} waited ${waited}ms, lane allows ${spec.maxWaitMs}ms`,
+      );
+    };
+
+    for (let step = 0; step < 80; step++) {
+      now += Math.floor(rand() * 10);
+      if (rand() < 0.5) {
+        const released = scheduler.release();
+        if (released) check(released);
+      }
+      if (rand() < 0.3) scheduler.expire();
+      const lane = lanes[Math.floor(rand() * laneCount)]!;
+      const decision = scheduler.admit({ lane: lane.id, tenantId: "t", key: `k${step}`, at: now });
+      if (decision.outcome === "queue") {
+        enqueuedAt.set(decision.ticket, now);
+        laneOfTicket.set(decision.ticket, lane);
+      }
+      assert.ok(scheduler.inFlight() <= capacity, `trial ${trial}: inFlight ${scheduler.inFlight()} > capacity ${capacity}`);
+      assert.ok(specByLane.has(lane.id));
+    }
+
+    for (let i = 0; i < 300; i++) {
+      now += Math.floor(rand() * 10);
+      const released = scheduler.release();
+      if (!released) break;
+      check(released);
+      assert.ok(scheduler.inFlight() <= capacity, `trial ${trial}: inFlight exceeded capacity while draining`);
+    }
+  }
+});
+
 test("constructor rejects bad configuration", () => {
   assert.throws(() => new LaneScheduler([], { capacity: 1 }), /at least one lane/);
   assert.throws(() => new LaneScheduler(LANES, { capacity: 0 }), /Invalid capacity/);
