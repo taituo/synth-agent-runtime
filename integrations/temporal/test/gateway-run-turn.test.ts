@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import type { AgentId, WorkspaceId } from "../../../src/core/ids.js";
 import type { AgentEngine, AgentEngineContext } from "../../../src/runtime/agent-engine.js";
 import { createGatewayAgentEngine } from "../../../src/runtime/gateway-engine.js";
-import type { DurableMailboxMessage } from "../src/contracts.js";
+import type { DurableMailboxMessage, DurableToolSpec } from "../src/contracts.js";
 import {
   TRIAGE_SYSTEM_PROMPT,
   buildTriageUserMessage,
@@ -11,6 +11,7 @@ import {
   extractJsonObject,
   parseClassifications,
   type GatewayTurnRecord,
+  type RungFactory,
 } from "../src/gateway-run-turn.js";
 
 function message(text: string, kind?: string): DurableMailboxMessage {
@@ -253,6 +254,80 @@ test("runTurn invokes the shared engine body and makes no HTTP call of its own",
   assert.deepEqual((result.result as { classifications: unknown[] }).classifications, [
     { classification: "incident", reaction: "page on-call" },
   ]);
+});
+
+test("a tool-configured turn executes the model's calls through the rung; no rung refuses", async () => {
+  let executorCalls = 0;
+  const rungFactory: RungFactory = () => ({
+    async executeEffect(effect) {
+      executorCalls++;
+      if (effect.kind === "workspace.write") return { ok: true };
+      if (effect.kind === "workspace.read") return { ok: true, output: new TextEncoder().encode("tool-bytes") };
+      return { ok: false, error: `unexpected ${effect.kind}` };
+    },
+  });
+  const fetchImpl = (async () => chatReply(JSON.stringify({ tool_calls: [
+    { name: "write_file", arguments: { path: "a.txt", content: "hi" } },
+    { name: "read_file", arguments: { path: "a.txt" } },
+  ] }))) as unknown as typeof fetch;
+  const tools: DurableToolSpec[] = [
+    { name: "write_file", effect: "workspace.write" },
+    { name: "read_file", effect: "workspace.read" },
+  ];
+
+  const runTurn = createGatewayRunTurn({ baseUrl: "http://gw.test", model: "m", heartbeat: () => {}, fetchImpl, rungFactory });
+  const result = await runTurn({
+    agentId: "agt_tool",
+    messages: [message("write then read")],
+    config: { systemPrompt: "You edit files.", tools, rung: { kind: "synthetic" } },
+  });
+
+  assert.equal(executorCalls, 2, "both model tool calls must reach the execution rung");
+  const observations = (result.result as { observations: Array<{ ok: boolean; output?: unknown; error?: string }> }).observations;
+  assert.equal(observations.length, 2);
+  assert.equal(observations[0]!.ok, true);
+  assert.equal(observations[1]!.ok, true);
+  assert.equal(new TextDecoder().decode(observations[1]!.output as Uint8Array), "tool-bytes");
+
+  // Control: the same turn with no rung configured must refuse, not silently drop.
+  let factoryCalls = 0;
+  const neverFactory: RungFactory = () => { factoryCalls++; return { async executeEffect() { return { ok: true }; } }; };
+  const withoutRung = createGatewayRunTurn({ baseUrl: "http://gw.test", model: "m", heartbeat: () => {}, fetchImpl, rungFactory: neverFactory });
+  const refused = await withoutRung({
+    agentId: "agt_tool",
+    messages: [message("write then read")],
+    config: { systemPrompt: "You edit files.", tools },
+  });
+  assert.equal(factoryCalls, 0, "no rung configured means no rung is built");
+  const refusedObservations = (refused.result as { observations: Array<{ ok: boolean; error?: string }> }).observations;
+  assert.equal(refusedObservations.length, 2);
+  assert.equal(refusedObservations.every((entry) => entry.ok === false), true, "every call must be refused");
+  assert.match(refusedObservations[0]!.error ?? "", /No effect executor configured/);
+});
+
+test("the default synthetic rung round-trips a write then read through the real executor", async () => {
+  const fetchImpl = (async () => chatReply(JSON.stringify({ tool_calls: [
+    { name: "write_file", arguments: { path: "round-trip.txt", content: "round-trip" } },
+    { name: "read_file", arguments: { path: "round-trip.txt" } },
+  ] }))) as unknown as typeof fetch;
+  const runTurn = createGatewayRunTurn({ baseUrl: "http://gw.test", model: "m", heartbeat: () => {}, fetchImpl });
+  const result = await runTurn({
+    agentId: `agt_roundtrip_${Date.now()}`,
+    messages: [message("write then read")],
+    config: {
+      systemPrompt: "You edit files.",
+      tools: [
+        { name: "write_file", effect: "workspace.write" },
+        { name: "read_file", effect: "workspace.read" },
+      ],
+      rung: { kind: "synthetic" },
+    },
+  });
+  const observations = (result.result as { observations: Array<{ ok: boolean; output?: unknown }> }).observations;
+  assert.equal(observations.length, 2);
+  assert.equal(observations[0]!.ok, true);
+  assert.equal(observations[1]!.ok, true);
+  assert.equal(new TextDecoder().decode(observations[1]!.output as Uint8Array), "round-trip");
 });
 
 test("the durable activity and a direct caller run the same engine body", async () => {
