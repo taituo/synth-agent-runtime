@@ -35,6 +35,7 @@ import type {
   TransparentModelsInspection,
   TransparentRouterConfig,
 } from "./types.js";
+import { parseRetryAfterMs } from "./retry-after.js";
 
 const OPENCODE_GO_PROVIDER = "opencode-go";
 const DEFAULT_FALLBACKS = new Set<RouteFailureClass>([
@@ -96,29 +97,6 @@ function classifyFailure(message: string | undefined, aborted = false): RouteFai
   if (/\b5\d\d\b|bad gateway|service unavailable|gateway timeout|upstream/.test(text)) return "provider_5xx";
   if (/\b400\b|bad request|invalid request|schema|tool.*invalid/.test(text)) return "bad_request";
   return "unknown";
-}
-
-function parseRetryAfterMs(headers: Record<string, string> | undefined, now: number): number | undefined {
-  if (!headers) return undefined;
-  const retryAfter = Object.entries(headers).find(([name]) => name.toLowerCase() === "retry-after")?.[1];
-  if (retryAfter) {
-    const seconds = Number(retryAfter);
-    if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds * 1000);
-    const date = Date.parse(retryAfter);
-    if (Number.isFinite(date)) return Math.max(0, date - now);
-  }
-
-  for (const name of ["x-ratelimit-reset", "x-rate-limit-reset", "ratelimit-reset"]) {
-    const raw = Object.entries(headers).find(([key]) => key.toLowerCase() === name)?.[1];
-    if (!raw) continue;
-    const value = Number(raw);
-    if (!Number.isFinite(value)) continue;
-    // Common forms are epoch seconds or seconds-from-now.
-    if (value > 10_000_000_000) return Math.max(0, value - now);
-    if (value > 1_000_000_000) return Math.max(0, value * 1000 - now);
-    return Math.max(0, value * 1000);
-  }
-  return undefined;
 }
 
 function isCommitEvent(event: AssistantMessageEvent): boolean {

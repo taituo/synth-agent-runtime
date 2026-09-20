@@ -38,6 +38,7 @@ export * from "./orchestration/supervisor.js";
 export * from "./policy/effect-policy.js";
 export * from "./inference/gateway/profile-router-backend.js";
 export * from "./inference/gateway/http-upstream.js";
+export * from "./inference/gateway/retry-hint.js";
 export * from "./inference/gateway/responses-protocol.js";
 export * from "./world/json-file-world.js";
 export * from "./workspace/snapshot-codec.js";
