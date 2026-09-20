@@ -50,7 +50,11 @@ export class MemoryWorkspace {
     if (this.#isDeleted(p)) return undefined;
     if (!this.source) return undefined;
     const info = await this.source.stat(p);
-    if (!info || info.kind !== "file") return undefined;
+    // Symlinks are readable: the source returns the link target's bytes (the
+    // same text `git cat-file` gives for a mode-120000 blob, as Track 1
+    // asserts). Treating them as unreadable made a symlink indistinguishable
+    // from an empty file, the ambiguity the parity work removed elsewhere.
+    if (!info || (info.kind !== "file" && info.kind !== "symlink")) return undefined;
     return this.source.readFile(p);
   }
 

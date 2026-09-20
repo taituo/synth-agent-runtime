@@ -7,10 +7,12 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   MemoryWorkspace,
+  NativeGitSource,
   SyntheticExecutor,
   WORKSPACE_NOT_DIRECTORY,
   WORKSPACE_NOT_FOUND,
@@ -19,6 +21,7 @@ import {
 } from "../src/index.js";
 import { RealFsOracle } from "./fixtures/real-fs-oracle.js";
 import { diffOutcomes, generateWorkspaceSequence, makeParityRoot, runSequence } from "./fixtures/rung-parity.js";
+import { FixtureUnavailableError, REAL_REPOS, repoCachePath } from "./fixtures/real-repos.js";
 
 function synthetic() {
   const workspace = new MemoryWorkspace();
@@ -123,6 +126,33 @@ test("absolute paths are rejected, not silently rewritten", async () => {
     assert.equal((await new RealFsOracle(root).execute(effect, ctx)).ok, true);
     await assert.rejects(stat(join(root, absolute)), "no silently-rewritten in-workspace path");
   } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("a source-backed symlink read is distinguishable from an empty file", async (t) => {
+  const repo = REAL_REPOS.find((entry) => entry.name === "commander")!;
+  let cache: string;
+  try {
+    cache = await repoCachePath(repo);
+  } catch (error) {
+    if (error instanceof FixtureUnavailableError) {
+      t.skip(error.message);
+      return;
+    }
+    throw error;
+  }
+  const parent = await mkdtemp(join(tmpdir(), "synth-symread-"));
+  const source = await NativeGitSource.open({ gitDir: join(parent, "cache.git"), remote: cache, ref: repo.commit });
+  try {
+    const workspace = new MemoryWorkspace({ source });
+    const link = "tests/fixtures/pmlink";
+    assert.equal((await workspace.stat(link))?.kind, "symlink");
+    const bytes = await workspace.read(link);
+    assert.ok(bytes && bytes.byteLength > 0, "a symlink read must return the target, not undefined");
+    assert.equal(new TextDecoder().decode(bytes), Buffer.from(await source.readFile(link)).toString("utf8"));
+  } finally {
+    await source.close();
     await rm(parent, { recursive: true, force: true });
   }
 });
