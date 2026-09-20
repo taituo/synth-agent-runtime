@@ -5,6 +5,7 @@ export * from "./runtime/agent-runtime.js";
 export * from "./workspace/source.js";
 export * from "./workspace/memory-workspace.js";
 export * from "./workspace/symlink-target.js";
+export * from "./artifacts/blob-store.js";
 export * from "./workspace/native-git-source.js";
 export * from "./execution/types.js";
 export * from "./execution/workspace-errors.js";
