@@ -35,6 +35,7 @@ export * from "./inference/gateway/profile-router-backend.js";
 export * from "./inference/gateway/http-upstream.js";
 export * from "./inference/gateway/retry-hint.js";
 export * from "./inference/gateway/litellm-profile.js";
+export * from "./inference/gateway/provider-config.js";
 export * from "./inference/gateway/responses-protocol.js";
 export * from "./workspace/snapshot-codec.js";
 export * from "./workspace/git-batch.js";
