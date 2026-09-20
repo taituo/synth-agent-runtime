@@ -92,3 +92,23 @@ hidden-test-dest-as-a-directory crash). `isolatedScoreGymPatch` now checks
 `Array.isArray(options.cases)` and returns `errored` with a clear detail.
 Failing-first: `test/gym-scoring.test.ts` "a legacy hiddenTestPath call is
 errored, not a crash" failed with `TypeError` before the guard and passes after.
+
+## Round-six survivor: a leaf symlink reached the held-out vectors (2026-09-20)
+
+The permission model denied direct reads and `process.getBuiltinModule` reads
+(ERR_ACCESS_DENIED), and the signing-oracle class was closed. One payload
+survived: the patch planted `escape.json` as a symlink to the held-out vectors
+file, and the worker read it. Node follows the link before the permission
+decision, so an allowlisted path can still reach outside. Reproduced first as a
+failing regression (`FORGE 6`, `test/gym-vacuity.test.ts`): `passed` 4 of 4 with
+the bug unfixed before the guard.
+
+Fix: `findEscapingSymlink` walks the applied checkout and resolves every
+symlink's real path; any link that escapes the checkout (or is broken) makes the
+score `tampered` before the worker starts. A patch cannot create a link at
+runtime either, since the worker has no write permission.
+
+Re-ran the reviewer's full battery (`/tmp/opencode/audit6/oracle-battery-885.mjs`,
+adapted to this build): golden control `passed` 4/4; all six attack payloads not
+passed — five `failed`/`errored`, the symlink variant `tampered` with 0 passed
+cases. `FORGE 6` is the permanent regression for the survivor.

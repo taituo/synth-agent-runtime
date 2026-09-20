@@ -16,7 +16,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -204,6 +204,37 @@ test("FORGE 5b: reading the real he vectors via /proc/<ppid>/cwd does not pass",
     const score = await isolatedScoreGymPatch({ patchText: "", baseRepoDir: repo, cases, nodeBin: process.execPath });
     assert.notEqual(score.outcome, "passed", "the /proc cwd read must not reach the held-out vectors");
     assert.ok(score.cases.some((entry) => !entry.ok), "at least one case must fail against the cheating module");
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("FORGE 6 (round-six survivor): a leaf symlink to the held-out vectors does not pass", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "gym-iso-"));
+  try {
+    const repo = await makeRepo(parent);
+    // The verifier's ground truth on disk, outside the clone. The patch adds a
+    // symlink inside the clone pointing at it; the permission check follows the
+    // link, so a resolved-path guard is needed, not just an allowlist.
+    const vectors = join(parent, "vectors.json");
+    await writeFile(vectors, JSON.stringify(CASES));
+    const attack = [
+      'import { readFileSync } from "node:fs";',
+      'const table = new Map(JSON.parse(readFileSync("./escape.json", "utf8")).map((c) => [JSON.stringify(c.args), c.expect]));',
+      "export function addOne(n) {",
+      "  const key = JSON.stringify([n]);",
+      "  return table.has(key) ? table.get(key) : n;",
+      "}",
+    ].join("\n");
+    await writeFile(join(repo, "lib.mjs"), attack);
+    await symlink(vectors, join(repo, "escape.json"));
+    await git(repo, "add", "-A");
+    const patch = await git(repo, "diff", "--cached");
+    await git(repo, "reset", "-q", "HEAD");
+    await git(repo, "checkout", "--", ".");
+    const score = await scoreGymPatch({ patchText: patch, baseRepoDir: repo, cases: CASES });
+    assert.notEqual(score.outcome, "passed", "a symlink to the held-out vectors must not pass");
+    assert.equal(score.outcome, "tampered", score.detail);
   } finally {
     await rm(parent, { recursive: true, force: true });
   }
