@@ -3,6 +3,7 @@ export class LaneScheduler {
     #capacity;
     #now;
     #defaultLane;
+    #estimatedServiceMs;
     #inFlight = 0;
     #queue = [];
     #sequence = 0;
@@ -27,6 +28,7 @@ export class LaneScheduler {
         this.#defaultLane = options.defaultLane ?? fallback.id;
         if (!this.#lanes.has(this.#defaultLane))
             throw new Error(`Unknown default lane: ${this.#defaultLane}`);
+        this.#estimatedServiceMs = Math.max(0, options.estimatedServiceMs ?? 1_000);
     }
     /** Admit now, enqueue with a bounded wait, or reject. */
     admit(request) {
@@ -41,7 +43,29 @@ export class LaneScheduler {
             return { outcome: "reject", reason: "lane-full", retryAfterMs: 0 };
         const ticket = `t${++this.#sequence}`;
         this.#queue.push({ ticket, request, enqueuedAt: this.#now() });
-        return { outcome: "queue", retryAfterMs: 0, ticket };
+        // Estimated wait: everything already queued ahead of this request.
+        const retryAfterMs = Math.max(0, this.#queue.length - 1) * this.#estimatedServiceMs;
+        return { outcome: "queue", retryAfterMs, ticket };
+    }
+    /**
+     * Reject queued requests that have waited longer than their lane allows.
+     * Returns them with `reason: "deadline"` so the caller can propagate a
+     * `Retry-After`. The scheduler's own clock is authoritative (open question 7).
+     */
+    expire(at = this.#now()) {
+        const expired = [];
+        const remaining = [];
+        for (const entry of this.#queue) {
+            const lane = this.#lanes.get(entry.request.lane) ?? this.#lanes.get(this.#defaultLane);
+            if (lane.maxWaitMs > 0 && at - entry.enqueuedAt > lane.maxWaitMs) {
+                expired.push({ request: entry.request, reason: "deadline", retryAfterMs: 0 });
+            }
+            else {
+                remaining.push(entry);
+            }
+        }
+        this.#queue = remaining;
+        return expired;
     }
     /**
      * Free one slot and hand back the next queued request to run: the highest

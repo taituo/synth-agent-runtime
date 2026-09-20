@@ -46,12 +46,24 @@ export interface LaneSchedulerOptions {
     now?: () => number;
     /** Lane used when a request names an unknown lane; defaults to the lowest-priority lane. */
     defaultLane?: LaneId;
+    /** Rough per-request service time, used to estimate a queued request's wait. */
+    estimatedServiceMs?: number;
 }
 export declare class LaneScheduler {
     #private;
     constructor(lanes: readonly LaneSpec[], options: LaneSchedulerOptions);
     /** Admit now, enqueue with a bounded wait, or reject. */
     admit(request: AdmissionRequest): AdmissionDecision;
+    /**
+     * Reject queued requests that have waited longer than their lane allows.
+     * Returns them with `reason: "deadline"` so the caller can propagate a
+     * `Retry-After`. The scheduler's own clock is authoritative (open question 7).
+     */
+    expire(at?: number): Array<{
+        request: AdmissionRequest;
+        reason: "deadline";
+        retryAfterMs: number;
+    }>;
     /**
      * Free one slot and hand back the next queued request to run: the highest
      * band first, so an interactive request never waits behind batch work. The

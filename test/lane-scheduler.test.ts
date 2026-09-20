@@ -98,6 +98,31 @@ test("band priority beats weight: a heavy low band waits behind a light high ban
   assert.equal(scheduler.release()?.lane, "high");
 });
 
+test("a queued request reports an estimated Retry-After", () => {
+  const scheduler = new LaneScheduler(LANES, { capacity: 1, estimatedServiceMs: 1_000 });
+  scheduler.admit(request("batch", "seed"));
+  const first = scheduler.admit(request("batch", "q1"));
+  assert.equal(first.outcome, "queue");
+  assert.equal((first as { retryAfterMs: number }).retryAfterMs, 0, "nothing queued ahead");
+  const second = scheduler.admit(request("batch", "q2"));
+  assert.equal((second as { retryAfterMs: number }).retryAfterMs, 1_000, "one request ahead");
+});
+
+test("a queued request past its lane deadline is rejected, not admitted", () => {
+  let now = 1_000;
+  const scheduler = new LaneScheduler(LANES, { capacity: 1, now: () => now });
+  scheduler.admit(request("interactive", "seed")); // occupies the slot
+  scheduler.admit(request("interactive", "waiting")); // maxWaitMs 5000
+  now += 4_000;
+  assert.deepEqual(scheduler.expire(), [], "still within the deadline");
+  now += 2_000; // 6000 > 5000
+  const expired = scheduler.expire();
+  assert.equal(expired.length, 1);
+  assert.equal(expired[0]!.reason, "deadline");
+  assert.equal(expired[0]!.request.key, "waiting");
+  assert.equal(scheduler.pending().length, 0);
+});
+
 test("constructor rejects bad configuration", () => {
   assert.throws(() => new LaneScheduler([], { capacity: 1 }), /at least one lane/);
   assert.throws(() => new LaneScheduler(LANES, { capacity: 0 }), /Invalid capacity/);

@@ -44,6 +44,8 @@ export interface LaneSchedulerOptions {
   now?: () => number;
   /** Lane used when a request names an unknown lane; defaults to the lowest-priority lane. */
   defaultLane?: LaneId;
+  /** Rough per-request service time, used to estimate a queued request's wait. */
+  estimatedServiceMs?: number;
 }
 
 interface Queued {
@@ -57,6 +59,7 @@ export class LaneScheduler {
   readonly #capacity: number;
   readonly #now: () => number;
   readonly #defaultLane: LaneId;
+  readonly #estimatedServiceMs: number;
   #inFlight = 0;
   #queue: Queued[] = [];
   #sequence = 0;
@@ -78,6 +81,7 @@ export class LaneScheduler {
     const fallback = [...lanes].sort((a, b) => a.priority - b.priority)[0]!;
     this.#defaultLane = options.defaultLane ?? fallback.id;
     if (!this.#lanes.has(this.#defaultLane)) throw new Error(`Unknown default lane: ${this.#defaultLane}`);
+    this.#estimatedServiceMs = Math.max(0, options.estimatedServiceMs ?? 1_000);
   }
 
   /** Admit now, enqueue with a bounded wait, or reject. */
@@ -91,7 +95,29 @@ export class LaneScheduler {
     if (lane.maxWaitMs <= 0) return { outcome: "reject", reason: "lane-full", retryAfterMs: 0 };
     const ticket = `t${++this.#sequence}`;
     this.#queue.push({ ticket, request, enqueuedAt: this.#now() });
-    return { outcome: "queue", retryAfterMs: 0, ticket };
+    // Estimated wait: everything already queued ahead of this request.
+    const retryAfterMs = Math.max(0, this.#queue.length - 1) * this.#estimatedServiceMs;
+    return { outcome: "queue", retryAfterMs, ticket };
+  }
+
+  /**
+   * Reject queued requests that have waited longer than their lane allows.
+   * Returns them with `reason: "deadline"` so the caller can propagate a
+   * `Retry-After`. The scheduler's own clock is authoritative (open question 7).
+   */
+  expire(at = this.#now()): Array<{ request: AdmissionRequest; reason: "deadline"; retryAfterMs: number }> {
+    const expired: Array<{ request: AdmissionRequest; reason: "deadline"; retryAfterMs: number }> = [];
+    const remaining: Queued[] = [];
+    for (const entry of this.#queue) {
+      const lane = this.#lanes.get(entry.request.lane) ?? this.#lanes.get(this.#defaultLane)!;
+      if (lane.maxWaitMs > 0 && at - entry.enqueuedAt > lane.maxWaitMs) {
+        expired.push({ request: entry.request, reason: "deadline", retryAfterMs: 0 });
+      } else {
+        remaining.push(entry);
+      }
+    }
+    this.#queue = remaining;
+    return expired;
   }
 
   /**
