@@ -202,6 +202,51 @@ test("property: release() never admits a request past its lane deadline", () => 
   }
 });
 
+test("a lower band is reserved a share, so sustained high-band load cannot starve it", () => {
+  const lanes: LaneSpec[] = [
+    { id: "high", priority: 10, weight: 1, maxWaitMs: 60_000 },
+    { id: "low", priority: 1, weight: 1, maxWaitMs: 60_000 },
+  ];
+  const scheduler = new LaneScheduler(lanes, { capacity: 1, lowerBandReserveFraction: 0.2 });
+  scheduler.admit(request("high", "seed")); // occupy the single slot
+  for (let i = 0; i < 50; i++) scheduler.admit(request("high", `h${i}`)); // high backlog never drains
+  scheduler.admit(request("low", "l0"));
+  let lowAdmittedAt = -1;
+  for (let i = 0; i < 100 && lowAdmittedAt < 0; i++) {
+    const next = scheduler.release();
+    if (!next) break;
+    if (next.request.lane === "low") lowAdmittedAt = i;
+    else scheduler.admit(request("high", `keep-${i}`)); // keep the high band saturated
+  }
+  assert.ok(lowAdmittedAt >= 0, "the low-band request must be admitted despite sustained high-band load");
+  // Assert the BOUND, not just that it eventually happened: with reserve 0.2 the
+  // reservation is owed after ~5 high-band admissions.
+  assert.ok(lowAdmittedAt <= 6, `low band admitted at admission ${lowAdmittedAt}; the bound is ~5`);
+});
+
+test("under sustained contention a lower band receives roughly its reserved share", () => {
+  const lanes: LaneSpec[] = [
+    { id: "high", priority: 10, weight: 1, maxWaitMs: 60_000 },
+    { id: "low", priority: 1, weight: 1, maxWaitMs: 60_000 },
+  ];
+  const scheduler = new LaneScheduler(lanes, { capacity: 1, lowerBandReserveFraction: 0.25 });
+  scheduler.admit(request("high", "seed"));
+  scheduler.admit(request("high", "h0"));
+  scheduler.admit(request("low", "l0"));
+  let high = 0;
+  let low = 0;
+  for (let i = 0; i < 400; i++) {
+    const next = scheduler.release();
+    if (!next) break;
+    if (next.request.lane === "low") low += 1;
+    else high += 1;
+    scheduler.admit(request(next.request.lane, `${next.request.lane}-${i}`)); // keep both bands backlogged
+  }
+  const share = low / (high + low);
+  assert.ok(share >= 0.25 - 0.05, `low share ${share.toFixed(3)} must approach the reserved 0.25`);
+  assert.ok(share <= 0.25 + 0.1, `low share ${share.toFixed(3)} must not greatly exceed the reservation`);
+});
+
 test("constructor rejects bad configuration", () => {
   assert.throws(() => new LaneScheduler([], { capacity: 1 }), /at least one lane/);
   assert.throws(() => new LaneScheduler(LANES, { capacity: 0 }), /Invalid capacity/);

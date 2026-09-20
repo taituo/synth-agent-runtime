@@ -50,10 +50,6 @@ removed only when the closing work lands.
 
 ## Inference and scheduling
 
-- **Lane starvation bound is not implemented.** The spec reserves lower bands a
-  fixed fraction of every window; the scheduler gives lower bands nothing while
-  a higher band is backlogged. Closing: reserve a share per window, choose and
-  record the number, and test it under sustained high-band load.
 - **OpenRouter limits/prices are asserted, not measured.** The quota spec states
   "20 requests/minute and 50/day" and per-million prices as facts with no
   artifact. Closing: a real-key run that records the observed headers and cost,

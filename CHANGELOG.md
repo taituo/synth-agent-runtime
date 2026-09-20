@@ -31,6 +31,17 @@
   lifecycle primitive (reachability is the caller's job). Decision, rationale
   and remaining gaps in `docs/BLOB-STORE.md`.
 
+### Lane scheduler: a lower band can no longer be starved
+
+- The spec reserves lower bands a fixed fraction of admissions, but the
+  scheduler always preferred the highest backlogged band, so a saturated high
+  band could starve a lower one indefinitely. Add `lowerBandReserveFraction`
+  (default 0.2): credit accrues on every admission and is spent on a reserved
+  lower band, so a backlogged lower band receives roughly its share. Tests
+  assert the BOUND — a low-band request is admitted within ~1/fraction
+  high-band admissions, not merely eventually — and the sustained-contention
+  share; failing-first with the reservation removed.
+
 ### Gym scoring: score the diff, against a test the agent never sees
 
 - **The gym's first half is the scoring pipeline** (`src/gym/scoring.ts`): apply

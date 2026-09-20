@@ -3,8 +3,10 @@
  * /tmp/opencode/spec-priority-lanes.md, roadmap item 2).
  *
  * Pure and clock-injected so decisions are unit-testable with a fake clock and
- * no timers. Piece 1 covers the lane model, band ordering and queue-or-reject;
- * weighted fair-share within a band and real cooldowns are later pieces.
+ * no timers. Covers the lane model, band ordering, queue-or-reject, weighted
+ * fair-share within a band, and a reservation that stops a saturated high band
+ * from starving a lower one (`lowerBandReserveFraction`). Real cooldowns are a
+ * later piece.
  *
  * Capacity here is a concurrency cap. In deployment it is derived from the
  * per-window quota (open question 1 in the spec); the window arithmetic itself
@@ -51,6 +53,13 @@ export interface LaneSchedulerOptions {
   defaultLane?: LaneId;
   /** Rough per-request service time, used to estimate a queued request's wait. */
   estimatedServiceMs?: number;
+  /**
+   * Fraction of admissions reserved for bands below the currently highest one,
+   * so sustained high-band load cannot starve a lower band (spec: "each lower
+   * band is reserved a fixed fraction of every window, e.g. >= 20%"). 0 disables
+   * the reservation; default 0.2.
+   */
+  lowerBandReserveFraction?: number;
 }
 
 interface Queued {
@@ -72,6 +81,11 @@ export class LaneScheduler {
   // on each decision within a band and the winner is debited the active total,
   // so a lane's share tracks its weight without starving the others.
   #deficit = new Map<LaneId, number>();
+  // Reservation credit for lower bands: accrues `#reserveFraction` per admission
+  // granted to a higher band and spends 1 when a lower band is admitted, so over
+  // time a lower band with demand receives ~`#reserveFraction` of admissions.
+  readonly #reserveFraction: number;
+  #reserveCredit = 0;
 
   constructor(lanes: readonly LaneSpec[], options: LaneSchedulerOptions) {
     if (lanes.length === 0) throw new Error("LaneScheduler requires at least one lane");
@@ -87,6 +101,8 @@ export class LaneScheduler {
     this.#defaultLane = options.defaultLane ?? fallback.id;
     if (!this.#lanes.has(this.#defaultLane)) throw new Error(`Unknown default lane: ${this.#defaultLane}`);
     this.#estimatedServiceMs = Math.max(0, options.estimatedServiceMs ?? 1_000);
+    const reserve = options.lowerBandReserveFraction ?? 0.2;
+    this.#reserveFraction = Number.isFinite(reserve) ? Math.max(0, Math.min(1, reserve)) : 0.2;
   }
 
   /** Admit now, enqueue with a bounded wait, or reject. */
@@ -158,36 +174,51 @@ export class LaneScheduler {
     });
     if (this.#queue.length === 0) return undefined;
     const priorityOf = (entry: Queued): number => this.#lanes.get(entry.request.lane)?.priority ?? 0;
+    const maxPriority = Math.max(...this.#queue.map(priorityOf));
+    const top = this.#queue.filter((entry) => priorityOf(entry) === maxPriority);
+    const lower = this.#queue.filter((entry) => priorityOf(entry) < maxPriority);
+
+    // Band first, with a reservation: when a lower band has demand and the
+    // reservation is owed, admit from the lower bands even though a higher band
+    // is backlogged. Otherwise admit from the highest band and accrue credit.
+    let group: Queued[];
+    if (top.length === 0) {
+      group = lower;
+    } else if (lower.length > 0 && this.#reserveCredit >= 1) {
+      group = lower;
+    } else {
+      group = top;
+    }
+    // Credit accrues on EVERY admission and is spent on a reserved one, so over
+    // time a backlogged lower band receives ~`#reserveFraction` of admissions.
+    if (group === lower && top.length > 0) this.#reserveCredit -= 1;
+    this.#reserveCredit = Math.min(1, this.#reserveCredit + this.#reserveFraction);
+
+    const chosen = this.#pickWeighted(group);
+    return this.#queue.splice(this.#queue.indexOf(chosen), 1)[0];
+  }
+
+  /** Weighted fair-share (deficit round-robin) across the lanes present in `entries`. */
+  #pickWeighted(entries: Queued[]): Queued {
     const weightOf = (lane: LaneId): number => {
       const weight = this.#lanes.get(lane)?.weight ?? 1;
       return Number.isFinite(weight) && weight > 0 ? weight : 1;
     };
-
-    // Band first: only the highest priority band is eligible this round.
-    const maxPriority = Math.max(...this.#queue.map(priorityOf));
-    const band = this.#queue.filter((entry) => priorityOf(entry) === maxPriority);
-    const activeLanes = [...new Set(band.map((entry) => entry.request.lane))];
-
-    // Weighted fair-share across the lanes in the band (deficit round-robin).
+    // Ties go to the lane whose earliest queued request arrived first (FIFO).
+    const firstIndex = (lane: LaneId): number => entries.findIndex((entry) => entry.request.lane === lane);
+    const activeLanes = [...new Set(entries.map((entry) => entry.request.lane))];
     const totalWeight = activeLanes.reduce((sum, lane) => sum + weightOf(lane), 0);
     for (const lane of activeLanes) this.#deficit.set(lane, (this.#deficit.get(lane) ?? 0) + weightOf(lane));
     let bestLane = activeLanes[0]!;
     for (const lane of activeLanes) {
       const deficit = this.#deficit.get(lane) ?? 0;
       const bestDeficit = this.#deficit.get(bestLane) ?? 0;
-      // Ties go to the lane whose earliest queued request arrived first (FIFO).
-      if (deficit > bestDeficit || (deficit === bestDeficit && this.#firstIndex(lane) < this.#firstIndex(bestLane))) {
+      if (deficit > bestDeficit || (deficit === bestDeficit && firstIndex(lane) < firstIndex(bestLane))) {
         bestLane = lane;
       }
     }
     this.#deficit.set(bestLane, (this.#deficit.get(bestLane) ?? 0) - totalWeight);
-
-    const index = this.#queue.findIndex((entry) => entry.request.lane === bestLane);
-    return this.#queue.splice(index, 1)[0];
-  }
-
-  #firstIndex(lane: LaneId): number {
-    return this.#queue.findIndex((entry) => entry.request.lane === lane);
+    return entries.find((entry) => entry.request.lane === bestLane)!;
   }
 
   pending(): readonly AdmissionRequest[] {
