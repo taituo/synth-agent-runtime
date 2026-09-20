@@ -266,6 +266,19 @@
   (`integrations/kubernetes/git-transport-live.ts`, `npm run git-transport`)
   round-trips the pinned commander repo through a sandbox exec that modifies it
   and gets the same tree hash back (`a2fd30e2…`), with all three shapes intact.
+- **The workspace sync path preserves symlinks now too, closing the gap the
+  sentence above used to name.** `WorkspaceSynchronizer` materializes source and
+  overlay symlinks with `writeSymlink` instead of following them into regular
+  bytes; `SandboxBackend` gained `writeSymlink`/`readSymlink` and `listGitChanges`
+  reports `symlink`; `syncBack` records a link in the `MemoryWorkspace` rather
+  than the bytes it points at. The live proof previously computed
+  `workspaceSyncKindForSymlink` and excluded it from `ok`, and because the
+  sandbox committed its changes `git status` against HEAD saw none, so it
+  measured nothing (`null`, `ok:true`). It now creates an uncommitted symlink and
+  requires `workspaceSyncKindForSymlink === "symlink"`, and checks commander's
+  own `tests/fixtures/another-dir/pm` link inbound. Live gVisor run:
+  `inboundSymlinkPreserved:true`, `workspaceSyncKindForSymlink:"symlink"`,
+  `workspaceSyncTarget:"regular-new.txt"`, `ok:true`.
 
 ### Priority lanes wired into the gateway request path
 

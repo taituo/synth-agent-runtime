@@ -60,6 +60,9 @@ try {
   const workspace = new MemoryWorkspace({ source });
   const synchronizer = new WorkspaceSynchronizer(backend);
   await synchronizer.materialize(workspace, sandbox);
+  // Inbound direction: commander tracks `tests/fixtures/another-dir/pm ->
+  // ../other-dir/pm`; materialize must have written it as a symlink.
+  const inboundSymlink = await backend.readSymlink(sandbox, "tests/fixtures/another-dir/pm").catch(() => null);
 
   // Modify inside the sandbox: symlink, executable, unusual filename.
   const safeDirectoryEnv = { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "safe.directory", GIT_CONFIG_VALUE_0: "/workspace" };
@@ -94,12 +97,22 @@ try {
   const unusualName = byPath.has("dir with space/naïve--name.txt");
   const treeMatches = ingestedTree === sandboxTree;
 
-  // Contrast: the workspace-sync return path flattens the symlink. Informational.
+  // The workspace-sync return path. The changes above were committed, which
+  // `git status` cannot see against HEAD, so create an UNCOMMITTED symlink for
+  // the sync-back measurement and require it to return as a symlink.
+  const addBack = await backend.exec(sandbox, {
+    env: safeDirectoryEnv,
+    command: "ln -s regular-new.txt link-back",
+    timeoutMs: 60_000,
+  });
+  if (addBack.exitCode !== 0) throw new Error(`sandbox link-back failed: ${addBack.stderr || addBack.stdout}`);
   const back = new MemoryWorkspace();
-  await synchronizer.syncBack(back, sandbox).catch(() => undefined);
-  const syncBackKind = (await back.stat("link-new"))?.kind ?? null;
+  await synchronizer.syncBack(back, sandbox);
+  const syncBackKind = (await back.stat("link-back"))?.kind ?? null;
+  const syncBackTarget = (await back.snapshot()).links?.get("link-back") ?? null;
 
-  ok = treeMatches && symlinkPreserved && executablePreserved && unusualName;
+  const inboundSymlinkPreserved = inboundSymlink === "../other-dir/pm";
+  ok = treeMatches && symlinkPreserved && executablePreserved && unusualName && inboundSymlinkPreserved && syncBackKind === "symlink";
   console.log(
     JSON.stringify(
       {
@@ -111,7 +124,9 @@ try {
         symlinkPreserved,
         executablePreserved,
         unusualName,
+        inboundSymlinkPreserved,
         workspaceSyncKindForSymlink: syncBackKind,
+        workspaceSyncTarget: syncBackTarget,
         ok,
       },
       null,

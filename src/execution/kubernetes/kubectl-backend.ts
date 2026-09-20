@@ -192,40 +192,60 @@ export class KubectlSandboxBackend implements SandboxBackend {
     if (result.code !== 0) throw new Error(`removePath(${path}) failed: ${result.stderr.toString("utf8")}`);
   }
 
-  async listGitChanges(sandbox: SandboxIdentity): Promise<Array<{ path: string; deleted: boolean }>> {
+  async writeSymlink(sandbox: SandboxIdentity, path: string, target: string): Promise<void> {
+    const full = safeWorkspacePath(path);
+    const parent = dirname(full).replace(/\\/g, "/");
+    const script = `mkdir -p ${shQuote(parent)} && ln -sfn ${shQuote(target)} ${shQuote(full)}`;
     const result = await this.#run(
-      [
-        "exec",
-        "-n",
-        sandbox.namespace,
-        sandbox.podName,
-        "--",
-        "git",
-        // Same "dubious ownership" issue as materialize()'s baseline commit:
-        // /workspace is root-owned, the pod runs as a non-root uid by design.
-        "-c",
-        "safe.directory=/workspace",
-        "-C",
-        "/workspace",
-        "status",
-        "--porcelain=v1",
-        "-z",
-        "--untracked-files=all",
-        "--no-renames",
-      ],
+      ["exec", "-n", sandbox.namespace, sandbox.podName, "--", "sh", "-lc", script],
+      undefined,
+      this.#defaultExecTimeoutMs,
+    );
+    if (result.code !== 0) throw new Error(`writeSymlink(${path}) failed: ${result.stderr.toString("utf8")}`);
+  }
+
+  async readSymlink(sandbox: SandboxIdentity, path: string): Promise<string> {
+    const full = safeWorkspacePath(path);
+    const result = await this.#run(
+      ["exec", "-n", sandbox.namespace, sandbox.podName, "--", "readlink", full],
+      undefined,
+      this.#defaultExecTimeoutMs,
+    );
+    if (result.code !== 0) throw new Error(`readSymlink(${path}) failed: ${result.stderr.toString("utf8")}`);
+    return result.stdout.toString("utf8").trim();
+  }
+
+  async listGitChanges(sandbox: SandboxIdentity): Promise<Array<{ path: string; deleted: boolean; symlink?: boolean }>> {
+    // One exec: emit each change as four NUL-separated fields (path, status,
+    // kind, target). `git status -z` uses NUL terminators already; the shell
+    // loop adds whether the working-tree entry is a symlink and its target, so a
+    // mode-120000 change is not silently flattened into regular bytes.
+    const script = [
+      "cd /workspace || exit 1",
+      "git -c safe.directory=/workspace status --porcelain=v1 -z --untracked-files=all --no-renames |",
+      "while IFS= read -r -d '' entry; do",
+      '  status=$(printf %s "$entry" | cut -c1-2)',
+      '  path=$(printf %s "$entry" | cut -c4-)',
+      '  if [ -L "$path" ]; then kind=L; target=$(readlink "./$path"); else kind=F; target=""; fi',
+      `  printf '%s\\0%s\\0%s\\0%s\\0' "$path" "$status" "$kind" "$target"`,
+      "done",
+    ].join("\n");
+    const result = await this.#run(
+      ["exec", "-n", sandbox.namespace, sandbox.podName, "--", "sh", "-lc", script],
       undefined,
       this.#defaultExecTimeoutMs,
     );
     if (result.code !== 0) {
       throw new Error(`git status failed in sandbox ${sandbox.id}: ${result.stderr.toString("utf8") || result.stdout.toString("utf8")}`);
     }
-    const out: Array<{ path: string; deleted: boolean }> = [];
-    for (const record of result.stdout.toString("utf8").split("\0")) {
-      if (!record || record.length < 4) continue;
-      const status = record.slice(0, 2);
-      const path = record.slice(3);
+    const tokens = result.stdout.toString("utf8").split("\0");
+    const out: Array<{ path: string; deleted: boolean; symlink?: boolean }> = [];
+    for (let i = 0; i + 3 < tokens.length; i += 4) {
+      const path = tokens[i]!;
+      const status = tokens[i + 1]!;
+      const kind = tokens[i + 2]!;
       if (!path || path.startsWith(".git/")) continue;
-      out.push({ path, deleted: status.includes("D") });
+      out.push({ path, deleted: status.includes("D"), symlink: kind === "L" });
     }
     return out;
   }

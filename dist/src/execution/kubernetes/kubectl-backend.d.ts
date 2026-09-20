@@ -38,8 +38,11 @@ export declare class KubectlSandboxBackend implements SandboxBackend {
     writeFile(sandbox: SandboxIdentity, path: string, content: Uint8Array): Promise<void>;
     readFile(sandbox: SandboxIdentity, path: string): Promise<Uint8Array>;
     removePath(sandbox: SandboxIdentity, path: string): Promise<void>;
+    writeSymlink(sandbox: SandboxIdentity, path: string, target: string): Promise<void>;
+    readSymlink(sandbox: SandboxIdentity, path: string): Promise<string>;
     listGitChanges(sandbox: SandboxIdentity): Promise<Array<{
         path: string;
         deleted: boolean;
+        symlink?: boolean;
     }>>;
 }

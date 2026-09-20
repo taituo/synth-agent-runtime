@@ -17,14 +17,39 @@ export class WorkspaceSynchronizer {
     async materialize(workspace, sandbox) {
         let files = 0;
         let bytes = 0;
+        const decoder = new TextDecoder();
         if (workspace.source?.listFiles) {
             for await (const path of workspace.source.listFiles()) {
+                // A source symlink must enter the sandbox as a symlink (mode 120000).
+                // Writing its target text as a regular file is the flattening this path
+                // used to do, and it corrupts every repo that tracks a symlink.
+                const info = await workspace.source.stat(path);
+                if (info?.kind === "symlink") {
+                    const target = decoder.decode(await workspace.source.readFile(path));
+                    files++;
+                    bytes += target.length;
+                    this.#checkLimits(files, bytes, "base workspace");
+                    await this.#backend.writeSymlink(sandbox, path, target);
+                    continue;
+                }
                 const content = await workspace.source.readFile(path);
                 files++;
                 bytes += content.byteLength;
                 this.#checkLimits(files, bytes, "base workspace");
                 await this.#backend.writeFile(sandbox, path, content);
             }
+        }
+        // Overlay symlinks (created by an agent) are links too: materialize them as
+        // symlinks and skip them in the content diff, which follows a link into its
+        // target and would otherwise write the target's bytes at the link's path.
+        const overlay = await workspace.snapshot();
+        const linkPaths = new Set();
+        for (const [path, target] of overlay.links ?? []) {
+            linkPaths.add(path);
+            files++;
+            bytes += target.length;
+            this.#checkLimits(files, bytes, "workspace overlay");
+            await this.#backend.writeSymlink(sandbox, path, target);
         }
         // Materialize any overlay changes (writes on top of the base tree that
         // MemoryWorkspace hasn't committed anywhere else) BEFORE the Git baseline
@@ -33,6 +58,8 @@ export class WorkspaceSynchronizer {
         // in the sandbox: `git status` would never report deleting it, and
         // syncBack() would have no way to see that deletion.
         for (const change of await workspace.diff()) {
+            if (linkPaths.has(change.path))
+                continue;
             if (change.kind === "delete") {
                 await this.#backend.removePath(sandbox, change.path);
             }
@@ -71,6 +98,15 @@ export class WorkspaceSynchronizer {
                 this.#checkLimits(files, bytes, "sandbox changes");
                 if (change.deleted) {
                     workspace.delete(change.path);
+                    continue;
+                }
+                if (change.symlink) {
+                    // Preserve mode 120000 on the way back: read the link target, never
+                    // the bytes it points at, and record it as a link in the workspace.
+                    const target = await this.#backend.readSymlink(sandbox, change.path);
+                    bytes += target.length;
+                    this.#checkLimits(files, bytes, "sandbox changes");
+                    workspace.symlink(change.path, target);
                     continue;
                 }
                 const content = await this.#backend.readFile(sandbox, change.path);

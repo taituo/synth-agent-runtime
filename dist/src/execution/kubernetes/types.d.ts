@@ -31,10 +31,15 @@ export interface SandboxBackend {
     exec(sandbox: SandboxIdentity, request: SandboxExecRequest): Promise<SandboxExecResult>;
     writeFile(sandbox: SandboxIdentity, path: string, content: Uint8Array): Promise<void>;
     readFile(sandbox: SandboxIdentity, path: string): Promise<Uint8Array>;
+    /** Create (or replace) a symlink. Required so the sync path preserves mode 120000. */
+    writeSymlink(sandbox: SandboxIdentity, path: string, target: string): Promise<void>;
+    /** Read a symlink's target text (does not follow it). */
+    readSymlink(sandbox: SandboxIdentity, path: string): Promise<string>;
     removePath(sandbox: SandboxIdentity, path: string): Promise<void>;
     listGitChanges(sandbox: SandboxIdentity): Promise<Array<{
         path: string;
         deleted: boolean;
+        symlink?: boolean;
     }>>;
 }
 export interface WarmSandboxLease {

@@ -6,11 +6,6 @@ removed only when the closing work lands.
 
 ## Egress and artifacts
 
-- **Workspace sync still flattens symlinks.** The git transport preserves mode
-  120000, but `WorkspaceSynchronizer`/`KubectlSandboxBackend.writeFile` write
-  regular bytes, and `integrations/kubernetes/git-transport-live.ts` computes
-  `syncBackKind` yet excludes it from `ok`. Closing: symlink-aware
-  write/list-git-changes and include the sync-back kind in the proof's `ok`.
 - **Blob store: access model decided, lifecycle partly wired.** The decision is
   in `docs/BLOB-STORE.md`: within one trust domain the digest is the capability
   (unguessable, integrity-verified on read), and across tenants

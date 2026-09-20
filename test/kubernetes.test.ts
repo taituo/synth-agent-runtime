@@ -34,6 +34,8 @@ class MockSandboxBackend implements SandboxBackend {
   destroys = 0;
   files = new Map<string, Uint8Array>();
   baseline = new Map<string, Uint8Array>();
+  links = new Map<string, string>();
+  baselineLinks = new Map<string, string>();
 
   async create(resourceClass: KubernetesResourceClass, options: { namespace?: string } = {}): Promise<SandboxIdentity> {
     this.creates++;
@@ -46,26 +48,51 @@ class MockSandboxBackend implements SandboxBackend {
     };
   }
   async destroy(): Promise<void> { this.destroys++; }
-  async reset(): Promise<void> { this.resets++; this.files.clear(); this.baseline.clear(); }
+  async reset(): Promise<void> { this.resets++; this.files.clear(); this.baseline.clear(); this.links.clear(); this.baselineLinks.clear(); }
   async exec(_sandbox: SandboxIdentity, request: SandboxExecRequest): Promise<SandboxExecResult> {
-    if (request.command.includes("git init")) this.baseline = cloneMap(this.files);
-    if (request.command === "mutate") this.files.set("a.txt", new TextEncoder().encode("physical"));
+    if (request.command.includes("git init")) {
+      this.baseline = cloneMap(this.files);
+      this.baselineLinks = new Map(this.links);
+    }
+    if (request.command === "mutate") {
+      this.files.set("a.txt", new TextEncoder().encode("physical"));
+      this.links.set("link.txt", "a.txt");
+    }
     return { exitCode: 0, stdout: "ok", stderr: "" };
   }
-  async writeFile(_sandbox: SandboxIdentity, path: string, content: Uint8Array): Promise<void> { this.files.set(path, content.slice()); }
+  async writeFile(_sandbox: SandboxIdentity, path: string, content: Uint8Array): Promise<void> {
+    this.files.set(path, content.slice());
+    this.links.delete(path);
+  }
   async readFile(_sandbox: SandboxIdentity, path: string): Promise<Uint8Array> {
     const value = this.files.get(path);
     if (!value) throw new Error(`missing ${path}`);
     return value.slice();
   }
-  async removePath(_sandbox: SandboxIdentity, path: string): Promise<void> { this.files.delete(path); }
-  async listGitChanges(): Promise<Array<{ path: string; deleted: boolean }>> {
-    const paths = new Set([...this.files.keys(), ...this.baseline.keys()]);
-    const changes: Array<{ path: string; deleted: boolean }> = [];
+  async writeSymlink(_sandbox: SandboxIdentity, path: string, target: string): Promise<void> {
+    this.links.set(path, target);
+    this.files.delete(path);
+  }
+  async readSymlink(_sandbox: SandboxIdentity, path: string): Promise<string> {
+    const target = this.links.get(path);
+    if (target === undefined) throw new Error(`missing symlink ${path}`);
+    return target;
+  }
+  async removePath(_sandbox: SandboxIdentity, path: string): Promise<void> { this.files.delete(path); this.links.delete(path); }
+  async listGitChanges(): Promise<Array<{ path: string; deleted: boolean; symlink?: boolean }>> {
+    const paths = new Set([...this.files.keys(), ...this.baseline.keys(), ...this.links.keys(), ...this.baselineLinks.keys()]);
+    const changes: Array<{ path: string; deleted: boolean; symlink?: boolean }> = [];
     for (const path of [...paths].sort()) {
-      const a = this.baseline.get(path);
-      const b = this.files.get(path);
-      if (!same(a, b)) changes.push({ path, deleted: b === undefined });
+      const baselineLink = this.baselineLinks.get(path);
+      const currentLink = this.links.get(path);
+      const baselineFile = this.baseline.get(path);
+      const currentFile = this.files.get(path);
+      const sameEntry =
+        baselineLink !== undefined || currentLink !== undefined
+          ? baselineLink === currentLink
+          : same(baselineFile, currentFile);
+      if (sameEntry) continue;
+      changes.push({ path, deleted: currentLink === undefined && currentFile === undefined, ...(currentLink !== undefined ? { symlink: true } : {}) });
     }
     return changes;
   }
@@ -256,6 +283,26 @@ test("workspace sync-back is atomic when sandbox output exceeds limits", async (
   assert.equal(await workspace.readText("existing.txt"), "keep");
   assert.equal(await workspace.readText("first.txt"), undefined);
   assert.equal(await workspace.readText("huge.txt"), undefined);
+});
+
+test("workspace sync preserves symlinks in both directions", async () => {
+  const backend = new MockSandboxBackend();
+  const sandbox: SandboxIdentity = { id: "s", namespace: "n", podName: "p", resourceClassId: "sandbox-small", createdAt: 1 };
+  const workspace = new MemoryWorkspace();
+  workspace.write("a.txt", "base");
+  workspace.symlink("link.txt", "a.txt");
+  const sync = new WorkspaceSynchronizer(backend);
+
+  await sync.materialize(workspace, sandbox);
+  assert.equal(backend.links.get("link.txt"), "a.txt", "materialize must write mode 120000 with the link target");
+  assert.equal(backend.files.has("link.txt"), false, "materialize must not flatten the link into regular bytes");
+
+  // A sandbox-created symlink must return as a link, not the bytes it points at.
+  await backend.writeSymlink(sandbox, "new-link", "a.txt");
+  const back = new MemoryWorkspace();
+  await sync.syncBack(back, sandbox);
+  assert.equal((await back.stat("new-link"))?.kind, "symlink", "syncBack must preserve mode 120000");
+  assert.equal((await back.snapshot()).links?.get("new-link"), "a.txt", "syncBack must carry the link target, not the target's bytes");
 });
 
 test("project service pod carries a requested RuntimeClass", () => {
