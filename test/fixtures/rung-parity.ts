@@ -8,7 +8,7 @@
  * `src/execution` or `src/workspace` — see `test/rung-parity.test.ts`.
  */
 import { mkdtemp } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   MemoryWorkspace,
@@ -127,6 +127,28 @@ function outputString(output: unknown): string {
   return String(output);
 }
 
+/**
+ * True when a path escapes the workspace root, computed independently of the
+ * implementation (node:path + `..` depth). The escape exemption must not be
+ * granted just because the synthetic rung labelled something
+ * `WORKSPACE_PATH_ESCAPES` — that would let a wrongly-rejecting rung hide
+ * behind its own error string (S4).
+ */
+export function escapesByPath(path: string): boolean {
+  if (isAbsolute(path) || /^[A-Za-z]:[\\/]/.test(path)) return true;
+  let depth = 0;
+  for (const raw of path.replace(/\\/g, "/").split("/")) {
+    if (!raw || raw === ".") continue;
+    if (raw === "..") {
+      if (depth === 0) return true;
+      depth--;
+    } else {
+      depth++;
+    }
+  }
+  return false;
+}
+
 export interface OutcomeDiff {
   index: number;
   /** "escape" is a documented divergence (synthetic confines, raw OS escapes). */
@@ -141,7 +163,8 @@ export function diffOutcomes(oracle: readonly ParityOutcome[], synthetic: readon
     const b = synthetic[i];
     if (!a || !b) { diffs.push({ index: i, kind: "other", detail: "length mismatch" }); continue; }
     if (a.ok === b.ok && a.category === b.category && a.outputBytes === b.outputBytes) continue;
-    const escape = b.error !== undefined && b.error.includes("WORKSPACE_PATH_ESCAPES");
+    // Exempt only by the path's own shape, never by the synthetic error string.
+    const escape = escapesByPath(a.path);
     diffs.push({
       index: i,
       kind: escape ? "escape" : "other",

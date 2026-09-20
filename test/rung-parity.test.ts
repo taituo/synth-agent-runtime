@@ -178,10 +178,23 @@ test("a source-backed symlink read follows the link, matching the independent or
   }
 });
 
-test("the oracle imports nothing from the implementation", async () => {
+test("the oracle imports nothing from the implementation (multi-line and dynamic too)", async () => {
   const source = await readFile(join(process.cwd(), "test/fixtures/real-fs-oracle.ts"), "utf8");
-  const offending = source
-    .split("\n")
-    .filter((line) => /^\s*import\b/.test(line) && !/^\s*import\s+type\b/.test(line) && line.includes("src/"));
-  assert.deepEqual(offending, [], `oracle must not import implementation values: ${offending.join("; ")}`);
+  const withoutComments = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  const valueImports = [...withoutComments.matchAll(/import\s+(?!type\b)([\s\S]*?)from\s+["']([^"']+)["']/g)].filter((match) => match[2]!.includes("src/"));
+  const dynamicImports = [...withoutComments.matchAll(/import\s*\(\s*["']([^"']+)["']/g)].filter((match) => match[1]!.includes("src/"));
+  assert.deepEqual([...valueImports, ...dynamicImports], [], "oracle must not import implementation values");
+});
+
+test("diffOutcomes exempts a divergence by path shape, not by the synthetic error string", () => {
+  const inWorkspace = diffOutcomes(
+    [{ id: "1", kind: "workspace.read", path: "a.txt", ok: true, category: "", outputBytes: "x" }],
+    [{ id: "1", kind: "workspace.read", path: "a.txt", ok: false, category: "denied", error: "WORKSPACE_PATH_ESCAPES:a.txt" }],
+  );
+  assert.equal(inWorkspace[0]!.kind, "other", "an in-workspace path is never exempt");
+  const escaping = diffOutcomes(
+    [{ id: "2", kind: "workspace.write", path: "../x", ok: true, category: "", outputBytes: "" }],
+    [{ id: "2", kind: "workspace.write", path: "../x", ok: false, category: "denied", error: "WORKSPACE_PATH_ESCAPES:../x" }],
+  );
+  assert.equal(escaping[0]!.kind, "escape", "a path that escapes is the documented exemption");
 });
