@@ -11,13 +11,46 @@
  * (kubectl exec stdout is text), and the runtime ingests it into a bare repo.
  */
 import { execFile } from "node:child_process";
-import { mkdir } from "node:fs/promises";
-import { dirname } from "node:path";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 /** Shell command the sandbox runs (cwd `/workspace`) to emit a base64 bundle. */
 export function bundleExportCommand(ref = "HEAD") {
     return `git bundle create /tmp/synth-export.bundle ${ref} && base64 -w0 /tmp/synth-export.bundle`;
+}
+/**
+ * Artifact-egress mechanism 3: a patch as a change proposal. `git diff` out as
+ * text — small, reviewable, and mergeable by a human. Records file modes, so a
+ * symlink or an executable bit survives the round trip.
+ */
+export function patchExportCommand(baseRef = "HEAD") {
+    return `git diff ${baseRef}`;
+}
+async function withPatchFile(patchText, run) {
+    const dir = await mkdtemp(join(tmpdir(), "synth-patch-"));
+    const patchPath = join(dir, "change.patch");
+    await writeFile(patchPath, patchText);
+    return run(patchPath);
+}
+/** True when `patchText` applies cleanly to the repo's current state. */
+export async function applyPatchCheck(patchText, repoDir, options = {}) {
+    return withPatchFile(patchText, async (patchPath) => {
+        try {
+            await git(["-C", repoDir, "apply", "--check", patchPath], options);
+            return true;
+        }
+        catch {
+            return false;
+        }
+    });
+}
+/** Apply `patchText` to the repo's working tree. */
+export async function applyPatch(patchText, repoDir, options = {}) {
+    await withPatchFile(patchText, async (patchPath) => {
+        await git(["-C", repoDir, "apply", patchPath], options);
+    });
 }
 /** Decode the base64 stdout of {@link bundleExportCommand} into bundle bytes. */
 export function decodeBundleBase64(stdout) {
