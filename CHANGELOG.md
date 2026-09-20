@@ -2,6 +2,26 @@
 
 ## 1.0.0-rc.1 — abort-safety fix folded in, git ref/remote argument-injection fixed
 
+### Artifact egress: content-addressed blob store and git transport
+
+- **Getting artifacts out of a sandboxed run had one weak path** (the inline
+  base64 workspace snapshot) and no out-of-band mechanism. Added the first two
+  mechanisms from `docs`/the egress spec. A `FileSystemBlobStore`
+  (`src/artifacts/blob-store.ts`) stores content by `sha256`, returning a digest
+  reference (`{digest, size, mediaType, mechanism}`); identical content
+  deduplicates to one object, writes are atomic (temp + rename), and `get`
+  verifies the digest so a corrupted object raises `BLOB_CORRUPT` instead of
+  returning wrong bytes. Git as the transport (`src/workspace/git-transport.ts`)
+  ingests a `git bundle` the sandbox produces on stdout (base64, since
+  `kubectl exec` stdout is text) into a runtime-controlled bare repo. This is
+  the only mechanism that preserves file modes and symlinks, which the workspace
+  sync path flattens. Tests: a bundle round-trip over real git asserts the tree
+  hash equals git's and that a symlink (120000), an executable bit (100755) and
+  an unusual filename survive; a live gVisor proof
+  (`integrations/kubernetes/git-transport-live.ts`, `npm run git-transport`)
+  round-trips the pinned commander repo through a sandbox exec that modifies it
+  and gets the same tree hash back (`a2fd30e2…`), with all three shapes intact.
+
 ### Priority lanes wired into the gateway request path
 
 - **Scarce subscription quota had no scheduling decision.** Added a pure,
