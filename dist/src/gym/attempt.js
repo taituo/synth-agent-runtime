@@ -1,6 +1,7 @@
 import { isTampering, patchTargetPaths, scoreGymPatch, PROTECTED_PATTERNS } from "./scoring.js";
 import { buildGymSystemPrompt, buildGymUserPrompt, createGymTools, GYM_TOOL_DEFINITIONS } from "./tools.js";
 import { harvestPatch } from "./harvest.js";
+import { isolatedScoreGymPatch } from "./isolated-score.js";
 const DEFAULT_MAX_TURNS = 8;
 const DEFAULT_DEADLINE_MS = 10 * 60_000;
 /**
@@ -154,7 +155,14 @@ export async function runGymAttempt(options) {
                 score = { outcome: "failed", touchedPaths: [], detail: "no changes; the planted bug is still present" };
             }
             else {
-                const scorer = options.score ?? scoreGymPatch;
+                // When the task ships held-out cases, always use the isolated scorer:
+                // the pass decision is the verifier's comparison, never a child process
+                // the agent's code controls. Only case-less tasks fall back to the
+                // legacy in-process scorer.
+                const cases = task.task.hiddenCases;
+                const scorer = options.score ?? (cases
+                    ? (request) => isolatedScoreGymPatch({ patchText: request.patchText, baseRepoDir: request.baseRepoDir, cases, ...(options.nodeBin ? { nodeBin: options.nodeBin } : {}) })
+                    : scoreGymPatch);
                 score = await scorer({
                     patchText: patch,
                     baseRepoDir: task.baseRepoDir,

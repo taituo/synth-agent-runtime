@@ -132,3 +132,19 @@ the retried activity continued from.
 | 1 | lost | **passed** | 2 | 2 | 358 B |
 | 2 | lost | **passed** | 6 | 1 | 358 B |
 | 3 | lost | **passed** | 5 | 2 | 358 B |
+| 4 | lost | **run died** | — | — | — |
+
+With the checkpoint fix, the three completed SIGKILL samples all passed (the
+pre-fix result was 3 passes in 4, with one 0 B failure). Sample 4 died on the
+sigkill fault — the harness process was killed by the 700 s tool timeout while
+`handle.result()` blocked; no durable outcome was produced, and its worker was
+cleaned up. So the "4/4" question is not fully answered: 3 of 3 completed
+samples passed and the 0 B case did not recur, but the fourth sample is a box
+death, not a durable result.
+
+Caveat on certification: samples 1–3 were scored before the fifth-round scorer
+fix, i.e. their `passed` came from the legacy in-process scorer. The traces show
+real work (`read_file` -> `replace_in_file` -> `finish`, 358 B canonical diff),
+but under the fifth-round finding a `passed` from that scorer is not a
+certification. A clean re-run of the SIGKILL samples under the isolated scorer
+(`src/gym/isolated-score.ts`) is the remaining measurement.

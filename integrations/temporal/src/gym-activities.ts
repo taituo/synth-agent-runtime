@@ -103,6 +103,7 @@ export function createGymActivities(): GymAttemptActivities {
             turns: record.turns,
             protectedPathsTouched: record.protectedPathsTouched,
             patchBytes: record.patch.length,
+            ...(record.resumedFromTurn !== undefined ? { resumedFromTurn: record.resumedFromTurn } : {}),
             trace: trace.slice(0, 60),
             ...(record.score.detail ? { detail: record.score.detail } : {}),
             ...(record.error ? { error: record.error } : {}),

@@ -33,6 +33,7 @@ export class GymFixtureUnavailableError extends Error {
 export const VISIBLE_TEST_FIXTURE = "visible.test.mjs";
 export const MUTATION_PATCH_FIXTURE = "bug.patch";
 export const TASK_DESCRIPTOR_FIXTURE = "task.json";
+export const HIDDEN_CASES_FIXTURE = "hidden.cases.json";
 function requireString(value, field, where) {
     if (typeof value !== "string" || value.length === 0)
         throw new Error(`gym task ${where} is missing string field "${field}"`);
@@ -51,7 +52,21 @@ export async function loadGymTask(taskDir) {
     const mutationPatch = await readFile(join(taskDir, MUTATION_PATCH_FIXTURE), "utf8");
     if (mutationPatch.trim().length === 0)
         throw new Error(`gym task ${taskDir} has an empty ${MUTATION_PATCH_FIXTURE}`);
-    return { repo, commit, seed, visibleTestPath, hiddenTestPath, mutationPatch, taskDir, slug };
+    let hiddenCases;
+    try {
+        const parsed = JSON.parse(await readFile(join(taskDir, HIDDEN_CASES_FIXTURE), "utf8"));
+        hiddenCases = Array.isArray(parsed) ? parsed : parsed.cases;
+        if (hiddenCases && hiddenCases.length === 0) {
+            // An empty held-out set must not be silently treated as "no cases": the
+            // scorer refuses a vacuous pass, but fail loudly here too.
+            throw new Error(`gym task ${taskDir} has an empty ${HIDDEN_CASES_FIXTURE}`);
+        }
+    }
+    catch (error) {
+        if (error?.code !== "ENOENT")
+            throw error;
+    }
+    return { repo, commit, seed, visibleTestPath, hiddenTestPath, mutationPatch, taskDir, slug, ...(hiddenCases ? { hiddenCases } : {}) };
 }
 async function git(cwd, ...args) {
     const { stdout } = await execFileAsync("git", args, { cwd, maxBuffer: 32 * 1024 * 1024 });

@@ -43,8 +43,10 @@ interface ArmResult {
   requestedModel?: string | null;
   servedModel?: string | null;
   recovered?: boolean;
+  resumedFromTurn?: number;
   detail?: string;
   error?: string;
+  trace?: string[];
 }
 
 interface Args {
@@ -195,6 +197,7 @@ async function runDurableOnce(args: Args, baseUrl: string, workDir: string, faul
       turns: number;
       wallTimeMs: number;
       patchBytes?: number;
+      resumedFromTurn?: number;
       requestedModel: string | null;
       servedModel: string | null;
       trace?: string[];
@@ -210,8 +213,9 @@ async function runDurableOnce(args: Args, baseUrl: string, workDir: string, faul
       patchBytes: output.patchBytes ?? 0,
       requestedModel: output.requestedModel,
       servedModel: output.servedModel,
-      recovered: faultInjected && output.outcome === "passed",
-      ...(output.trace ? { trace: output.trace } : {}),
+    recovered: faultInjected && output.outcome === "passed",
+    ...(output.resumedFromTurn !== undefined ? { resumedFromTurn: output.resumedFromTurn } : {}),
+    ...(output.trace ? { trace: output.trace } : {}),
       ...(output.detail ? { detail: output.detail } : {}),
       ...(output.error ? { error: output.error } : {}),
     };

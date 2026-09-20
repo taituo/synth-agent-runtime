@@ -1,3 +1,4 @@
+import type { GymCase } from "./isolated-score.js";
 /** Same default as `test/fixtures/real-repos.ts`, overridable by env. */
 export declare const DEFAULT_GYM_FIXTURE_CACHE_DIR = "/tmp/opencode/fixture-repos";
 /** Raised when the pinned repo is not in the local fixture cache (offline). */
@@ -16,6 +17,12 @@ export interface GymTask {
     hiddenTestPath: string;
     /** The clean -> bugged patch, applied and committed by `materializeGymTask`. */
     mutationPatch: string;
+    /**
+     * Held-out test vectors for the isolated (unforgeable) scorer. Loaded from
+     * `hidden.cases.json` when present; the runner uses them instead of running a
+     * node:test file in-process with agent code.
+     */
+    hiddenCases?: GymCase[];
     /** Directory the fixture was loaded from; used to locate the visible test. */
     taskDir: string;
     /** Stable identifier for reports. */
@@ -35,6 +42,7 @@ export interface GymTaskDescriptor {
 export declare const VISIBLE_TEST_FIXTURE = "visible.test.mjs";
 export declare const MUTATION_PATCH_FIXTURE = "bug.patch";
 export declare const TASK_DESCRIPTOR_FIXTURE = "task.json";
+export declare const HIDDEN_CASES_FIXTURE = "hidden.cases.json";
 /** Load and validate one checked-in task fixture directory. */
 export declare function loadGymTask(taskDir: string): Promise<GymTask>;
 export interface MaterializeGymTaskOptions {
