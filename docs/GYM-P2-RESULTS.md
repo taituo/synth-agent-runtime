@@ -74,3 +74,4 @@ failure is the injected fault.
 | # | fault | plain arm | durable arm | differentiated |
 |---|---|---|---|---|
 | 3 | timeout (hung request) | errored, 1 call, 20.0 s | passed, 6 calls, 27.9 s, 358 B, recovered | **yes** |
+| 4 | worker restart (SIGTERM) | **lost** — child killed, no result | **resumed**, passed, 4 calls, 22.0 s, 358 B, recovered | **yes** |
