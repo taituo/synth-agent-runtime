@@ -48,6 +48,7 @@ const PROOFS = [
   { name: "retry-hint", cwd: TEMPORAL, runner: "tsx", script: "retry-hint-live.ts", requires: "temporal" },
   { name: "quota-exhausted", cwd: TEMPORAL, runner: "tsx", script: "quota-exhausted-live.ts", requires: "temporal" },
   { name: "openrouter-429", cwd: TEMPORAL, runner: "tsx", script: "openrouter-429-driver.ts", requires: "OPENROUTER_API_KEY" },
+  { name: "session-supervisor", cwd: TEMPORAL, runner: "tsx", script: "supervisor/live.ts", requires: "tmux+separate-temporal:7244" },
 
   { name: "fault-rungs", cwd: KUBERNETES, runner: "tsx", script: "fault-rungs.ts", requires: "k8s+gvisor" },
   { name: "git-transport", cwd: KUBERNETES, runner: "tsx", script: "git-transport-live.ts", requires: "k8s+gvisor" },

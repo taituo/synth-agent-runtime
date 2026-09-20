@@ -51,6 +51,20 @@
   kept for structural checks). The scorable set is 8, all three measured models
   score 8/8 = 1.0, and the gate is documented as a smoke test, not a benchmark.
 
+### Durable session supervisor
+
+- **A Temporal workflow now supervises interactive agent sessions** instead of a
+  hand-re-armed 30-minute monitor that scraped tmux for `esc interrupt` and
+  could silently fail to deliver a message. One workflow per session, durable
+  check-in timers, signals for `redirect`/`pause`/`resume`/`stop`, escalation
+  when a session stays blocked past a threshold, and a per-session Temporal
+  Schedule that re-creates a supervisor if it dies. It runs on a **separate**
+  Temporal (default `:7244`), so restarting the system under test cannot take
+  its own supervisor down. Probes prefer a real state signal (herdr) and fall
+  back to a labelled tmux scrape; every poke is verified, never assumed. Live
+  proof: real tmux pane, escalation delivered, redirect delivered, and a worker
+  SIGKILL + restart the workflow survived. See `docs/SESSION-SUPERVISOR.md`.
+
 ### Artifact handoff by reference, with provenance and a flat history
 
 - **Artifacts now carry provenance and can be handed onward without bytes

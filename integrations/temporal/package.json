@@ -23,7 +23,9 @@
     "live:retry-hint": "tsx retry-hint-live.ts",
     "live:quota-exhausted": "tsx quota-exhausted-live.ts",
     "live:openrouter-429": "tsx openrouter-429-driver.ts",
-    "live:flaky-gateway": "tsx flaky-gateway.ts"
+    "live:flaky-gateway": "tsx flaky-gateway.ts",
+    "supervisor:worker": "tsx supervisor/worker-entry.ts",
+    "live:supervisor": "tsx supervisor/live.ts"
   },
   "dependencies": {
     "@temporalio/activity": "^1.13.0",
