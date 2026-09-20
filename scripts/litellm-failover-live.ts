@@ -1,17 +1,19 @@
 /**
- * LIVE proof: a LiteLLM profile behind ProfileRouterBackend, and failover.
+ * LIVE proof: a LiteLLM profile behind ProfileRouterBackend, with a CONTROL.
  *
- * Two real OpenAI-compatible HTTP endpoints are started: one healthy, one
- * returning 503 (the LiteLLM route is down). A single profile has two routes —
- * the failing LiteLLM endpoint first, the healthy one as fallback — and the
- * request goes through the real gateway and the real ProfileRouterBackend.
+ * Three real OpenAI-compatible HTTP endpoints are started: two healthy (each
+ * with a distinct `x-litellm-upstream` marker) and one returning 503. Two
+ * profiles are built:
+ *   - CONTROL: primary -> healthy-A, fallback -> healthy-B. A request must be
+ *     served by the PRIMARY, with no failure and no cooldown. This is what
+ *     proves the failover below is a real event, not the router always using
+ *     the fallback.
+ *   - FAILOVER: primary -> down, fallback -> healthy-B. A request must be
+ *     served by the FALLBACK, with the primary recording a failure and entering
+ *     cooldown.
  *
- * Asserts the discriminating things: the response is 200 and came from the
- * FALLBACK endpoint (an `x-litellm-upstream: healthy` marker), the primary
- * route recorded a failure and is in cooldown, and a second profile with only
- * the healthy route serves directly. This proves the router's failover and
- * cooldown; it does NOT prove a real LiteLLM instance answered. Set LITELLM_URL
- * (and LITELLM_MODEL) to also route a profile at a real LiteLLM.
+ * It does NOT prove a real LiteLLM instance answered. Set LITELLM_URL (and
+ * LITELLM_MODEL) to also route a profile at a real LiteLLM.
  *
  * Run: integrations/temporal/node_modules/.bin/tsx scripts/litellm-failover-live.ts
  */
@@ -36,8 +38,8 @@ function chatBody(model: string): string {
   });
 }
 
-function startEndpoint(behavior: "healthy" | "down"): Promise<{ server: Server; url: string }> {
-  const server = createServer((req, res) => {
+function startEndpoint(behavior: "healthy" | "down", marker: string): Promise<{ server: Server; url: string }> {
+  const server = createServer((_req, res) => {
     if (behavior === "down") {
       res.statusCode = 503;
       res.setHeader("content-type", "application/json");
@@ -46,7 +48,7 @@ function startEndpoint(behavior: "healthy" | "down"): Promise<{ server: Server; 
     }
     res.statusCode = 200;
     res.setHeader("content-type", "application/json");
-    res.setHeader("x-litellm-upstream", "healthy");
+    res.setHeader("x-litellm-upstream", marker);
     res.end(chatBody("cheap-model"));
   });
   return new Promise((resolve, reject) => {
@@ -60,31 +62,38 @@ function startEndpoint(behavior: "healthy" | "down"): Promise<{ server: Server; 
 }
 
 async function main(): Promise<void> {
-  const healthy = await startEndpoint("healthy");
-  const down = await startEndpoint("down");
+  const healthyA = await startEndpoint("healthy", "primary-ok");
+  const healthyB = await startEndpoint("healthy", "fallback-ok");
+  const down = await startEndpoint("down", "down");
   const realLiteLlmUrl = process.env.LITELLM_URL;
   const realLiteLlmModel = process.env.LITELLM_MODEL ?? "gpt-4o-mini";
 
-  // Distinct backend ids, or the second entry would overwrite the first in the
-  // backend map and both routes would hit the healthy endpoint.
-  const primary = litellmProfile({ id: "litellm/cheap-primary", baseUrl: down.url, model: "cheap-model", cooldownMs: 30_000 });
-  const fallback = litellmProfile({ id: "litellm/cheap-fallback", baseUrl: healthy.url, model: "cheap-model" });
-  const healthyOnly = litellmProfile({ id: "litellm/healthy", baseUrl: healthy.url, model: "cheap-model" });
+  const controlPrimary = litellmProfile({ id: "litellm/control-primary", baseUrl: healthyA.url, model: "cheap-model" });
+  const controlFallback = litellmProfile({ id: "litellm/control-fallback", baseUrl: healthyB.url, model: "cheap-model" });
+  const downPrimary = litellmProfile({ id: "litellm/cheap-down-primary", baseUrl: down.url, model: "cheap-model", cooldownMs: 30_000 });
+  const failoverFallback = litellmProfile({ id: "litellm/cheap-fallback", baseUrl: healthyB.url, model: "cheap-model" });
 
-  // Two routes in one profile: the down LiteLLM endpoint first, healthy second.
-  const failoverProfile: GatewayProfile = {
-    model: { id: "litellm/cheap", object: "model", owned_by: "synth-router", provider: "litellm", profile: "litellm/cheap" },
+  const controlProfile: GatewayProfile = {
+    model: { id: "litellm/control", object: "model", provider: "litellm", profile: "litellm/control" },
     routes: [
-      { id: "primary", backend: primary.backendName, model: "cheap-model", cooldownMs: 30_000 },
-      { id: "fallback", backend: fallback.backendName, model: "cheap-model" },
+      { id: "primary", backend: controlPrimary.backendName, model: "cheap-model" },
+      { id: "fallback", backend: controlFallback.backendName, model: "cheap-model" },
+    ],
+  };
+  const failoverProfile: GatewayProfile = {
+    model: { id: "litellm/cheap", object: "model", provider: "litellm", profile: "litellm/cheap" },
+    routes: [
+      { id: "primary", backend: downPrimary.backendName, model: "cheap-model", cooldownMs: 30_000 },
+      { id: "fallback", backend: failoverFallback.backendName, model: "cheap-model" },
     ],
   };
   const backends: Record<string, HttpGatewayBackend> = {
-    [primary.backendName]: primary.backend as HttpGatewayBackend,
-    [fallback.backendName]: fallback.backend as HttpGatewayBackend,
-    [healthyOnly.backendName]: healthyOnly.backend as HttpGatewayBackend,
+    [controlPrimary.backendName]: controlPrimary.backend as HttpGatewayBackend,
+    [controlFallback.backendName]: controlFallback.backend as HttpGatewayBackend,
+    [downPrimary.backendName]: downPrimary.backend as HttpGatewayBackend,
+    [failoverFallback.backendName]: failoverFallback.backend as HttpGatewayBackend,
   };
-  const profiles = [failoverProfile, healthyOnly.profile];
+  const profiles = [controlProfile, failoverProfile];
 
   if (realLiteLlmUrl) {
     const real = litellmProfile({ id: "litellm/real", baseUrl: realLiteLlmUrl, model: realLiteLlmModel, ...(process.env.LITELLM_API_KEY ? { apiKey: process.env.LITELLM_API_KEY } : {}) });
@@ -96,41 +105,55 @@ async function main(): Promise<void> {
   const gateway = createInferenceGateway({ backend: router, port: 0 });
   await gateway.listen();
 
-  const call = async (model: string): Promise<{ status: number; servedBy: string | null; body: string }> => {
+  const call = async (model: string): Promise<{ status: number; servedBy: string | null }> => {
     const response = await fetch(`${gateway.url}/v1/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ model, messages: [{ role: "user", content: "Reply OK" }], max_tokens: 4 }),
     });
-    return { status: response.status, servedBy: response.headers.get("x-litellm-upstream"), body: (await response.text()).slice(0, 200) };
+    return { status: response.status, servedBy: response.headers.get("x-litellm-upstream") };
   };
 
-  const failover = await call("litellm/cheap");
-  const direct = await call("litellm/healthy");
-  const real = realLiteLlmUrl ? await call("litellm/real") : undefined;
+  const control = await call("litellm/control");
+  const controlHealth = router.inspect().health["litellm/control:primary"];
+  const controlOk =
+    control.status === 200 &&
+    control.servedBy === "primary-ok" &&
+    (controlHealth?.failures ?? 0) === 0 &&
+    (controlHealth?.cooldownUntil ?? 0) === 0;
 
-  const health = router.inspect().health;
-  const primaryHealth = health["litellm/cheap:primary"];
+  const failover = await call("litellm/cheap");
+  const failoverHealth = router.inspect().health["litellm/cheap:primary"];
   const failoverOk =
     failover.status === 200 &&
-    failover.servedBy === "healthy" &&
-    (primaryHealth?.failures ?? 0) >= 1 &&
-    (primaryHealth?.cooldownUntil ?? 0) > Date.now();
-  const directOk = direct.status === 200 && direct.servedBy === "healthy";
+    failover.servedBy === "fallback-ok" &&
+    (failoverHealth?.failures ?? 0) >= 1 &&
+    (failoverHealth?.cooldownUntil ?? 0) > Date.now();
+
+  const real = realLiteLlmUrl ? await call("litellm/real") : undefined;
   const realOk = real === undefined ? null : real.status === 200;
-  const ok = failoverOk && directOk && (realOk ?? true);
+  const ok = controlOk && failoverOk && (realOk ?? true);
 
   console.log(
     JSON.stringify(
       {
         mode: realLiteLlmUrl ? "local + real litellm" : "local openai-compatible endpoints (set LITELLM_URL for a real LiteLLM)",
         gateway: gateway.url,
-        failover: { status: failover.status, servedBy: failover.servedBy, primaryFailures: primaryHealth?.failures ?? 0, primaryCooldownUntil: primaryHealth?.cooldownUntil ?? 0 },
-        routeHealth: Object.fromEntries(Object.entries(health).map(([key, value]) => [key, { failures: value.failures, successes: value.successes, lastStatus: value.lastStatus, cooldownUntil: value.cooldownUntil }])),
-        directProfile: { status: direct.status, servedBy: direct.servedBy },
-        realLiteLlm: real ? { status: real.status, body: real.body } : null,
+        control: {
+          status: control.status,
+          servedBy: control.servedBy,
+          primaryFailures: controlHealth?.failures ?? 0,
+          primaryCooldownUntil: controlHealth?.cooldownUntil ?? 0,
+        },
+        failover: {
+          status: failover.status,
+          servedBy: failover.servedBy,
+          primaryFailures: failoverHealth?.failures ?? 0,
+          primaryCooldownUntil: failoverHealth?.cooldownUntil ?? 0,
+        },
+        realLiteLlm: real ? { status: real.status } : null,
+        controlOk,
         failoverOk,
-        directOk,
         realOk,
         ok,
       },
@@ -140,8 +163,9 @@ async function main(): Promise<void> {
   );
 
   await gateway.close();
-  await new Promise<void>((resolve) => healthy.server.close(() => resolve()));
-  await new Promise<void>((resolve) => down.server.close(() => resolve()));
+  for (const endpoint of [healthyA, healthyB, down]) {
+    await new Promise<void>((resolve) => endpoint.server.close(() => resolve()));
+  }
   process.exit(ok ? 0 : 1);
 }
 
