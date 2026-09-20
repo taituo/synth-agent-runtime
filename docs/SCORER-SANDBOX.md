@@ -1,7 +1,25 @@
 # Confining the scoring worker: plan for an OS-level boundary
 
-Status: PLAN (not built). Written 2026-09-20 after review round six showed the
-current confinement over-claims.
+Status: **REQUIRED, NOT BUILT.** The scoring worker is NOT isolated from the
+host. Review round six enumerated six capability classes that escape the Node
+permission model; measured on this host by `scripts/scorer-isolation-probe.mjs`
+against the real worker (2026-09-20):
+
+| class | measured |
+|---|---|
+| `node:sqlite` | **blocked** (explicit deny, `1a55a4c`) |
+| TCP to temporal `:7243` | **REACHABLE** (`CONNECTED`) |
+| TCP to postgres `:5432` | **REACHABLE** (`CONNECTED`) |
+| unix socket bind outside the clone | **REACHABLE** (`BOUND`) |
+| `node:test` executes an outside file | **UNCONFIRMED** by this payload (reviewer proved it with another) |
+| `process.kill` the verifier (signal 0) | **REACHABLE** (`CAN-SIGNAL-VERIFIER`) |
+| `os.userInfo` host metadata | **REACHABLE** (`tiny:1000`) |
+
+So a gym run can reach local services (temporal, postgres) and mutate host state
+independent of the verdict. The permission model covers fs, `dlopen`, wasi, heap
+snapshots and process reports, which is why it looked like a boundary; it is a
+guardrail, not one. Denying builtins one at a time has no finite end, so an
+OS-level boundary is a **requirement**.
 
 ## The problem
 
@@ -33,6 +51,8 @@ Host: Linux 6.8.0, Node 22.20.0, no privileges.
 | `unshare -Urm` (user + mount) | `EPERM` writing `/proc/self/uid_map`; `apparmor_restrict_unprivileged_userns=1` |
 | `bwrap` / `podman` / `docker` | not installed |
 | Landlock | present: LSM list is `lockdown,capability,landlock,yama,apparmor`; kernel 6.8 supports it. No compiler (`gcc`/`cc`/`clang` absent) and no `landlock-restrict` binary; Node exposes no binding |
+| `systemd-run --user` (transient service) | filesystem sandboxing applies (`ProtectSystem=strict` denied a `/etc` write; `ReadWritePaths` honoured) but **`PrivateNetwork=yes` does not** — a TCP connect to `127.0.0.1:7243` still succeeded. Unprivileged network namespaces need a user namespace, which is AppArmor-blocked. Not sufficient alone |
+| k3s cluster | reachable: one Ready node (`kubectl get nodes`). A pod gives a real network + mount namespace; this is the available container boundary |
 | `kubectl` + gVisor rung | `kubectl` present; `SYNTH_EXECUTOR_IMAGE`/`SYNTH_RUNTIME_CLASS` are the repo's existing sandbox path |
 
 So a mount-namespace sandbox is not available locally without privileges, and a

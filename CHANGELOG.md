@@ -17,11 +17,15 @@
   is `errored`. The worker is confined by Node's permission model (filesystem
   reads limited to the scoring work dir) PLUS an explicit `node:sqlite` deny,
   because the model does not gate every builtin: `node:sqlite` reached and
-  mutated host SQLite state regardless of the allowlist. This confinement is a
-  GUARDRAIL, not a security boundary (Node documents it as such); real isolation
-  needs an OS sandbox, recorded in docs/KNOWN-OPEN.md. If no permission model
-  exists, or `node:sqlite` is present with no way to deny it, the scorer refuses
-  to run rather than fail open.
+  mutated host SQLite state regardless of the allowlist. The worker is **NOT
+  isolated from the host**: measured escapes also include TCP to temporal and
+  postgres, unix-socket binds outside the clone, `process.kill` against the
+  verifier, and `os.userInfo` host metadata (`scripts/scorer-isolation-probe.mjs`).
+  The permission model is a GUARDRAIL, not a security boundary. Real isolation
+  needs an OS-level boundary, which is required but not built — see
+  docs/SCORER-SANDBOX.md. If no permission model exists, or `node:sqlite` is
+  present with no way to deny it, the scorer refuses to run rather than fail
+  open.
 - `ScoreGymPatchOptions.hiddenTestPath`/`expectedHiddenTests` are replaced by
   `cases: GymCase[]`. The `he/decimal-option` task fixture ships
   `hidden.cases.json` in place of the in-clone TAP test. The `HIDDEN_HARNESS_*`

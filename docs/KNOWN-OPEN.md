@@ -23,13 +23,15 @@ removed only when the closing work lands.
 
 ## Gym scoring isolation
 
-- **The scoring worker's confinement is a guardrail, not a security boundary.**
-  The worker runs under Node's permission model (`--permission
-  --allow-fs-read=<work>`) plus an explicit `node:sqlite` deny, because the model
-  does NOT gate every builtin: `node:sqlite` reached and mutated host SQLite
-  state regardless of the allowlist (review round six). The deny closes that
-  channel and `FORGE 8` pins it, but Node documents the permission model as a
-  guardrail against accidental damage, not a boundary against in-process code.
+- **The scoring worker is NOT isolated from the host.** Node's permission model
+  is a guardrail, not a boundary: review round six enumerated six capability
+  classes that escape it. Measured by `scripts/scorer-isolation-probe.mjs`
+  against the real worker: `node:sqlite` is now blocked, but **TCP to temporal
+  `:7243` and postgres `:5432` connect, a unix socket can be bound outside the
+  clone, `process.kill` can signal the verifier, and `os.userInfo` returns host
+  metadata**. So a gym run can reach the very services we measure with and can
+  mutate host state independent of the verdict. Denying builtins one at a time
+  has no finite end.
   Closing: run the worker in an OS-level sandbox with only the clone
   bind-mounted and no host `/tmp` (a mount namespace, `unshare`/`bwrap`, or the
   existing gVisor rung), so confinement does not depend on a builtin allowlist.
