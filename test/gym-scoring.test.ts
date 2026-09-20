@@ -285,6 +285,46 @@ test("a quoted non-ASCII path under test/ is still tampering", async () => {
   }
 });
 
+test("a patch touching a tests/ directory (not just test/) is tampering", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "gym-"));
+  try {
+    const repo = await makeTaskRepo(parent);
+    await mkdir(join(repo, "tests"), { recursive: true });
+    await writeFile(join(repo, "tests/helper.js"), "// helper\n");
+    await git(repo, "add", "-A");
+    await git(repo, "commit", "-q", "-m", "add tests dir");
+    const hidden = await makeHiddenTest(parent);
+    const patch = await patchFor(repo, (dir) => writeFile(join(dir, "tests/helper.js"), "// tampered\n"));
+    const score = await scoreGymPatch({ patchText: patch, baseRepoDir: repo, hiddenTestPath: hidden });
+    assert.equal(score.outcome, "tampered", `got ${score.outcome}: ${score.detail ?? ""}`);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("a ./-prefixed protected path is tampering, not a different outcome", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "gym-"));
+  try {
+    const repo = await makeTaskRepo(parent);
+    const hidden = await makeHiddenTest(parent);
+    // git rejects `./` paths, but the spec says a protected-path touch is
+    // `tampered`, so it must be classified before apply can fail.
+    const patch = [
+      "diff --git a/./test/visible.test.mjs b/./test/visible.test.mjs",
+      "--- a/./test/visible.test.mjs",
+      "+++ b/./test/visible.test.mjs",
+      "@@ -1 +1 @@",
+      "-import test from \"node:test\";",
+      "+// tampered",
+      "",
+    ].join("\n");
+    const score = await scoreGymPatch({ patchText: patch, baseRepoDir: repo, hiddenTestPath: hidden });
+    assert.equal(score.outcome, "tampered", `got ${score.outcome}: ${score.detail ?? ""}`);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
 test("a patch that does not apply is errored", async () => {
   const parent = await mkdtemp(join(tmpdir(), "gym-"));
   try {

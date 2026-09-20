@@ -36,7 +36,8 @@ export interface GymScore {
 
 /** Paths an agent must not change: the visible test and the runner config. */
 export const PROTECTED_PATTERNS: readonly RegExp[] = [
-  /^test\//,
+  // Any test directory, not just a top-level `test/` (e.g. `tests/`).
+  /(^|\/)tests?\//,
   /(^|\/)package\.json$/,
   /(^|\/)package-lock\.json$/,
   /\.mocharc/,

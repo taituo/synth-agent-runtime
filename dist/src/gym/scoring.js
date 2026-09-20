@@ -24,7 +24,8 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 /** Paths an agent must not change: the visible test and the runner config. */
 export const PROTECTED_PATTERNS = [
-    /^test\//,
+    // Any test directory, not just a top-level `test/` (e.g. `tests/`).
+    /(^|\/)tests?\//,
     /(^|\/)package\.json$/,
     /(^|\/)package-lock\.json$/,
     /\.mocharc/,
