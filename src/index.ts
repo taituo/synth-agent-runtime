@@ -14,6 +14,7 @@ export * from "./swarm/findings.js";
 export * from "./swarm/tools.js";
 export * from "./swarm/checkpoint.js";
 export * from "./swarm/attempt.js";
+export * from "./swarm/turn.js";
 export * from "./gym/task.js";
 export * from "./gym/tools.js";
 export * from "./gym/harvest.js";

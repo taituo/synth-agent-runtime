@@ -77,6 +77,14 @@ export function createSwarmTools(runner, options) {
     };
 }
 export function buildSwarmSystemPrompt(tools = SWARM_TOOL_DEFINITIONS) {
+    const catalog = tools.map((tool) => {
+        const properties = (tool.parameters.properties ?? {});
+        const required = new Set((tool.parameters.required ?? []));
+        const params = Object.entries(properties)
+            .map(([name, spec]) => `${name}${required.has(name) ? "" : "?"}: ${spec.type ?? "any"}`)
+            .join(", ");
+        return `- ${tool.name}(${params}) — ${tool.description}`;
+    });
     return [
         "You are an operations analyst reading a stream of events from several sources.",
         "Find the signals that matter and report each as a finding with the event ids that evidence it.",
@@ -86,7 +94,12 @@ export function buildSwarmSystemPrompt(tools = SWARM_TOOL_DEFINITIONS) {
         '- "correlation": two or more sources that together point at one cause (cite BOTH sides).',
         "Report only real signals. Some events look significant but are expected or benign; reporting those is a false positive.",
         "Some events are genuinely ambiguous and can be read either way; you may report them, and they are judged separately.",
-        `Tools: ${tools.map((tool) => tool.name).join(", ")}. Call finish when done.`,
+        "The ONLY tools are:",
+        ...catalog,
+        "When you have reported every signal you can evidence, call `finish`.",
+        "Reply with ONLY a JSON object of the form:",
+        '{"tool_calls":[{"name":"<tool>","arguments":{...}}]}',
+        "You may request one or more tool calls per reply, in order. No prose, no markdown, no code fences.",
     ].join("\n");
 }
 export function buildSwarmUserPrompt(stream) {
