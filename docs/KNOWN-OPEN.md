@@ -53,10 +53,13 @@ removed only when the closing work lands.
   "20 requests/minute and 50/day" and per-million prices as facts with no
   artifact. Closing: a real-key run that records the observed headers and cost,
   or removal of the numbers.
-- **Rate-limit scope is unmeasured.** Whether limits are per-model, per-account
-  or per-provider is unknown, and it decides whether adaptive concurrency or
-  model spreading is the right lever. Closing: the measurement in
-  `spec-model-visibility.md` gap 3 / PLAN-next P0 (approved small model set).
+- **Rate-limit scope is still unmeasured above 80 concurrent.** The probe
+  (`npm run live:rate-limit-scope`) sustained 80 concurrent calls to one cheap
+  model with zero throttling and no rate-limit response headers, so the limit
+  was not reached and per-model vs shared is undecided; one account also makes
+  per-account and per-provider indistinguishable. Closing: a direct-upstream or
+  stack-router-event probe (the gateway masks upstream 429s) at a scale above
+  the observed ceiling, or provider documentation of the limit.
 - **Adaptive concurrency is not built.** `LaneScheduler` takes a fixed capacity
   that is a guess with one account. Closing: the AIMD controller in
   `spec-adaptive-scarcity.md`, only after the rate-limit-scope measurement.
