@@ -57,6 +57,25 @@ function heartbeatFor(): () => void {
   };
 }
 
+function currentAttempt(): number {
+  try {
+    return ActivityContext.current().info.attempt;
+  } catch {
+    return 1;
+  }
+}
+
+/**
+ * Effect ids must be unique per turn (and per activity attempt). The broker
+ * replays a committed/failed receipt by id; without the turn prefix a tool the
+ * model retries in a later turn (same name, same argument index) returned the
+ * FIRST turn's cached result, so a corrected `replace_in_file` never ran. Found
+ * live: the durable arm scored 0 B on a real model that had fixed the file.
+ */
+export function turnScopedEffectId(turn: number, attempt: number, id: string): string {
+  return `t${turn}:a${attempt}:${id}`;
+}
+
 /** The gym tool surface, mapped to execution-rung effects for the engine. */
 function gymToolSpecs(visibleTestPath: string): DurableToolSpec[] {
   return [
@@ -73,6 +92,35 @@ function gymToolSpecs(visibleTestPath: string): DurableToolSpec[] {
 
 function renderTranscriptEntry(entry: GymTranscriptMessage): string {
   return entry.role === "assistant" ? entry.content : `Observation from ${entry.name ?? "tool"}:\n${entry.content}`;
+}
+
+const decoder = new TextDecoder();
+
+/** Decode a rung byte output (Uint8Array or its JSON form) to text. */
+function bytesToText(output: unknown): string {
+  if (output instanceof Uint8Array) return decoder.decode(output);
+  if (typeof output === "string") return output;
+  if (output && typeof output === "object" && Array.isArray((output as { data?: unknown }).data)) {
+    return decoder.decode(Uint8Array.from((output as { data: number[] }).data));
+  }
+  return JSON.stringify(output ?? null);
+}
+
+/**
+ * Render a rung observation the way the plain arm's tools do, so both arms feed
+ * the model the same text. Without this the model sees `read_file` as a byte
+ * array and cannot read the source.
+ */
+export function renderGymObservation(name: string, ok: boolean, output: unknown, error?: string): string {
+  if (name === "read_file") return bytesToText(output);
+  if (name === "list_files") return Array.isArray(output) ? output.join("\n") : bytesToText(output);
+  if (name === "run_visible_test") {
+    const result = output as { exitCode?: number; stdout?: string; stderr?: string } | undefined;
+    const code = result?.exitCode ?? (ok ? 0 : 1);
+    return `${code === 0 ? "PASS" : "FAIL"} (exit ${code})\n${result?.stdout ?? ""}\n${result?.stderr ?? ""}`.trim();
+  }
+  if (ok) return "ok";
+  return error ?? "error";
 }
 
 function checkpointStore(): BlobGymCheckpointStore {
@@ -161,6 +209,12 @@ export function createGymActivities(): GymActivities {
       }
 
       const userText = [prepared.userPrompt, ...transcript.map(renderTranscriptEntry)].join("\n\n");
+      const baseToEffect = buildToEffect(prepared.tools);
+      const attemptNo = currentAttempt();
+      const toEffect: NonNullable<Parameters<typeof createGatewayAgentEngine>[0]["toEffect"]> = (call, ctx, index) => {
+        const effect = baseToEffect(call, ctx, index);
+        return effect ? { ...effect, id: turnScopedEffectId(input.turn, attemptNo, effect.id) } : undefined;
+      };
       const engine = createGatewayAgentEngine({
         baseUrl: attempt.gatewayBaseUrl,
         model: attempt.model,
@@ -169,7 +223,7 @@ export function createGymActivities(): GymActivities {
         systemPrompt: prepared.systemPrompt,
         buildUserMessage: () => userText,
         parseToolCalls: (content) => parseGymToolCalls(content) as never,
-        toEffect: buildToEffect(prepared.tools),
+        toEffect,
       });
       const context: AgentEngineContext = {
         agentId: attempt.agentId as never,
@@ -185,14 +239,15 @@ export function createGymActivities(): GymActivities {
       const outcome = (await engine.run([], context)) as GatewayTurnOutcome;
       const finished = outcome.toolCalls.some((call) => call.name === "finish");
       const patch = await harvestPatch(sandbox.runner, { repoDir: prepared.repoDir });
+      const rendered = outcome.observations.map((observation) => ({
+        name: observation.name,
+        ok: observation.ok,
+        content: renderGymObservation(observation.name, observation.ok, observation.output, observation.error),
+      }));
       const nextTranscript: GymTranscriptMessage[] = [
         ...transcript,
         { role: "assistant", content: outcome.content },
-        ...outcome.observations.map((observation) => ({
-          role: "tool" as const,
-          name: observation.name,
-          content: JSON.stringify(observation.output ?? observation.error ?? null),
-        })),
+        ...rendered.map((observation) => ({ role: "tool" as const, name: observation.name, content: observation.content })),
       ];
       await checkpoint.save(key, {
         turnIndex: input.turn + 1,
@@ -204,7 +259,7 @@ export function createGymActivities(): GymActivities {
       return {
         content: outcome.content,
         toolCalls: outcome.toolCalls,
-        observations: outcome.observations,
+        observations: rendered,
         finished,
         patch,
         requestedModel: outcome.requestedModel ?? attempt.model,

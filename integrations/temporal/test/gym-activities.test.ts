@@ -6,7 +6,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createGymActivities } from "../src/gym-activities.js";
+import { createGymActivities, renderGymObservation, turnScopedEffectId } from "../src/gym-activities.js";
 import type { GymPreparedAttempt } from "../src/gym-contracts.js";
 
 function input(overrides: Record<string, unknown> = {}) {
@@ -93,4 +93,26 @@ test("gymPrepareActivity passes the isolation gate for runner:sandbox (it fails 
       return true;
     },
   );
+});
+
+test("runTurn renders rung observations as text the model can read", () => {
+  // read_file returns bytes; the JSON form ("type":"Buffer"/index map) made the
+  // model unable to read the source (durable arm scored 0 B, found live).
+  assert.equal(renderGymObservation("read_file", true, new TextEncoder().encode("hello")), "hello");
+  assert.equal(renderGymObservation("read_file", true, { type: "Buffer", data: [104, 105] }), "hi");
+  assert.equal(renderGymObservation("read_file", true, { 0: 104, 1: 105 }), JSON.stringify({ 0: 104, 1: 105 }));
+  assert.equal(renderGymObservation("list_files", true, ["a.js", "b.js"]), "a.js\nb.js");
+  assert.equal(renderGymObservation("run_visible_test", true, { exitCode: 0, stdout: "ok", stderr: "" }), "PASS (exit 0)\nok");
+  assert.equal(renderGymObservation("run_visible_test", false, { exitCode: 1, stdout: "", stderr: "boom" }), "FAIL (exit 1)\n\nboom");
+  assert.equal(renderGymObservation("write_file", true, undefined), "ok");
+  assert.equal(renderGymObservation("replace_in_file", false, undefined, "old_text occurs 0 times"), "old_text occurs 0 times");
+});
+
+test("effect ids are turn-scoped so a repeated tool call is not replayed from a prior turn", () => {
+  // The broker replays a committed/failed receipt by effect id. Without the turn
+  // prefix, a replace_in_file the model retried in a later turn returned the
+  // first turn's cached failure (durable arm scored 0 B on a real model).
+  assert.notEqual(turnScopedEffectId(1, 1, "agent:replace_in_file:0"), turnScopedEffectId(2, 1, "agent:replace_in_file:0"));
+  assert.notEqual(turnScopedEffectId(2, 1, "agent:read_file:0"), turnScopedEffectId(2, 2, "agent:read_file:0"));
+  assert.equal(turnScopedEffectId(2, 1, "agent:read_file:0"), turnScopedEffectId(2, 1, "agent:read_file:0"));
 });
