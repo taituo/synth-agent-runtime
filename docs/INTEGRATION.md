@@ -5,9 +5,7 @@
 ```bash
 npm install
 npm test
-npm run distributed:contract
-npm run release-hardening:contract
-npm run process-crash:contract
+npm test --prefix integrations/temporal
 npm run responses:contract
 npm run integrations:syntax
 ```

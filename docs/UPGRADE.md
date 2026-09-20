@@ -43,9 +43,7 @@ If recovery needs to mutate an already-fenced agent in a distributed store, supp
 
 ```bash
 npm test
-npm run distributed:contract
-npm run release-hardening:contract
-npm run process-crash:contract
+npm test --prefix integrations/temporal
 npm run responses:contract
 npm run integrations:syntax
 npm run live:proof
