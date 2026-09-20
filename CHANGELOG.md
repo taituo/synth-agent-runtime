@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased — observability: one trace, native metrics, correlated logs
+
+- **Search attributes.** `durableAgentWorkflow` upserts opt-in
+  `DurableAgentState.searchAttributes` (plus `agentId`/`runId` at the start and
+  `outcome` at the end). `SYNTH_SEARCH_ATTRIBUTES` lists the names/types for
+  registration; a run is then queryable with
+  `listWorkflowExecutions({ query: "agentId = '…'" })`.
+- **Metrics.** The SDK's native Prometheus exporter serves workflow/activity
+  series; `integrations/temporal/src/metrics.ts` adds `synth_model_calls`,
+  `synth_model_latency`, `synth_effect_latency` (tagged kind/executor) and
+  `synth_activity_retries`.
+- **Tracing.** `@temporalio/interceptors-opentelemetry` (SDK plugin) spans the
+  client, workflow and activity; the runtime links against `@opentelemetry/api`
+  and `withSpan` (`src/observability/otel.ts`) adds `synth.engine.run`,
+  `synth.model.request`, `synth.effect.execute` and
+  `synth.sandbox.exec|writeFile|readFile`, so one trace reaches the pod.
+- **Logs.** The activity correlation fields now include `rung`; the `runTurn`
+  activity emits a correlated `synth.turn.start` line.
+- `docs/OBSERVABILITY.md` documents what is emitted, how to query/scrape it, and
+  the live proof `observability` (`integrations/temporal/observability-live.ts`).
+
 ## Unreleased — the legacy sweep: non-Temporal paths under Temporal
 
 - The interactive-session supervisor is now started by a Temporal **Schedule**

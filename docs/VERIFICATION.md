@@ -89,6 +89,7 @@ what the proof asserts.
 | `graph-continue-as-new` | temporal | one `WorkflowExecutionContinuedAsNew`, final run completes with exactly 1100 iterations and no duplicates |
 | `graph-cancel` | temporal | the loop counter stops (3 at cancel, 3 after return) |
 | `effect-receipt` | temporal | attempts `[1,2]`, attempt 2 seeds `write_file:0=committed`, the first effect executed exactly once |
+| `observability` | temporal+k8s+gvisor | `agentId`-filtered query returns the run and decodes its attributes; the Prometheus scrape has the native + custom series; the span chain `synth.sandbox.exec → synth.effect.execute → synth.engine.run → RunActivity → RunWorkflow → StartWorkflow`; a log line carries workflowId/runId/activityId/agentId/rung |
 | `sandbox-workspace` | k8s+gvisor | workspace effects execute in the Pod (executor id, pod bytes), host untouched |
 | `mixed-chain` | k8s+gvisor | executor/fidelity per effect across the rung boundary; committed replays, started stays uncertain |
 | `postgres-concurrency` | postgres | multi-worker concurrency + hard fencing (also run by `postgres-live.yml`) |

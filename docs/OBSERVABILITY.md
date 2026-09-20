@@ -1,54 +1,136 @@
 # Observability
 
-v0.4 adds a small transport-neutral trace abstraction in `src/observability/trace.ts`.
+Every run is observable end to end: one OpenTelemetry trace from the client
+through the workflow, activity, the shared `GatewayAgentEngine`, the execution
+rung and the sandbox pod; native Temporal metrics; and correlated structured
+logs. The runtime links against the OpenTelemetry **API** only (no exporter),
+so an application that registers a provider gets the spans for free.
 
-`TraceSink` receives events containing:
+Live proof: `integrations/temporal/observability-live.ts` (registered as
+`observability` in `scripts/live-proofs.mjs`; needs Temporal + the gVisor
+cluster). It asserts the search-attribute query, the metric series, the span
+chain and a correlated log line.
 
-```text
-traceId
-spanId
-parentSpanId
-name
-phase = start | event | end | error
-timestamp
-attributes
+## Search attributes
+
+The runtime knows these attributes (`SYNTH_SEARCH_ATTRIBUTES` in
+`integrations/temporal/src/contracts.ts`):
+
+| name | type | set from |
+|---|---|---|
+| `agentId` | Keyword | the workflow (always, when enabled) |
+| `runId` | Keyword | the workflow's own run id |
+| `taskSlug` | Keyword | caller |
+| `rung` | Keyword | caller (`synthetic` / `sandbox`) |
+| `isolation` | Keyword | caller (`unisolated` / `gvisor`) |
+| `provider` | Keyword | caller |
+| `model` | Keyword | caller |
+| `outcome` | Keyword | the workflow, at the end |
+
+Register them on a namespace once:
+
+```bash
+temporal operator search-attribute create --name agentId --type Keyword \
+  --name runId --type Keyword --name taskSlug --type Keyword --name rung --type Keyword \
+  --name isolation --type Keyword --name provider --type Keyword --name model --type Keyword \
+  --name outcome --type Keyword
 ```
 
-Reference sinks:
+They are opt-in: set `DurableAgentState.searchAttributes` and
+`durableAgentWorkflow` upserts them (plus `agentId`/`runId` at the start and
+`outcome` when it finishes). Callers that omit the field set no attributes, so
+a namespace that has not registered them is unaffected. Query a run:
 
-- `InMemoryTraceSink` for tests;
-- `JsonlTraceSink` for simple local capture.
-
-The next adapter should map these records to OpenTelemetry rather than inventing another telemetry backend.
-
-Recommended production correlation fields:
-
-```text
-project_id
-agent_id
-task_id
-turn_id
-attempt_id
-workspace_id
-provider
-account/route
-model
-request_id
-effect_id
-executor
-sandbox_id
-artifact_id
-token counts
-latency/cost
+```ts
+const { executions } = await client.connection.workflowService.listWorkflowExecutions({
+  namespace, query: "agentId = 'agt_123'",
+});
+// values live under execution.searchAttributes.indexedFields
 ```
 
-A useful invariant is that a user-visible agent answer can be traced backwards to the exact inference route, tool/effect sequence, workspace revision and promoted artifact.
+## Metrics
 
+Configure the native Prometheus exporter once, before any Temporal Core call:
 
-## v0.8 correlation fields
+```ts
+Runtime.install({
+  telemetryOptions: { metrics: { prometheus: { bindAddress: "127.0.0.1:9464", countersTotalSuffix: true, unitSuffix: true } } },
+});
+```
 
-Distributed traces should carry tenant, logical resource ID, lease owner, fencing token, command/effect ID, project revision, mailbox sequence, and event sequence. These make stale-writer and replay incidents diagnosable.
+`/metrics` then serves the SDK's workflow/activity counters and histograms
+(`temporal_workflow_*`, `temporal_activity_*`, latency, retry counts), plus the
+runtime's custom series (`integrations/temporal/src/metrics.ts`):
 
-## Temporal
+| metric | what |
+|---|---|
+| `synth_model_calls_total` | model calls per turn body run |
+| `synth_model_latency_milliseconds` | model call latency |
+| `synth_effect_latency_milliseconds` | execution-rung effect latency, tagged `kind`/`executor` |
+| `synth_activity_retries_total` | Temporal activity retries (attempt > 1) |
 
-The optional `integrations/temporal` package has its own correlation model in `src/correlation.ts` (`agentId`, `workflowId`, `activityType`, `attempt`, `retryReason`, ...), intentionally using the same field names as this document rather than a second scheme. `runTemporalWorker()` installs interceptors by default that attach these fields to every worker/workflow log line and emit a trace span per activity attempt to an optional `SynthTraceSink` (same shape as `TraceEvent`/`TraceSink` above — pass this runtime's own `InMemoryTraceSink`/`JsonlTraceSink` directly). See `docs/TEMPORAL.md` for details and a live verification script.
+For OTLP instead of Prometheus use `telemetryOptions.metrics.otel = { url }`
+(see the SDK `RuntimeOptions`); the series are the same.
+
+## Tracing
+
+```ts
+import { OpenTelemetryPlugin } from "@temporalio/interceptors-opentelemetry";
+import { BasicTracerProvider, SimpleSpanProcessor } from "@opentelemetry/sdk-trace-base";
+import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
+
+context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable()); // spans nest across awaits
+const resource = new Resource({ "service.name": "synth" });
+const provider = new BasicTracerProvider({ resource });
+provider.addSpanProcessor(new SimpleSpanProcessor(exporter)); // OTLP/Batch in production
+provider.register();
+
+const otel = new OpenTelemetryPlugin({ resource, spanProcessor: new SimpleSpanProcessor(exporter) });
+new Client({ connection, plugins: [otel] });                 // client -> workflow propagation
+await createTemporalWorker({ ..., plugins: [otel] });        // workflow + activity interceptors
+```
+
+The plugin spans the client start, the workflow and the activity. The runtime
+adds the inner spans (`src/observability/otel.ts`, no-op without a provider):
+
+```text
+StartWorkflow:durableAgentWorkflow
+└─ StartActivity:runTurn
+   └─ RunWorkflow:durableAgentWorkflow            (workflow side)
+      └─ RunActivity:runTurn
+         └─ synth.engine.run                       (GatewayAgentEngine)
+            ├─ synth.model.request                 (the one model HTTP call)
+            └─ synth.effect.execute                (ExecutionBroker)
+               └─ synth.sandbox.exec | writeFile | readFile   (KubectlSandboxBackend → the pod)
+```
+
+`withSpan` resolves the tracer per call, so the runtime can be loaded before the
+application registers its provider.
+
+## Logs
+
+The worker installs interceptors by default (`createSynthActivityInterceptors`,
+`workflow-interceptors.ts`). Every activity log line carries the correlation
+fields — `agentId`, `workflowId`, `runId`, `taskQueue`, `activityId`,
+`activityType`, `attempt`, `retryReason`, `messageKind`, `rung` — and workflow
+lifecycle lines (`synth.workflow.execute.start|end|error`, `synth.workflow.signal`,
+`synth.workflow.outcome`) carry `workflowId`/`runId`/`agentId`. The `runTurn`
+activity emits `synth.turn.start` with the rung. A sample correlated line:
+
+```json
+{"message":"synth.turn.start","meta":{"workflowId":"agent/agt_1","runId":"01a0…","activityId":"1","agentId":"agt_1","rung":"sandbox","attempt":1}}
+```
+
+## The proof asserts
+
+- `listWorkflowExecutions({ query: "agentId = '…'" })` returns the run, and
+  `agentId` / `rung` / `outcome` decode to the expected values;
+- the Prometheus scrape contains the native workflow/activity series and every
+  custom series;
+- the exported span chain is
+  `synth.sandbox.* → synth.effect.execute → synth.engine.run →
+  RunActivity:runTurn → StartActivity:runTurn → RunWorkflow → StartWorkflow`,
+  verified by parent span id;
+- a log line carries workflowId/runId/activityId/agentId/rung.
+
+Run it: `node scripts/live-proofs.mjs --only=observability`.
