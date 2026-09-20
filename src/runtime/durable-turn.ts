@@ -305,6 +305,7 @@ export function defaultEffectReplayMode(effect: Effect): EffectReplayMode {
   switch (effect.kind) {
     case "workspace.read":
     case "workspace.write":
+    case "workspace.replace":
     case "workspace.delete":
     case "workspace.symlink":
     case "workspace.list":

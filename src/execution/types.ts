@@ -4,6 +4,7 @@ import type { ExecutionPolicy } from "./resource-class.js";
 export type Effect =
   | { id: string; kind: "workspace.read"; path: string }
   | { id: string; kind: "workspace.write"; path: string; content: Uint8Array | string }
+  | { id: string; kind: "workspace.replace"; path: string; oldText: string; newText: string }
   | { id: string; kind: "workspace.delete"; path: string }
   | { id: string; kind: "workspace.symlink"; path: string; target: string }
   | { id: string; kind: "workspace.list"; path?: string }

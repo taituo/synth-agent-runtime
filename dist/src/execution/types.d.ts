@@ -11,6 +11,12 @@ export type Effect = {
     content: Uint8Array | string;
 } | {
     id: string;
+    kind: "workspace.replace";
+    path: string;
+    oldText: string;
+    newText: string;
+} | {
+    id: string;
     kind: "workspace.delete";
     path: string;
 } | {

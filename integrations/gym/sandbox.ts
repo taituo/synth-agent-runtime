@@ -28,7 +28,9 @@ import {
   MemoryWorkspace,
   SyntheticExecutor,
   brokerEffectRunner,
+  type Effect,
   type EffectContext,
+  type EffectResult,
   type KubernetesResourceClass,
   type SourceInfo,
   type TreeSource,
@@ -111,7 +113,39 @@ export interface BuildSandboxRunnerOptions {
 
 export interface SandboxRunner {
   runner: EffectRunner;
+  /**
+   * Execute an execution-rung effect through the broker (the same path the
+   * runtime turn's `executeEffect` uses). `process.exec` escalates to the pod.
+   */
+  executeEffect(effect: Effect, minFidelity?: number): Promise<EffectResult>;
   close(): Promise<void>;
+}
+
+/**
+ * Persistent runners, keyed by attempt (agent + checkpoint key). A turn-per-
+ * activity loop runs each turn in a fresh activity, so the MemoryWorkspace that
+ * holds the agent's edits must outlive one activity: this map is that
+ * continuity for the lifetime of the worker process. Across a worker restart the
+ * map is cold and the caller restores from the attempt checkpoint (see
+ * `gym-activities.ts`); a durable workspace store is the synth-1 dependency.
+ */
+const persistentRunners = new Map<string, SandboxRunner>();
+
+export function hasPersistentSandboxRunner(key: string): boolean {
+  return persistentRunners.has(key);
+}
+
+export function releasePersistentSandboxRunner(key: string): void {
+  persistentRunners.delete(key);
+}
+
+/** Reuse the runner for `key` if it exists, else build and cache it. */
+export async function getPersistentSandboxRunner(options: BuildSandboxRunnerOptions & { key: string }): Promise<SandboxRunner> {
+  const existing = persistentRunners.get(options.key);
+  if (existing) return existing;
+  const built = await buildSandboxRunner(options);
+  persistentRunners.set(options.key, built);
+  return built;
 }
 
 /** Construct the broker-backed runner. Throws if the image is missing. */
@@ -162,6 +196,7 @@ export async function buildSandboxRunner(options: BuildSandboxRunnerOptions): Pr
   };
   return {
     runner,
+    executeEffect: (effect, minFidelity) => broker.execute(effect, context, minFidelity),
     async close() {
       // Each broker exec is one-shot: the KubernetesExecutor destroys its Pod.
     },

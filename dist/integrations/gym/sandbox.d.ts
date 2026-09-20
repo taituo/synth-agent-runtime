@@ -1,4 +1,4 @@
-import { type EffectRunner } from "../../src/index.js";
+import { type Effect, type EffectResult, type EffectRunner } from "../../src/index.js";
 export interface BuildSandboxRunnerOptions {
     /** Materialized bugged checkout (its tracked tree is materialized into the Pod). */
     repoDir: string;
@@ -16,7 +16,18 @@ export interface BuildSandboxRunnerOptions {
 }
 export interface SandboxRunner {
     runner: EffectRunner;
+    /**
+     * Execute an execution-rung effect through the broker (the same path the
+     * runtime turn's `executeEffect` uses). `process.exec` escalates to the pod.
+     */
+    executeEffect(effect: Effect, minFidelity?: number): Promise<EffectResult>;
     close(): Promise<void>;
 }
+export declare function hasPersistentSandboxRunner(key: string): boolean;
+export declare function releasePersistentSandboxRunner(key: string): void;
+/** Reuse the runner for `key` if it exists, else build and cache it. */
+export declare function getPersistentSandboxRunner(options: BuildSandboxRunnerOptions & {
+    key: string;
+}): Promise<SandboxRunner>;
 /** Construct the broker-backed runner. Throws if the image is missing. */
 export declare function buildSandboxRunner(options: BuildSandboxRunnerOptions): Promise<SandboxRunner>;

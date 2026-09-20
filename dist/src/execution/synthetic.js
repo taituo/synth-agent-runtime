@@ -1,5 +1,6 @@
 import { normalizeRelative } from "../workspace/source.js";
 import { WORKSPACE_IS_DIRECTORY, WORKSPACE_NOT_DIRECTORY, WORKSPACE_NOT_FOUND, WORKSPACE_PATH_ESCAPES, ancestorPaths, escapesWorkspace, workspaceError, } from "./workspace-errors.js";
+const decoder = new TextDecoder();
 /** Lowest-fidelity executor: deterministic workspace operations only. */
 export class SyntheticExecutor {
     blobStore;
@@ -59,6 +60,25 @@ export class SyntheticExecutor {
                 if (existing?.kind === "directory")
                     return { ok: false, error: workspaceError(WORKSPACE_IS_DIRECTORY, p) };
                 workspace.write(p, effect.content);
+                return { ok: true };
+            }
+            case "workspace.replace": {
+                // A read-modify-write: the gym's `replace_in_file`. Exactly one match is
+                // required, so a stale or ambiguous edit is an error, not a silent write.
+                if (!p)
+                    return { ok: false, error: workspaceError(WORKSPACE_IS_DIRECTORY, p) };
+                const info = await workspace.stat(p);
+                if (!info)
+                    return { ok: false, error: workspaceError(WORKSPACE_NOT_FOUND, p) };
+                if (info.kind === "directory")
+                    return { ok: false, error: workspaceError(WORKSPACE_IS_DIRECTORY, p) };
+                const bytes = (await workspace.read(p)) ?? new Uint8Array();
+                const current = decoder.decode(bytes);
+                const occurrences = effect.oldText.length === 0 ? 0 : current.split(effect.oldText).length - 1;
+                if (occurrences !== 1) {
+                    return { ok: false, error: `old_text occurs ${occurrences} times in ${p}; it must occur exactly once` };
+                }
+                workspace.write(p, current.replace(effect.oldText, effect.newText));
                 return { ok: true };
             }
             case "workspace.delete": {

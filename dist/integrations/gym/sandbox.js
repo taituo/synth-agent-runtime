@@ -75,6 +75,30 @@ class LocalDirSource {
         yield* walk("");
     }
 }
+/**
+ * Persistent runners, keyed by attempt (agent + checkpoint key). A turn-per-
+ * activity loop runs each turn in a fresh activity, so the MemoryWorkspace that
+ * holds the agent's edits must outlive one activity: this map is that
+ * continuity for the lifetime of the worker process. Across a worker restart the
+ * map is cold and the caller restores from the attempt checkpoint (see
+ * `gym-activities.ts`); a durable workspace store is the synth-1 dependency.
+ */
+const persistentRunners = new Map();
+export function hasPersistentSandboxRunner(key) {
+    return persistentRunners.has(key);
+}
+export function releasePersistentSandboxRunner(key) {
+    persistentRunners.delete(key);
+}
+/** Reuse the runner for `key` if it exists, else build and cache it. */
+export async function getPersistentSandboxRunner(options) {
+    const existing = persistentRunners.get(options.key);
+    if (existing)
+        return existing;
+    const built = await buildSandboxRunner(options);
+    persistentRunners.set(options.key, built);
+    return built;
+}
 /** Construct the broker-backed runner. Throws if the image is missing. */
 export async function buildSandboxRunner(options) {
     if (!options.image)
@@ -127,6 +151,7 @@ export async function buildSandboxRunner(options) {
     };
     return {
         runner,
+        executeEffect: (effect, minFidelity) => broker.execute(effect, context, minFidelity),
         async close() {
             // Each broker exec is one-shot: the KubernetesExecutor destroys its Pod.
         },
