@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased — the legacy sweep: non-Temporal paths under Temporal
+
+- The interactive-session supervisor is now started by a Temporal **Schedule**
+  instead of by hand. `supervisor/supervise.ts` (`npm run supervisor:supervise`)
+  is the operator entry: it registers a session with `ensureSupervisorSchedule`
+  and starts it now with `triggerSupervisorSchedule`. The live proof
+  (`supervisor/live.ts`, `live-proofs.mjs` `session-supervisor`) now creates the
+  schedule, shows the schedule (not a hand `workflow.start`) started the
+  workflow, delivers a redirect signal to a real tmux pane, and shows the
+  schedule starts a fresh supervisor after the first ends. The
+  `KNOWN-OPEN` "Schedule helper is unwired" item is closed.
+- New `docs/EXECUTION-PATHS.md`: every loop/scheduler/driver in the repo marked
+  PRODUCTION (Temporal) / CONTROL (labelled, refused when scored) / DEV. The
+  gym's plain and `--dry-run` arms now both carry `role: "control"` and
+  `isolation` in their artifacts (they already refuse `runner:"local"` for
+  scored runs).
+- Removed the dead homegrown lease-renewal interval
+  (`src/control-plane/lease.ts` `withRenewingLease`, no caller): durable
+  wait/renewal is a Temporal timer, not a host `setInterval`.
+
 ## Unreleased — durable verification and no stale compiled tests
 
 - `scripts/live-proofs.mjs` now exits **2** when any selected proof skips

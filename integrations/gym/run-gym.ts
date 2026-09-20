@@ -44,8 +44,8 @@ interface ArmResult {
    * Which arm this is, named. `control` is the same task with no runtime (a
    * plain loop); `temporal` is the durable arm, driven by the `gymAttemptWorkflow`
    * Temporal workflow and its activity, never a local direct call. The dry-run
-   * arm omits it: it simulates durability with a local retry, so calling it
-   * `temporal` would be false.
+   * arm is `control` too: it simulates durability with a local retry, so it is
+   * never labelled `temporal`.
    */
   role?: "control" | "temporal";
   /** The boundary this arm actually ran in, carried from the workflow output. */
@@ -178,6 +178,10 @@ async function runDryArm(
   }
   return {
     arm,
+    // The dry run simulates durability with a local retry and drives the
+    // in-process `localEffectRunner`: a labelled control, never a Temporal arm.
+    role: "control",
+    isolation: "unisolated",
     outcome: record.outcome,
     requestedModel: record.requestedModel,
     servedModel: record.servedModel,

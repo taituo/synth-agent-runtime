@@ -71,40 +71,6 @@ export class InMemoryLeaseStore implements LeaseStore {
   }
 }
 
-/**
- * Runs work while holding a renewable fencing lease. Loss of the lease aborts
- * the supplied signal; callers must propagate that signal to external work.
- */
-export async function withRenewingLease<T>(options: {
-  store: LeaseStore;
-  resourceId: string;
-  ownerId: string;
-  ttlMs: number;
-  renewEveryMs?: number;
-  run(lease: LeaseRecord, signal: AbortSignal): Promise<T>;
-}): Promise<T> {
-  const claim = await options.store.acquireLease(options.resourceId, options.ownerId, options.ttlMs);
-  if (!claim.acquired) throw new Error(`LEASE_HELD:${options.resourceId}:${claim.lease.ownerId}`);
-  const controller = new AbortController();
-  const intervalMs = Math.max(1, Math.min(options.renewEveryMs ?? Math.max(1, Math.floor(options.ttlMs / 3)), Math.max(1, Math.floor(options.ttlMs / 2))));
-  let renewing = false;
-  const timer = setInterval(() => {
-    if (renewing || controller.signal.aborted) return;
-    renewing = true;
-    void options.store.renewLease(options.resourceId, options.ownerId, claim.lease.fencingToken, options.ttlMs)
-      .then((renewed) => { if (!renewed) controller.abort(new Error(`LEASE_LOST:${options.resourceId}`)); })
-      .catch((error) => controller.abort(error))
-      .finally(() => { renewing = false; });
-  }, intervalMs);
-  timer.unref?.();
-  try {
-    return await options.run(claim.lease, controller.signal);
-  } finally {
-    clearInterval(timer);
-    await options.store.releaseLease(options.resourceId, options.ownerId, claim.lease.fencingToken).catch(() => false);
-  }
-}
-
 function validateTtl(ttlMs: number): void {
   if (!Number.isFinite(ttlMs) || ttlMs <= 0) throw new Error(`Invalid lease ttl: ${ttlMs}`);
 }

@@ -14,6 +14,7 @@ archived under [`history/`](history/); unwired modules are in
 
 - [`HARNESS.md`](HARNESS.md) — **current**: the Temporal graph harness (loops, fan-out/join, branches, child workflows).
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — **current**: the runtime layers (Temporal, the turn body, the execution rung, the Postgres stores).
+- [`EXECUTION-PATHS.md`](EXECUTION-PATHS.md) — **current**: every loop/scheduler/driver marked PRODUCTION (Temporal) / CONTROL (labelled) / DEV.
 - [`DISTRIBUTED.md`](DISTRIBUTED.md) — **current**: the Postgres store contracts (leases/fencing, effect receipts, mailbox, world CAS, shared inference state).
 - [`MAP.md`](MAP.md) — plain-language map of the layers and what each is not.
 - [`SPEC.md`](SPEC.md) — *historical*: v0.2 design spec; superseded by `ARCHITECTURE.md` and the root `README.md`.
