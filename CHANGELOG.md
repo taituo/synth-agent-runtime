@@ -161,6 +161,21 @@
   sees the expected outputs or a secret) and a task without cases is `errored`,
   not silently handed to the harness scorer. Main's `scoreGymPatch` remains a
   library for its own hidden-test-file tests; it is not the runner's decision.
+- **The isolated worker is now filesystem-sandboxed against the ground truth.**
+  Review round six ONE-b: the worker ran unsandboxed on the same host, so agent
+  code located the verifier's cwd through `/proc/<ppid>/cwd`, read the held-out
+  vectors (`hidden.cases.json`) off disk, and passed every case with the bug
+  untouched. The worker now runs under Node's permission model with `fs` reads
+  allowed only inside the scoring work directory (the clone and the worker
+  script); the fixture tree and `/proc/<ppid>` are outside it and denied, and if
+  the runtime has no permission model the scorer refuses to run rather than fail
+  open. Permanent regressions: `FORGE 5` (read the vectors by absolute path) and
+  `FORGE 5b` (the exact `/proc/<ppid>/cwd` route against the real `he/hex-decode`
+  vectors), plus a regression that a case-less task is `errored` rather than
+  falling back to the exit-code scorer (round-six FOUR). The signing-oracle
+  forgery against the same-process harness scorer (`ONE-a`) is covered at the
+  gym-decision level by `FORGE 4`; that library remains the reason it is not the
+  decision.
 
 ### Model visibility: never guess which model answered
 

@@ -79,6 +79,32 @@ for await (const line of rl) {
 async function git(cwd, ...args) {
     await execFileAsync("git", args, { cwd, maxBuffer: 32 * 1024 * 1024 });
 }
+let cachedPermissionFlag;
+/**
+ * The worker is untrusted agent code, so it must not be able to read the
+ * held-out vectors off the filesystem (review round six, ONE-b: the worker read
+ * `hidden.cases.json` via `/proc/<ppid>/cwd`). Node's permission model confines
+ * filesystem reads to the scoring work directory, which contains only the clone
+ * and the worker script; the fixture tree and `/proc/<ppid>` are outside it and
+ * are denied. If the runtime has no permission model we refuse to run rather
+ * than fail open.
+ */
+async function permissionArgs(node, workDir) {
+    const allow = `--allow-fs-read=${workDir}`;
+    if (cachedPermissionFlag)
+        return [cachedPermissionFlag, allow];
+    for (const flag of ["--permission", "--experimental-permission"]) {
+        try {
+            await execFileAsync(node, [flag, allow, "-e", "0"], { timeout: 10_000 });
+            cachedPermissionFlag = flag;
+            return [flag, allow];
+        }
+        catch {
+            // flag unsupported; try the next spelling
+        }
+    }
+    throw new Error("Node has no permission model; refusing to run the scoring worker unsandboxed");
+}
 /**
  * Apply the agent's patch to a fresh clone and decide `passed`/`failed`/
  * `tampered`/`timed-out`/`errored` from the verifier's own comparison.
@@ -117,7 +143,9 @@ export async function isolatedScoreGymPatch(options) {
             if (/^GYM_HIDDEN/i.test(key))
                 delete env[key];
         delete env.NODE_TEST_CONTEXT;
-        child = spawn(options.nodeBin ?? process.execPath, [workerPath], {
+        const node = options.nodeBin ?? process.execPath;
+        const sandbox = await permissionArgs(node, work);
+        child = spawn(node, [...sandbox, workerPath], {
             cwd: clone,
             env,
             stdio: ["pipe", "pipe", "pipe", "pipe"],

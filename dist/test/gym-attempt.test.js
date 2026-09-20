@@ -161,6 +161,24 @@ test("a thrown scorer is errored, not a crash", async () => {
         await rm(parent, { recursive: true, force: true });
     }
 });
+test("a task with no held-out cases is errored, never scored by a fallback", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "gym-attempt-"));
+    try {
+        const task = await makeMaterialized(parent);
+        const noCases = { ...task, task: { ...task.task, hiddenCases: undefined } };
+        // The round-six FOUR payload: an early exit would score `passed` under the
+        // legacy exit-code scorer. The runner must refuse rather than fall back.
+        const turn = createScriptedGymTurn([
+            { toolCalls: [{ name: "write_file", arguments: { path: "lib.mjs", content: `process.exit(0);\n${BUGGY}` } }, { name: "finish" }] },
+        ]);
+        const record = await runGymAttempt({ task: noCases, runner: localEffectRunner(task.repoDir), turn, nodeBin: process.execPath });
+        assert.notEqual(record.outcome, "passed", "a case-less task must not fall back to the exit-code scorer");
+        assert.equal(record.outcome, "errored");
+    }
+    finally {
+        await rm(parent, { recursive: true, force: true });
+    }
+});
 test("held-out cases that cannot be evaluated are errored, not a crash", async () => {
     const parent = await mkdtemp(join(tmpdir(), "gym-attempt-"));
     try {

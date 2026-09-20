@@ -12,14 +12,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { isolatedScoreGymPatch, runGymAttempt, localEffectRunner, type GymCase, type GymTask, type GymTurn, type MaterializedGymTask } from "../src/index.js";
 
 const execFileAsync = promisify(execFile);
-const NONCE_PROBE = "/tmp/opencode/gym-nonce-probe.txt";
 
 const BUGGY = "export function addOne(n) {\n  return n;\n}\n";
 const FIXED = "export function addOne(n) {\n  return n + 1;\n}\n";
@@ -73,25 +72,23 @@ test("FORGE 1: reading GYM_HIDDEN_NONCE and printing a completion marker does no
   const parent = await mkdtemp(join(tmpdir(), "gym-iso-"));
   const previous = process.env.GYM_HIDDEN_NONCE;
   process.env.GYM_HIDDEN_NONCE = "super-secret-nonce";
-  await unlink(NONCE_PROBE).catch(() => undefined);
   try {
     const repo = await makeRepo(parent);
-    // The round-four payload, adapted: read the nonce, print the genuine marker,
-    // exit 0 — while leaving the bug unfixed.
+    // The round-four payload: read the nonce the scorer handed the child and use
+    // it to forge a completion. Here the payload reports the nonce it sees; the
+    // verifier's comparison exposes that the child never received it.
     const forge = [
-      'import { writeFileSync } from "node:fs";',
-      `writeFileSync(${JSON.stringify(NONCE_PROBE)}, String(process.env.GYM_HIDDEN_NONCE));`,
       "const __n = process.env.GYM_HIDDEN_NONCE;",
-      'if (__n) { console.log("GYM_HIDDEN_COMPLETE " + __n); process.exit(0); }',
-      BUGGY,
+      'export function addOne() { return __n === undefined ? "no-nonce" : "nonce:" + __n; }',
     ].join("\n");
     const patch = await patchFor(repo, forge);
-    const score = await isolatedScoreGymPatch({ patchText: patch, baseRepoDir: repo, cases: CASES });
+    const score = await isolatedScoreGymPatch({ patchText: patch, baseRepoDir: repo, cases: CASES, nodeBin: process.execPath });
     assert.notEqual(score.outcome, "passed", "the nonce forge must not pass");
     assert.notEqual(score.outcome, "tampered");
-
-    // And the nonce was not in the child's environment at all.
-    assert.equal(await readFile(NONCE_PROBE, "utf8"), "undefined");
+    assert.ok(
+      score.cases.some((entry) => /no-nonce/.test(entry.error ?? "")),
+      "the child's environment must not carry GYM_HIDDEN_NONCE",
+    );
   } finally {
     if (previous === undefined) delete process.env.GYM_HIDDEN_NONCE;
     else process.env.GYM_HIDDEN_NONCE = previous;
@@ -145,6 +142,67 @@ test("FORGE 4: importing a scorer harness and self-completing does not pass", as
     const patch = await patchFor(repo, forge);
     const score = await isolatedScoreGymPatch({ patchText: patch, baseRepoDir: repo, cases: CASES });
     assert.notEqual(score.outcome, "passed", "harness self-completion must not pass under isolation");
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("FORGE 5: reading the held-out vectors off the filesystem does not pass", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "gym-iso-"));
+  try {
+    const repo = await makeRepo(parent);
+    // The verifier's ground truth on disk, at a path the worker's filesystem can
+    // reach in an unsandboxed run. This is review round six ONE-b: agent code
+    // hardcodes the answers it read rather than fixing the bug.
+    const truthPath = join(parent, "hidden.cases.json");
+    await writeFile(truthPath, JSON.stringify({ cases: CASES }));
+    const attack = [
+      'import { readFileSync } from "node:fs";',
+      `const truth = JSON.parse(readFileSync(${JSON.stringify(truthPath)}, "utf8"));`,
+      'const table = new Map(truth.cases.map((c) => [JSON.stringify(c.args), c.expect]));',
+      "export function addOne(n) {",
+      "  const key = JSON.stringify([n]);",
+      "  return table.has(key) ? table.get(key) : n;",
+      "}",
+    ].join("\n");
+    const patch = await patchFor(repo, attack);
+    const score = await isolatedScoreGymPatch({ patchText: patch, baseRepoDir: repo, cases: CASES, nodeBin: process.execPath });
+    assert.notEqual(score.outcome, "passed", "reading the held-out vectors off disk must not pass");
+    assert.ok(score.cases.some((entry) => !entry.ok), "the attack must be caught on at least one case");
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("FORGE 5b: reading the real he vectors via /proc/<ppid>/cwd does not pass", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "gym-iso-"));
+  try {
+    const fixture = join(process.cwd(), "test/fixtures/gym-tasks/he/hex-decode/hidden.cases.json");
+    const cases = (JSON.parse(await readFile(fixture, "utf8")) as { cases: GymCase[] }).cases;
+    const repo = join(parent, "repo");
+    await mkdir(repo, { recursive: true });
+    // Exactly review round six ONE-b: locate the verifier's cwd through /proc and
+    // read the committed held-out vectors rather than fixing the bug.
+    const attack = [
+      'import { readFileSync, readlinkSync } from "node:fs";',
+      'import { join } from "node:path";',
+      "const cwd = readlinkSync(`/proc/${process.ppid}/cwd`);",
+      'const truth = JSON.parse(readFileSync(join(cwd, "test/fixtures/gym-tasks/he/hex-decode/hidden.cases.json"), "utf8"));',
+      "const table = new Map(truth.cases.map((c) => [JSON.stringify(c.args), c.expect]));",
+      "export function decode(text) {",
+      "  const key = JSON.stringify([text]);",
+      "  return table.has(key) ? table.get(key) : text;",
+      "}",
+    ].join("\n");
+    await writeFile(join(repo, "he.js"), attack);
+    await git(repo, "init", "-q");
+    await git(repo, "config", "user.email", "t@example.com");
+    await git(repo, "config", "user.name", "tester");
+    await git(repo, "add", "-A");
+    await git(repo, "commit", "-q", "-m", "attack");
+    const score = await isolatedScoreGymPatch({ patchText: "", baseRepoDir: repo, cases, nodeBin: process.execPath });
+    assert.notEqual(score.outcome, "passed", "the /proc cwd read must not reach the held-out vectors");
+    assert.ok(score.cases.some((entry) => !entry.ok), "at least one case must fail against the cheating module");
   } finally {
     await rm(parent, { recursive: true, force: true });
   }
