@@ -18,12 +18,22 @@ export interface EffectContext {
   executionPolicy?: ExecutionPolicy;
 }
 
+/** A reference to an out-of-band artifact; the content lives in the blob store. */
+export interface ArtifactRef {
+  digest: string;
+  size: number;
+  mediaType: string;
+  mechanism: string;
+}
+
 export interface EffectResult {
   ok: boolean;
   output?: unknown;
   error?: string;
   executor?: string;
   fidelity?: number;
+  /** Artifact produced by this effect, addressed by digest (never inline bytes). */
+  artifact?: ArtifactRef;
 }
 
 export interface Executor {

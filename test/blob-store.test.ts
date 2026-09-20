@@ -45,7 +45,8 @@ test("identical content stored twice yields one object", async () => {
     const first = await store.put(bytes);
     const second = await store.put(bytes);
     assert.equal(first.digest, second.digest);
-    assert.equal((await listFiles(root)).length, 1, "exactly one object on disk");
+    const objects = (await listFiles(root)).filter((path) => /[a-f0-9]{64}$/.test(path));
+    assert.equal(objects.length, 1, "exactly one content object on disk");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -59,6 +60,21 @@ test("a corrupted object is detected on read", async () => {
     const [path] = await listFiles(root);
     await writeFile(path!, "tampered");
     await assert.rejects(store.get(ref.digest), /BLOB_CORRUPT/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("stat round-trips the media type, and a receipt digest resolves to the bytes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "blob-"));
+  try {
+    const store = new FileSystemBlobStore(root);
+    const bytes = new TextEncoder().encode("report");
+    const ref = await store.put(bytes, { mediaType: "text/markdown" });
+    assert.equal((await store.stat(ref.digest))?.mediaType, "text/markdown", "mediaType survives put/stat");
+    // A receipt carries the reference; the digest resolves to exactly the bytes.
+    const receipt = { ok: true, artifact: ref };
+    assert.ok(Buffer.from(await store.get(receipt.artifact.digest)).equals(Buffer.from(bytes)));
   } finally {
     await rm(root, { recursive: true, force: true });
   }

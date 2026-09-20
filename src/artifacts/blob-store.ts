@@ -52,6 +52,10 @@ export class FileSystemBlobStore implements BlobStore {
     return join(this.root, hex.slice(0, 2), hex);
   }
 
+  #metaPath(digest: string): string {
+    return `${this.#path(digest)}.meta.json`;
+  }
+
   async put(bytes: Uint8Array, options: PutBlobOptions = {}): Promise<BlobRef> {
     const digest = digestOf(bytes);
     const path = this.#path(digest);
@@ -68,6 +72,9 @@ export class FileSystemBlobStore implements BlobStore {
     const temp = `${path}.${randomUUID()}.tmp`;
     await writeFile(temp, bytes);
     await rename(temp, path);
+    // Sidecar metadata keeps `stat`'s mediaType stable without polluting the
+    // content-addressed object itself (the object is exactly the bytes).
+    await writeFile(this.#metaPath(digest), JSON.stringify({ mediaType })).catch(() => undefined);
     return { digest, size: bytes.byteLength, mediaType, mechanism: "blob-store" };
   }
 
@@ -82,7 +89,14 @@ export class FileSystemBlobStore implements BlobStore {
     const normalized = normalizeDigest(digest);
     try {
       const info = await stat(this.#path(normalized));
-      return { digest: normalized, size: info.size, mediaType: "application/octet-stream", mechanism: "blob-store" };
+      let mediaType = "application/octet-stream";
+      try {
+        const meta = JSON.parse(await readFile(this.#metaPath(normalized), "utf8")) as { mediaType?: unknown };
+        if (typeof meta.mediaType === "string") mediaType = meta.mediaType;
+      } catch {
+        // no sidecar: default media type
+      }
+      return { digest: normalized, size: info.size, mediaType, mechanism: "blob-store" };
     } catch {
       return undefined;
     }
