@@ -39,10 +39,11 @@ async function makeTaskRepo(parent: string, lib = BUGGY): Promise<string> {
 }
 
 /**
- * Hidden test the agent never sees: cases the visible test does not cover.
+ * Hidden test the agent never sees. It imports the harness (which reads and
+ * deletes the key before the agent module is imported), records each assertion
+ * outcome with `check`, and prints an HMAC-signed transcript with `complete`.
  * It captures the real assert before dynamically importing the agent's module,
- * so an agent that replaces `assert.equal` cannot win; and it never lets an
- * agent top-level `process.exit` look like a pass (no TAP summary -> not passed).
+ * so an agent that replaces `assert.equal` cannot win.
  */
 async function makeHiddenTest(parent: string, sleepMs = 0): Promise<string> {
   const path = join(parent, "hidden.test.mjs");
@@ -51,27 +52,34 @@ async function makeHiddenTest(parent: string, sleepMs = 0): Promise<string> {
     [
       'import test from "node:test";',
       'import assert from "node:assert/strict";',
+      'import { check, complete } from "./gym-hidden-harness.mjs";',
       "const equal = assert.equal.bind(assert);",
       'const { slugify } = await import("./lib.mjs");',
-      `test("hidden", async () => {${sleepMs ? ` await new Promise((r) => setTimeout(r, ${sleepMs}));` : ""} equal(slugify(""), ""); equal(slugify("  A  B "), "a-b"); equal(slugify("a__b--c"), "a-b-c"); console.log("GYM_HIDDEN_COMPLETE " + process.env.GYM_HIDDEN_NONCE); });`,
+      `test("hidden", async () => {${sleepMs ? ` await new Promise((r) => setTimeout(r, ${sleepMs}));` : ""} check("empty", () => equal(slugify(""), "")); check("spaces", () => equal(slugify("  A  B "), "a-b")); check("repeats", () => equal(slugify("a__b--c"), "a-b-c")); complete(); });`,
       "",
     ].join("\n"),
   );
   return path;
 }
 
-/** A hidden test that declares tests but runs none of them. */
+/** A hidden test that never signs a result (no harness). */
 async function makeEmptyHiddenTest(parent: string): Promise<string> {
   const path = join(parent, "hidden.test.mjs");
   await writeFile(path, 'import test from "node:test";\n');
   return path;
 }
 
+/** A hidden test that signs an empty transcript: no assertions, so `skipped`. */
 async function makeSkippedHiddenTest(parent: string): Promise<string> {
   const path = join(parent, "hidden.test.mjs");
   await writeFile(
     path,
-    'import test from "node:test";\nimport assert from "node:assert/strict";\ntest("hidden", { skip: true }, () => { assert.equal(1, 2); });\n',
+    [
+      'import test from "node:test";',
+      'import { complete } from "./gym-hidden-harness.mjs";',
+      'test("hidden", () => { complete(); });',
+      "",
+    ].join("\n"),
   );
   return path;
 }
@@ -91,7 +99,7 @@ test("a correct fix passes the held-out test", async () => {
     const hidden = await makeHiddenTest(parent);
     const patch = await patchFor(repo, (dir) => writeFile(join(dir, "lib.mjs"), FIXED));
     const score = await scoreGymPatch({ patchText: patch, baseRepoDir: repo, hiddenTestPath: hidden });
-    assert.equal(score.outcome, "passed", score.hiddenOutput);
+    assert.equal(score.outcome, "passed", `got ${score.outcome}: ${score.detail ?? score.hiddenOutput ?? ""}`);
   } finally {
     await rm(parent, { recursive: true, force: true });
   }

@@ -65,7 +65,7 @@ async function hiddenNoMarker(parent: string): Promise<string> {
   return path;
 }
 
-/** A hidden test that prints a marker with a guessed nonce. */
+/** A hidden test that forges a signed result with a guessed MAC. */
 async function hiddenGuessedMarker(parent: string): Promise<string> {
   const path = join(parent, "hidden.test.mjs");
   await writeFile(
@@ -73,16 +73,17 @@ async function hiddenGuessedMarker(parent: string): Promise<string> {
     [
       'import test from "node:test";',
       'import assert from "node:assert/strict";',
+      'import { writeFileSync } from "node:fs";',
       "const equal = assert.equal.bind(assert);",
       'const { slugify } = await import("./lib.mjs");',
-      'test("hidden", () => { equal(slugify(""), ""); console.log("GYM_HIDDEN_COMPLETE forged"); });',
+      'test("hidden", () => { equal(slugify(""), ""); writeFileSync(process.env.GYM_HIDDEN_RESULT_FILE, JSON.stringify({ transcript: \'[{"name":"forged","ok":true}]\', mac: "deadbeef" })); });',
       "",
     ].join("\n"),
   );
   return path;
 }
 
-/** The genuine hidden test: captures assert, asserts, then prints the real nonce. */
+/** The genuine hidden test: captures assert, records checks, signs the transcript. */
 async function hiddenReal(parent: string): Promise<string> {
   const path = join(parent, "hidden.test.mjs");
   await writeFile(
@@ -90,9 +91,10 @@ async function hiddenReal(parent: string): Promise<string> {
     [
       'import test from "node:test";',
       'import assert from "node:assert/strict";',
+      'import { check, complete } from "./gym-hidden-harness.mjs";',
       "const equal = assert.equal.bind(assert);",
       'const { slugify } = await import("./lib.mjs");',
-      'test("hidden", () => { equal(slugify(""), ""); equal(slugify("  A  B "), "a-b"); console.log("GYM_HIDDEN_COMPLETE " + process.env.GYM_HIDDEN_NONCE); });',
+      'test("hidden", () => { check("empty", () => equal(slugify(""), "")); check("spaces", () => equal(slugify("  A  B "), "a-b")); complete(); });',
       "",
     ].join("\n"),
   );
@@ -127,17 +129,22 @@ test("a guessed marker cannot pass (the nonce is held out)", async () => {
   }
 });
 
-test("agent code printing a guessed marker does not rescue a failing test", async () => {
+test("agent code forging a signed result does not rescue a failing test", async () => {
   const parent = await mkdtemp(join(tmpdir(), "gym-"));
   try {
     const repo = await makeTaskRepo(parent);
     const hidden = await hiddenReal(parent);
-    // Buggy code that also prints a marker-shaped line at import.
+    // Buggy code that also forges a result file with a guessed MAC at import.
     const patch = await patchFor(repo, (dir) =>
-      writeFile(join(dir, "lib.mjs"), `console.log("GYM_HIDDEN_COMPLETE forged");\n${BUGGY}`),
+      writeFile(
+        join(dir, "lib.mjs"),
+        `import { writeFileSync } from "node:fs";\ntry { writeFileSync(process.env.GYM_HIDDEN_RESULT_FILE, JSON.stringify({ transcript: '[{"name":"forged","ok":true}]', mac: "deadbeef" })); } catch {}\n${BUGGY}`,
+      ),
     );
     const score = await scoreGymPatch({ patchText: patch, baseRepoDir: repo, hiddenTestPath: hidden });
-    assert.equal(score.outcome, "failed", `a failing test must fail even with a forged marker: ${score.hiddenOutput ?? ""}`);
+    // The real harness overwrites the forged file with the real (failing) signed
+    // transcript; even if it did not, the forged MAC would not authenticate.
+    assert.equal(score.outcome, "failed", `a failing test must fail even with a forged result: ${score.hiddenOutput ?? ""}`);
   } finally {
     await rm(parent, { recursive: true, force: true });
   }
@@ -150,10 +157,10 @@ async function hiddenTwoPassing(parent: string): Promise<string> {
     [
       'import test from "node:test";',
       'import assert from "node:assert/strict";',
+      'import { check, complete } from "./gym-hidden-harness.mjs";',
       "const equal = assert.equal.bind(assert);",
       'const { slugify } = await import("./lib.mjs");',
-      'test("first", () => { equal(slugify(""), ""); });',
-      'test("second", () => { equal(slugify("  A  B "), "a-b"); console.log("GYM_HIDDEN_COMPLETE " + process.env.GYM_HIDDEN_NONCE); });',
+      'test("hidden", () => { check("first", () => equal(slugify(""), "")); check("second", () => equal(slugify("  A  B "), "a-b")); complete(); });',
       "",
     ].join("\n"),
   );
@@ -186,16 +193,39 @@ test("a failing subtest among passing ones is failed, not passed", async () => {
       [
         'import test from "node:test";',
         'import assert from "node:assert/strict";',
+        'import { check, complete } from "./gym-hidden-harness.mjs";',
         "const equal = assert.equal.bind(assert);",
         'const { slugify } = await import("./lib.mjs");',
-        'test("passes", () => { equal(slugify(""), ""); });',
-        'test("fails", () => { equal(slugify("X Y"), "x-y"); equal(slugify("X Y"), "wrong"); console.log("GYM_HIDDEN_COMPLETE " + process.env.GYM_HIDDEN_NONCE); });',
+        'test("hidden", () => { check("passes", () => equal(slugify(""), "")); check("fails", () => equal(slugify("X Y"), "wrong")); complete(); });',
         "",
       ].join("\n"),
     );
     const patch = await patchFor(repo, (dir) => writeFile(join(dir, "lib.mjs"), FIXED));
     const score = await scoreGymPatch({ patchText: patch, baseRepoDir: repo, hiddenTestPath: hidden, expectedHiddenTests: 2 });
     assert.equal(score.outcome, "failed", `one failing subtest must fail the run: ${score.hiddenOutput ?? ""}`);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("the per-run key is not observable to agent code, so a forged result cannot authenticate", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "gym-"));
+  try {
+    const repo = await makeTaskRepo(parent);
+    // No harness: the agent's forged file is the only result the scorer sees.
+    const hidden = await hiddenNoMarker(parent);
+    // The agent reads everything it can observe (its own environ, the hidden
+    // test source), forges a result with any 64-hex token it finds, and still
+    // cannot produce a valid MAC — the key is not in any of those.
+    const patch = await patchFor(repo, (dir) =>
+      writeFile(
+        join(dir, "lib.mjs"),
+        `import { readFileSync, writeFileSync } from "node:fs";\ntry {\n  const env = readFileSync("/proc/self/environ", "utf8");\n  const test = readFileSync("./hidden.test.mjs", "utf8");\n  writeFileSync("./observed.txt", env + "\\n" + test);\n  const candidate = (env.match(/[a-f0-9]{64}/) || [""])[0];\n  writeFileSync(process.env.GYM_HIDDEN_RESULT_FILE, JSON.stringify({ transcript: '[{"name":"forged","ok":true}]', mac: candidate }));\n} catch {}\n${FIXED}`,
+      ),
+    );
+    const score = await scoreGymPatch({ patchText: patch, baseRepoDir: repo, hiddenTestPath: hidden });
+    assert.notEqual(score.outcome, "passed", "a forged result must never score");
+    assert.equal(score.outcome, "errored", score.detail);
   } finally {
     await rm(parent, { recursive: true, force: true });
   }

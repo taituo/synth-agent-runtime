@@ -9,14 +9,19 @@
  *
  * `passed` is NOT "node exited 0". The hidden test imports the agent-controlled
  * module, so agent code runs before the assertions; a top-level `process.exit(0)`
- * or an `assert` monkeypatch would otherwise score green. `passed` therefore
- * requires a real TAP summary with the expected number of passing tests and zero
- * failures, the assert module is frozen before agent code loads, and a run that
- * executes no tests is `skipped`/`errored`, never `passed`.
+ * or an `assert` monkeypatch would otherwise score green. The pass decision is
+ * an HMAC over the transcript of assertion outcomes, signed by the hidden
+ * harness with a per-run key and verified by the scorer. The key is delivered
+ * in a file the harness reads and DELETES before the agent's module is imported,
+ * so the agent cannot observe it — not in env (which survives in
+ * /proc/self/environ), not in argv, and not on disk when it runs. A forged or
+ * absent result therefore cannot authenticate. The assert module is also frozen
+ * before agent code loads, and a run that executes no assertions is
+ * `skipped`/`errored`, never `passed`.
  */
 import { execFile, spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { copyFile, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createHmac, randomBytes } from "node:crypto";
+import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -177,6 +182,48 @@ const FREEZE_ASSERT_PRELOAD = [
   "",
 ].join("\n");
 
+/** Where the harness is written inside the clone. */
+export const HIDDEN_HARNESS_DEST = "gym-hidden-harness.mjs";
+
+/**
+ * The held-out test imports this harness. It reads the per-run key from a file
+ * and DELETES the file and the env pointer BEFORE the agent's module is
+ * imported, so the key is not observable to the agent (not in env — which
+ * survives in /proc/self/environ — not in argv, and not on disk by the time the
+ * agent runs). `complete()` prints an HMAC over the transcript of assertion
+ * outcomes; the scorer, which holds the key, verifies it. A forged transcript
+ * needs the key, which the agent cannot obtain, so the marker is no longer
+ * forgeable by reading the process it runs in.
+ */
+export const HIDDEN_HARNESS_SOURCE = [
+  'import { createHmac } from "node:crypto";',
+  'import { readFileSync, unlinkSync, writeFileSync } from "node:fs";',
+  "",
+  "const keyPath = process.env.GYM_HIDDEN_KEY_FILE;",
+  'let key = "";',
+  "if (keyPath) {",
+  '  try { key = readFileSync(keyPath, "utf8").trim(); } catch { /* absent */ }',
+  "  try { unlinkSync(keyPath); } catch { /* already gone */ }",
+  "  delete process.env.GYM_HIDDEN_KEY_FILE;",
+  "}",
+  "const resultPath = process.env.GYM_HIDDEN_RESULT_FILE;",
+  "const results = [];",
+  "export function check(name, fn) {",
+  "  try { fn(); results.push({ name, ok: true }); }",
+  '  catch (error) { results.push({ name, ok: false, error: String((error && error.message) || error).slice(0, 200) }); }',
+  "}",
+  "export function complete() {",
+  "  const transcript = JSON.stringify(results);",
+  '  const mac = createHmac("sha256", key).update(transcript).digest("hex");',
+  "  // Written to a file, not stdout: node --test escapes console output as TAP.",
+  '  if (resultPath) writeFileSync(resultPath, JSON.stringify({ transcript, mac }));',
+  "  // Also fail the test process so a direct run's exit code reflects the checks.",
+  "  const failed = results.filter((entry) => !entry.ok).map((entry) => entry.name);",
+  '  if (failed.length > 0) throw new Error("GYM_HIDDEN_CHECKS_FAILED:" + failed.join(","));',
+  "}",
+  "",
+].join("\n");
+
 interface RunResult {
   code: number | null;
   signal: NodeJS.Signals | null;
@@ -192,7 +239,8 @@ function runNodeTest(
   cwd: string,
   timeoutMs: number,
   preloadUrl: string,
-  nonce: string,
+  keyFile: string,
+  resultFile: string,
 ): Promise<RunResult> {
   return new Promise((resolve) => {
     // If the scorer itself runs under `node --test`, the child would inherit
@@ -200,7 +248,8 @@ function runNodeTest(
     // silently skip every file and exit 0. Strip it so the held-out test really runs.
     const env = { ...process.env };
     delete env.NODE_TEST_CONTEXT;
-    env.GYM_HIDDEN_NONCE = nonce;
+    env.GYM_HIDDEN_KEY_FILE = keyFile;
+    env.GYM_HIDDEN_RESULT_FILE = resultFile;
     if (preloadUrl) env.NODE_OPTIONS = [env.NODE_OPTIONS, `--import ${preloadUrl}`].filter(Boolean).join(" ");
     const child = spawn(node, args, { cwd, env });
     let stdout = "";
@@ -226,7 +275,11 @@ function runNodeTest(
 export async function scoreGymPatch(options: ScoreGymPatchOptions): Promise<GymScore> {
   const hiddenDest = options.hiddenTestDest ?? "hidden.test.mjs";
   const touchedPaths = await patchTargetPaths(options.patchText);
-  const hitsHidden = touchedPaths.some((path) => path === hiddenDest || path.startsWith(`${hiddenDest}/`));
+  const hitsHidden = touchedPaths.some(
+    (path) =>
+      path === hiddenDest || path.startsWith(`${hiddenDest}/`) ||
+      path === HIDDEN_HARNESS_DEST || path.startsWith(`${HIDDEN_HARNESS_DEST}/`),
+  );
   if (isTampering(touchedPaths) || hitsHidden) {
     return { outcome: "tampered", touchedPaths, detail: `patch touches protected paths: ${touchedPaths.join(", ")}` };
   }
@@ -247,6 +300,14 @@ export async function scoreGymPatch(options: ScoreGymPatchOptions): Promise<GymS
 
     const preloadPath = join(work, "freeze-assert.mjs");
     await writeFile(preloadPath, FREEZE_ASSERT_PRELOAD);
+    // The key lives in `work/`, outside the clone. The harness reads it and
+    // deletes the file before importing the agent's module, so the agent cannot
+    // observe it (not env, not argv, not on disk when it runs).
+    const key = randomBytes(32).toString("hex");
+    const keyFile = join(work, "hidden-key");
+    await writeFile(keyFile, key, { mode: 0o600 });
+    const resultFile = join(work, "hidden-result.json");
+    await writeFile(join(clone, HIDDEN_HARNESS_DEST), HIDDEN_HARNESS_SOURCE);
     try {
       await copyFile(options.hiddenTestPath, join(clone, hiddenDest));
     } catch (error) {
@@ -254,27 +315,40 @@ export async function scoreGymPatch(options: ScoreGymPatchOptions): Promise<GymS
     }
 
     const expected = options.expectedHiddenTests ?? 1;
-    // `node --test` marks a test file that calls process.exit(0) before running
-    // its assertions as a passing subtest (exit 0 is all the parent sees). The
-    // hidden test prints a per-run nonce only after its assertions, and a pass
-    // requires that marker, so an early exit cannot masquerade as success.
-    const nonce = randomUUID();
-    const completion = `GYM_HIDDEN_COMPLETE ${nonce}`;
     const node = options.nodeBin ?? process.execPath;
-    const run = await runNodeTest(node, ["--test", hiddenDest], clone, options.timeoutMs ?? 60_000, pathToFileURL(preloadPath).href, nonce);
+    const run = await runNodeTest(node, ["--test", hiddenDest], clone, options.timeoutMs ?? 60_000, pathToFileURL(preloadPath).href, keyFile, resultFile);
     const output = `${run.stdout}\n${run.stderr}`;
     if (run.timedOut) return { outcome: "timed-out", touchedPaths, hiddenOutput: output };
 
     const tap = parseTap(output);
-    const completed = output.includes(completion);
     if (tap.fail > 0 || /not ok /.test(output)) return { outcome: "failed", touchedPaths, hiddenOutput: output };
     if (run.code !== 0) return { outcome: "errored", touchedPaths, detail: `hidden test process exited ${run.code} with no failing assertion`, hiddenOutput: output };
-    if (completed && tap.pass >= expected) return { outcome: "passed", touchedPaths, hiddenOutput: output };
-    if (!tap.present && !completed) {
-      return { outcome: "errored", touchedPaths, detail: `hidden test produced no TAP summary and no completion marker (exit ${run.code}); an early exit is not a pass`, hiddenOutput: output };
+
+    // The pass decision comes from the HMAC-signed transcript in the result
+    // file, verified with the key the agent cannot read. A forged or absent
+    // result is not a pass.
+    let signed: { transcript?: unknown; mac?: unknown } | undefined;
+    try {
+      signed = JSON.parse(await readFile(resultFile, "utf8")) as { transcript?: unknown; mac?: unknown };
+    } catch {
+      signed = undefined;
     }
-    if (tap.pass === 0) return { outcome: "skipped", touchedPaths, detail: "hidden test executed no assertions", hiddenOutput: output };
-    return { outcome: "errored", touchedPaths, detail: `hidden test did not complete its assertions (pass ${tap.pass} of ${expected} expected)`, hiddenOutput: output };
+    if (!signed || typeof signed.transcript !== "string" || typeof signed.mac !== "string") {
+      return { outcome: "errored", touchedPaths, detail: "no signed result: the completion marker was absent or forged", hiddenOutput: output };
+    }
+    if (createHmac("sha256", key).update(signed.transcript).digest("hex") !== signed.mac) {
+      return { outcome: "errored", touchedPaths, detail: "signed result did not authenticate: forged", hiddenOutput: output };
+    }
+    let cases: Array<{ ok?: unknown }>;
+    try {
+      cases = JSON.parse(signed.transcript) as Array<{ ok?: unknown }>;
+    } catch {
+      return { outcome: "errored", touchedPaths, detail: "signed transcript was not parseable", hiddenOutput: output };
+    }
+    if (cases.length === 0) return { outcome: "skipped", touchedPaths, detail: "the hidden test recorded no assertions", hiddenOutput: output };
+    if (cases.some((entry) => entry.ok !== true)) return { outcome: "failed", touchedPaths, hiddenOutput: output };
+    if (cases.length < expected) return { outcome: "errored", touchedPaths, detail: `hidden test recorded ${cases.length} of ${expected} expected assertions`, hiddenOutput: output };
+    return { outcome: "passed", touchedPaths, hiddenOutput: output };
   } finally {
     await rm(work, { recursive: true, force: true });
   }

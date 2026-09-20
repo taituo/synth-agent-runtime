@@ -42,4 +42,17 @@ export interface ScoreGymPatchOptions {
     timeoutMs?: number;
     nodeBin?: string;
 }
+/** Where the harness is written inside the clone. */
+export declare const HIDDEN_HARNESS_DEST = "gym-hidden-harness.mjs";
+/**
+ * The held-out test imports this harness. It reads the per-run key from a file
+ * and DELETES the file and the env pointer BEFORE the agent's module is
+ * imported, so the key is not observable to the agent (not in env — which
+ * survives in /proc/self/environ — not in argv, and not on disk by the time the
+ * agent runs). `complete()` prints an HMAC over the transcript of assertion
+ * outcomes; the scorer, which holds the key, verifies it. A forged transcript
+ * needs the key, which the agent cannot obtain, so the marker is no longer
+ * forgeable by reading the process it runs in.
+ */
+export declare const HIDDEN_HARNESS_SOURCE: string;
 export declare function scoreGymPatch(options: ScoreGymPatchOptions): Promise<GymScore>;

@@ -42,6 +42,18 @@
   high-band admissions, not merely eventually — and the sustained-contention
   share; failing-first with the reservation removed.
 
+### Gym: the completion marker is cryptographic, not held out
+
+- `passed` was decided by a per-run nonce the hidden test printed, which agent
+  code could read from the process it runs in (`/proc/self/environ` survives
+  deleting an env var). The decision is now an HMAC over the transcript of
+  assertion outcomes: the hidden harness reads a per-run key from a file and
+  DELETES the file and its env pointer before the agent's module is imported,
+  then signs the transcript; the scorer, which holds the key, verifies it. The
+  key is not observable in env, argv or on disk when the agent runs, so a forged
+  or absent result cannot authenticate. Tested with an agent that reads its own
+  environ and the hidden test source and forges a result — it scores `errored`.
+
 ### Gym scoring: score the diff, against a test the agent never sees
 
 - **The gym's first half is the scoring pipeline** (`src/gym/scoring.ts`): apply

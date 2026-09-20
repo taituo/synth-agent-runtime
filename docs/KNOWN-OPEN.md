@@ -28,15 +28,6 @@ removed only when the closing work lands.
   "no repository credentials in the sandbox" posture. Closing: scoped/one-shot
   credentials or a broker that performs the push outside the sandbox.
 
-## Gym
-
-- **The completion-marker protocol is held out, not cryptographically closed.**
-  `passed` requires a per-run nonce the hidden test prints; a patch that knew the
-  magic string and read `GYM_HIDDEN_NONCE` could forge it. The defense is that
-  the agent never sees the scorer or the hidden test, so it cannot know the
-  protocol; a guessed marker is `errored` (`test/gym-vacuity.test.ts`). Closing
-  it fully would need the assertions to run outside the agent's process.
-
 ## Measurement
 
 - **The corpus is a smoke test, not a benchmark.** The four `cve-*` items were

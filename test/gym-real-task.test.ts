@@ -18,7 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { scoreGymPatch } from "../src/index.js";
+import { HIDDEN_HARNESS_DEST, HIDDEN_HARNESS_SOURCE, scoreGymPatch } from "../src/index.js";
 import { FixtureUnavailableError, REAL_REPOS, repoCachePath, type RealRepo } from "./fixtures/real-repos.js";
 
 const execFileAsync = promisify(execFile);
@@ -106,10 +106,12 @@ async function runTest(repo: string, relativePath: string): Promise<number> {
 async function runHidden(repo: string, hiddenSource: string): Promise<number> {
   const dest = join(repo, "hidden.test.mjs");
   await copyFile(hiddenSource, dest);
+  await writeFile(join(repo, HIDDEN_HARNESS_DEST), HIDDEN_HARNESS_SOURCE);
   try {
     return await runTest(repo, "hidden.test.mjs");
   } finally {
     await rm(dest, { force: true });
+    await rm(join(repo, HIDDEN_HARNESS_DEST), { force: true });
   }
 }
 
