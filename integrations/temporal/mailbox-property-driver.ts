@@ -148,9 +148,17 @@ async function runFuzzedStream(seed: number, size: number, pattern: ArrivalPatte
     await handle.signal(sendMessage, { id: event.id, role: "human", text: event.text, createdAt: Date.now(), kind: event.kind });
   }
 
-  const distinct = () => firstConsumptionOrder(batchesByAgent.get(agentId) ?? []).length;
+  // Wait for the workflow to actually DRAIN, not merely for every id to have
+  // appeared once. A `waiting` turn defers without consuming, and the stub
+  // records the deferred batch, so `distinct()` can reach the input size while
+  // the deferred batch is still queued. Querying then would read `waiting` with
+  // a non-empty mailbox and call a correct deferral a drain failure.
+  const isDrained = async (): Promise<boolean> => {
+    const s = await handle.query(getAgentState).catch(() => undefined);
+    return s?.mailbox.length === 0 && s?.status === "idle";
+  };
   const deadline = Date.now() + Math.max(40_000, size * 800);
-  while (distinct() < stream.length && Date.now() < deadline) await sleep(100);
+  while (!(await isDrained()) && Date.now() < deadline) await sleep(100);
   await sleep(200);
   const state = await handle.query(getAgentState).catch(() => undefined);
   await handle.signal(cancelAgent).catch(() => undefined);
