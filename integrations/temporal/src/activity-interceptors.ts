@@ -5,8 +5,10 @@ import {
   compactCorrelation,
   messageKindFromArgs,
   rootCauseMessage,
+  rungFromArgs,
   type SynthCorrelation,
 } from "./correlation.js";
+import { recordActivityRetry } from "./metrics.js";
 
 /**
  * Structural mirror of `src/observability/trace.ts` `TraceEvent`/`TraceSink`.
@@ -111,10 +113,13 @@ export function createSynthActivityInterceptors(
 
     const inbound: NonNullable<ActivityInterceptors["inbound"]> = {
       async execute(input, next) {
+        if (info.attempt > 1) recordActivityRetry({ activityType: info.activityType, activityId: info.activityId });
         const agentId = agentIdFromArgs(input.args);
         if (agentId) correlation.agentId = agentId;
         const messageKind = messageKindFromArgs(input.args);
         if (messageKind) correlation.messageKind = messageKind;
+        const rung = rungFromArgs(input.args);
+        if (rung) correlation.rung = rung;
         const spanName = `temporal.activity.${info.activityType}`;
         const spanId = `${info.activityType}-${randomUUID()}`;
         const startedAt = Date.now();

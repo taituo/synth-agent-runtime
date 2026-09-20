@@ -33,7 +33,34 @@ export interface DurableAgentState {
    * by the triage callers, which get the classification turn.
    */
   turnConfig?: DurableTurnConfig;
+  /**
+   * Optional Temporal search attributes to upsert for this workflow, so a run
+   * is queryable by them (`agentId`, `runId` and the final `outcome` are added
+   * by the workflow itself). Opt-in because the attribute names must be
+   * registered on the namespace first (see `SYNTH_SEARCH_ATTRIBUTES` and
+   * `docs/OBSERVABILITY.md`); callers that omit it set no custom attributes.
+   */
+  searchAttributes?: Record<string, string>;
 }
+
+/**
+ * The search attributes the runtime knows how to emit, with their Temporal
+ * types, for registration on a namespace:
+ *
+ *   temporal operator search-attribute create --name agentId --type Keyword ...
+ *
+ * `runId` and `workflowId` are already queryable as built-in execution fields.
+ */
+export const SYNTH_SEARCH_ATTRIBUTES: ReadonlyArray<{ name: string; type: "Keyword" | "Text" | "Int" | "Double" | "Bool" | "Datetime" }> = [
+  { name: "agentId", type: "Keyword" },
+  { name: "runId", type: "Keyword" },
+  { name: "taskSlug", type: "Keyword" },
+  { name: "rung", type: "Keyword" },
+  { name: "isolation", type: "Keyword" },
+  { name: "provider", type: "Keyword" },
+  { name: "model", type: "Keyword" },
+  { name: "outcome", type: "Keyword" },
+];
 
 /** A tool the durable turn may run, mapped to exactly one execution-rung effect. */
 export interface DurableToolSpec {

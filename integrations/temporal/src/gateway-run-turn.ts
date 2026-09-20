@@ -11,6 +11,7 @@ import { SyntheticExecutor } from "../../../src/execution/synthetic.js";
 import type { Effect, EffectResult } from "../../../src/execution/types.js";
 import type { RuntimeStateStore } from "../../../src/durability/runtime-state.js";
 import type { AgentEngine, AgentEngineContext } from "../../../src/runtime/agent-engine.js";
+import { recordEffect, recordModelCall } from "./metrics.js";
 import { TemporalActivityStateStore } from "./receipt-store.js";
 import {
   GatewayHttpError,
@@ -242,7 +243,21 @@ function buildTurnContext(input: RunTurnInput, model: string, rung?: TurnRung): 
     emitTool: () => {},
     // Without a configured rung the shared engine refuses every tool call
     // ("No effect executor configured") instead of silently dropping it.
-    ...(rung ? { executeEffect: (effect: Effect, minFidelity?: number) => rung.executeEffect(effect, minFidelity) } : {}),
+    ...(rung
+      ? {
+          executeEffect: async (effect: Effect, minFidelity?: number) => {
+            const started = Date.now();
+            try {
+              const result = await rung.executeEffect(effect, minFidelity);
+              recordEffect(Date.now() - started, { kind: effect.kind, executor: result.executor ?? "unknown" });
+              return result;
+            } catch (error) {
+              recordEffect(Date.now() - started, { kind: effect.kind, executor: "error" });
+              throw error;
+            }
+          },
+        }
+      : {}),
   };
 }
 
@@ -407,6 +422,13 @@ export function createGatewayRunTurn(options: GatewayRunTurnOptions): AgentActiv
   return async function runTurn(input: RunTurnInput): Promise<RunTurnResult> {
     const config = input.config ?? {};
     const toolMode = (config.tools?.length ?? 0) > 0;
+    try {
+      // Correlated log line: the activity interceptor adds workflowId/runId/
+      // activityId/agentId/rung to the activity logger's attributes.
+      ActivityContext.current().log.info("synth.turn.start", { messages: input.messages.length, toolMode, rung: config.rung?.kind ?? "none" });
+    } catch {
+      // Not inside an activity (unit tests): no logger to write to.
+    }
 
     // Effect receipts are durable Temporal activity state by default: a retry
     // re-reads the previous attempt's committed receipts from the heartbeat
@@ -451,11 +473,15 @@ export function createGatewayRunTurn(options: GatewayRunTurnOptions): AgentActiv
 
     const messages = input.messages.map(toAgentMessage);
     let outcome: GatewayTurnOutcome;
+    const modelStartedAt = Date.now();
     try {
       outcome = (await engine.run(messages, buildTurnContext(input, options.model, rung))) as GatewayTurnOutcome;
     } catch (error) {
       throw toTemporalError(error);
     } finally {
+      // One turn body run == one model call; count and time it with the model
+      // and rung tags (the SDK's own metrics cover workflow/activity latency).
+      recordModelCall(Date.now() - modelStartedAt, { model: options.model, rung: config.rung?.kind ?? "none" });
       // A persistent rung (sandbox pod) outlives the turn: checkpoint it so the
       // cache reflects the pod, but do not destroy it. A one-shot rung closes.
       if (rung?.persistent) await rung.checkpoint?.().catch(() => {});

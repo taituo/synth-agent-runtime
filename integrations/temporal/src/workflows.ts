@@ -5,6 +5,8 @@ import {
   log,
   proxyActivities,
   setHandler,
+  upsertSearchAttributes,
+  workflowInfo,
 } from "@temporalio/workflow";
 import type { AgentActivities, DurableAgentState } from "./contracts.js";
 import {
@@ -53,6 +55,19 @@ export async function durableAgentWorkflow(initial: DurableAgentState): Promise<
     wake = true;
   });
   setHandler(getAgentState, () => clone(state));
+
+  // Opt-in search attributes: make the run queryable by agent/task/rung/etc.
+  // `runId` is the workflow's own; the caller supplies the rest. Emitted only
+  // when configured, so a namespace without the attributes registered is
+  // unaffected.
+  const configuredAttributes = initial.searchAttributes;
+  if (configuredAttributes) {
+    // The legacy `SearchAttributes` shape is `Record<string, value[]>`.
+    const attributes: Record<string, string[]> = Object.fromEntries(
+      Object.entries(configuredAttributes).map(([key, value]) => [key, [value]]),
+    );
+    upsertSearchAttributes({ ...attributes, agentId: [state.agentId], runId: [workflowInfo().runId] });
+  }
 
   while (!cancelled && state.status !== "completed" && state.status !== "failed") {
     // Also wake on leftover mailbox content (not just a fresh signal): a
@@ -154,6 +169,10 @@ export async function durableAgentWorkflow(initial: DurableAgentState): Promise<
   if (cancelled) {
     state.status = "cancelled";
     state.updatedAt = Date.now();
+  }
+  if (configuredAttributes) {
+    upsertSearchAttributes({ outcome: [state.status] });
+    log.info("synth.workflow.outcome", { agentId: state.agentId, outcome: state.status });
   }
   return state;
 }

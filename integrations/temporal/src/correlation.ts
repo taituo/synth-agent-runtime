@@ -36,6 +36,8 @@ export interface SynthCorrelation {
    * type, not just by agent.
    */
   messageKind?: string;
+  /** Execution rung the turn's effects run on: `synthetic`, `sandbox`, or `none`. */
+  rung?: string;
 }
 
 /** Header used to carry correlation from a workflow into its activities. */
@@ -84,6 +86,23 @@ function readKind(value: unknown): string | undefined {
  * payload. Returns undefined for legacy untyped messages, so correlation is
  * unchanged for existing signals.
  */
+/**
+ * Pull the rung kind off a `runTurn` input `{ config: { rung: { kind } } }`.
+ * Sandbox-safe (plain property reads), so both the activity interceptors and
+ * the workflow bundle can use it.
+ */
+export function rungFromArgs(args: readonly unknown[] | undefined): string | undefined {
+  const first = args?.[0];
+  if (!first || typeof first !== "object") return undefined;
+  const config = (first as { config?: unknown }).config;
+  if (!config || typeof config !== "object") return undefined;
+  const rung = (config as { rung?: unknown }).rung;
+  if (!rung) return undefined;
+  if (typeof rung === "string") return rung;
+  const kind = (rung as { kind?: unknown }).kind;
+  return typeof kind === "string" && kind.length > 0 ? kind : undefined;
+}
+
 export function messageKindFromArgs(args: readonly unknown[] | undefined): string | undefined {
   const first = args?.[0];
   if (!first || typeof first !== "object") return undefined;

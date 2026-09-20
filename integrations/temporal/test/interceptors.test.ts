@@ -11,6 +11,7 @@ import {
   nextParkBackoffMs,
   retryAfterMsFromError,
   rootCauseMessage,
+  rungFromArgs,
 } from "../src/correlation.js";
 import { createSynthActivityInterceptors, type SynthTraceEvent } from "../src/activity-interceptors.js";
 import { interceptors as workflowInterceptors } from "../src/workflow-interceptors.js";
@@ -150,6 +151,25 @@ test("activity interceptor attaches correlation to logs and emits a trace span",
   assert.equal(tags.agentId, "agt_123");
   assert.equal(tags.activityType, "runTurn");
   assert.equal(tags.attempt, 1);
+});
+
+test("rungFromArgs reads the rung kind and surfaces it on correlated logs", async () => {
+  assert.equal(rungFromArgs([{ config: { rung: { kind: "sandbox" } } }]), "sandbox");
+  assert.equal(rungFromArgs([{ config: { rung: "synthetic" } }]), "synthetic");
+  assert.equal(rungFromArgs([{ config: {} }]), undefined);
+  assert.equal(rungFromArgs([{ agentId: "a" }]), undefined);
+  assert.equal(rungFromArgs(undefined), undefined);
+
+  const events: SynthTraceEvent[] = [];
+  const factory = createSynthActivityInterceptors({ trace: { emit: (event) => { events.push(event); } } });
+  const interceptor = factory(activityContext());
+  await interceptor.inbound!.execute!(
+    { args: [{ agentId: "agt_rung", config: { rung: { kind: "sandbox" } } }], headers: {} },
+    async () => "ok",
+  );
+  const attrs = interceptor.outbound!.getLogAttributes!({}, (input) => input);
+  assert.equal(attrs.rung, "sandbox", "logs carry the rung");
+  assert.equal(events[0]!.attributes?.rung, "sandbox", "trace spans carry the rung");
 });
 
 test("activity interceptor surfaces the typed-signal kind on logs and trace spans", async () => {
