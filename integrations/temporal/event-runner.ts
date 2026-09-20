@@ -23,6 +23,8 @@ import {
   type TraceLikeEvent,
 } from "./event-script.js";
 
+let runtimeInstalled = false;
+
 export interface EventRunner {
   client: Client;
   trace: TraceLikeEvent[];
@@ -63,11 +65,16 @@ export async function startEventRunner(options: StartEventRunnerOptions = {}): P
 
   const trace: TraceLikeEvent[] = [];
   const logs: LogLikeEntry[] = [];
-  Runtime.install({
-    logger: new DefaultLogger("INFO", (entry) => {
-      logs.push({ message: entry.message, meta: entry.meta as Record<string, unknown> | undefined });
-    }),
-  });
+  // Temporal allows a single Runtime per process; a driver that starts several
+  // runners (e.g. one per model) must not call install() again.
+  if (!runtimeInstalled) {
+    Runtime.install({
+      logger: new DefaultLogger("INFO", (entry) => {
+        logs.push({ message: entry.message, meta: entry.meta as Record<string, unknown> | undefined });
+      }),
+    });
+    runtimeInstalled = true;
+  }
 
   void runTemporalWorker({
     workflowsPath: fileURLToPath(new URL("./src/workflows.ts", import.meta.url)),
