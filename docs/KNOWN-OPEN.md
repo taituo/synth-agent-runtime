@@ -6,6 +6,13 @@ removed only when the closing work lands.
 
 ## Runtime and deploy
 
+- **The graph harness is not fully live-proven.** `docs/HARNESS.md`'s graph
+  workflow runs loops, fan-out/join and branches; the loop+join path has a live
+  SIGKILL/restart proof (`graph-restart`). Still only unit-tested: child
+  workflows as live child runs, `continueAsNew` at the threshold, `cancelGraph`
+  against a real long loop, and per-node timeouts/compensation. Closing: a live
+  proof per mechanism, asserting call counts.
+
 - **The Temporal worker deploy shape is documented, not enforced.** Temporal is
   now the single durable engine and the homegrown control plane is deleted
   (`CHANGELOG.md`, Unreleased). `deploy/kubernetes/worker-deployment.yaml` and

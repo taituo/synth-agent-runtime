@@ -1,5 +1,37 @@
 # Changelog
 
+## Unreleased — the Temporal graph harness: loops, fan-out/join, branches
+
+### A durable composition layer around the agent leaf
+
+- New `integrations/temporal/src/graph.ts`: a serializable `GraphStep` — `turn`
+  (the `runTurn` activity), `activity`, `child` (the agent leaf or a nested
+  graph), and the composites `sequence`, `fanout` (parallel children, joined),
+  `branch` (a data predicate), `loop` (iterate until a condition, durable
+  counter). Conditions are `{ path, equals }` data, never closures, so the
+  workflow stays deterministic. The interpreter `executeGraph` has no Temporal
+  imports.
+- New `integrations/temporal/src/graph-workflow.ts`: `runGraphWorkflow` runs the
+  graph with Temporal handlers (`proxyActivities`, `executeChild`), exposes a
+  `cancelGraph` signal and a `getGraphState` query, and calls `continueAsNew`
+  after `CONTINUE_AS_NEW_AFTER_NODES` completed nodes. It adds no turn body:
+  turn nodes call the same `runTurn`, child nodes run `durableAgentWorkflow`.
+- `worker.ts` accepts an optional `graphActivity`; workers that only run
+  `durableAgentWorkflow` are unaffected.
+
+### Evidence
+
+- `integrations/temporal/test/graph.test.ts` — 7 unit tests (loop-until,
+  max-iterations, fan-out join, branch, nested graph, dispatch, `onNode` hook).
+  Red without the interpreter, green with it.
+- `integrations/temporal/graph-restart-worker.ts` — live proof: a graph
+  `pre -> loop(iter ×3) -> fanout(left,right) -> hang`, SIGKILLed while `hang`
+  is in flight. After recovery the per-node call counts are `pre=1`, `iter=3`,
+  `left=1`, `right=1`, `hang=2`, status `completed`; committed loop and join
+  nodes are not re-run. Wired into `scripts/live-proofs.mjs` as `graph-restart`.
+- Documented in `docs/HARNESS.md`. Child workflows and continue-as-new are wired
+  and unit-tested at the dispatch/hook level but not yet live-proven.
+
 ## Unreleased — the durable turn runs tools; durable-resume proof; verify-3 leftovers
 
 ### The `runTurn` activity can execute tool calls through the rung

@@ -62,6 +62,20 @@ cannot publish a later terminal `AgentSnapshot` after a newer lease generation
 has taken ownership, enforced atomically by `PostgresPersistence.putAgentFenced()`
 against `synth_leases` (owner, fencing token, and PostgreSQL-clock expiry).
 
+## Composing agents: the graph harness
+
+`durableAgentWorkflow` is the leaf; the graph harness composes leaves into
+durable flows. A `GraphStep` (serializable, so it survives `continueAsNew`) is a
+`turn` (the `runTurn` activity), an `activity`, a `child` workflow (the agent
+leaf or a nested graph), or a composite: `sequence`, `fanout` (parallel children
+joined when all complete), `branch` (a data predicate), and `loop` (iterate until
+a condition, with the counter in workflow state). `runGraphWorkflow` exposes a
+`cancelGraph` signal and a `getGraphState` query, and continues-as-new after
+`CONTINUE_AS_NEW_AFTER_NODES` completed nodes. The interpreter is pure, so the
+composition logic is unit-tested without a server; a live proof SIGKILLs a worker
+mid-graph and shows committed loop/join nodes are not re-run. See
+`docs/HARNESS.md`.
+
 ## Agent-state fencing
 
 ### Hard agent-state fencing
@@ -149,11 +163,11 @@ Measured under Node v22.20.0 (`node --version`), on commit `HEAD`:
 npm test  (root suite)
 200 passed / 0 failed
 
-npm test --prefix integrations/temporal  (durable workflow + turn body)
-82 passed / 0 failed
+npm test --prefix integrations/temporal  (durable workflow + turn body + graph harness)
+89 passed / 0 failed
 
 npm run integrations:syntax
-83 TypeScript integration files / 0 syntax diagnostics
+88 TypeScript integration files / 0 syntax diagnostics
 4 shell files / syntax OK
 
 integrations/opencode-http-gateway: npm test

@@ -19,6 +19,7 @@
     "live:phases": "tsx phase-signals-driver.ts",
     "live:restart": "tsx restart-worker.ts",
     "live:durable-restart": "tsx durable-restart-worker.ts",
+    "live:graph-restart": "tsx graph-restart-worker.ts",
     "live:waiting-spin": "tsx waiting-spin-live.ts",
     "live:handoff": "tsx artifact-handoff-live.ts",
     "live:retry-hint": "tsx retry-hint-live.ts",
