@@ -1,5 +1,6 @@
 import { ApplicationFailure, Context as ActivityContext } from "@temporalio/activity";
 import type { AgentActivities, DurableMailboxMessage, RunTurnInput, RunTurnResult } from "./contracts.js";
+import { parseRetryHintMs } from "./retry-hints.js";
 
 /**
  * HTTP statuses that will never succeed on retry (bad request, auth, missing
@@ -164,6 +165,12 @@ export function createGatewayRunTurn(options: GatewayRunTurnOptions): AgentActiv
         const message = `gateway returned HTTP ${response.status}: ${text.slice(0, 300)}`;
         if (PERMANENT_HTTP_STATUSES.has(response.status)) {
           throw ApplicationFailure.nonRetryable(message, `GatewayHTTP${response.status}`);
+        }
+        const retryAfterMs = parseRetryHintMs(response.headers);
+        if (retryAfterMs !== undefined && (response.status === 429 || response.status === 503)) {
+          // Carry the server's reset hint across the activity boundary so the
+          // workflow waits for the real window instead of a blind backoff.
+          throw ApplicationFailure.create({ message, type: "RateLimited", details: [{ retryAfterMs }] });
         }
         throw new Error(message);
       }

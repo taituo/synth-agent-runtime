@@ -120,6 +120,46 @@ export function isNonRetryableFailure(error: unknown): boolean {
   return false;
 }
 
+/**
+ * Read a server-provided `retryAfterMs` hint off an error, or any cause in its
+ * chain. The activity attaches it either as a plain property or inside an
+ * `ApplicationFailure`'s `details`; both are checked so unit tests can use the
+ * plain form and the live path can carry it across the activity boundary.
+ */
+export function retryAfterMsFromError(error: unknown): number | undefined {
+  let current: unknown = error;
+  const seen = new Set<unknown>();
+  while (current && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    const direct = (current as { retryAfterMs?: unknown }).retryAfterMs;
+    if (typeof direct === "number" && Number.isFinite(direct)) return direct;
+    const details = (current as { details?: unknown }).details;
+    if (Array.isArray(details)) {
+      for (const entry of details) {
+        if (entry && typeof entry === "object") {
+          const value = (entry as { retryAfterMs?: unknown }).retryAfterMs;
+          if (typeof value === "number" && Number.isFinite(value)) return value;
+        }
+      }
+    }
+    current = "cause" in current ? (current as { cause?: unknown }).cause : undefined;
+  }
+  return undefined;
+}
+
+/** Longest park a server hint may impose; beyond this it is quota exhaustion. */
+export const MAX_PARK_HINT_MS = 60 * 60 * 1000;
+
+/**
+ * A usable park hint: finite, positive, and at most one hour. Anything else
+ * (absent, NaN, negative, absurd) is ignored so a hostile or broken upstream
+ * cannot park an agent for a week.
+ */
+export function clampParkHintMs(value: number | undefined): number | undefined {
+  if (value === undefined || !Number.isFinite(value) || value <= 0 || value > MAX_PARK_HINT_MS) return undefined;
+  return value;
+}
+
 /** Exponential park backoff bounds for transient turn failures. */
 export interface ParkBackoff {
   initialMs: number;

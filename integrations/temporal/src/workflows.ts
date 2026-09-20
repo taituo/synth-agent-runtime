@@ -7,7 +7,14 @@ import {
   setHandler,
 } from "@temporalio/workflow";
 import type { AgentActivities, DurableAgentState } from "./contracts.js";
-import { clone, isNonRetryableFailure, nextParkBackoffMs, rootCauseMessage } from "./correlation.js";
+import {
+  clampParkHintMs,
+  clone,
+  isNonRetryableFailure,
+  nextParkBackoffMs,
+  retryAfterMsFromError,
+  rootCauseMessage,
+} from "./correlation.js";
 
 export const sendMessage = defineSignal<[DurableAgentState["mailbox"][number]]>("sendMessage");
 export const cancelAgent = defineSignal("cancelAgent");
@@ -106,12 +113,26 @@ export async function durableAgentWorkflow(initial: DurableAgentState): Promise<
       // mailbox is left intact so the same turn is retried after a backoff.
       // (An unbounded park/retry loop grows workflow history; Continue-As-New
       // is the production remedy and is out of scope here.)
+      const hintMs = clampParkHintMs(retryAfterMsFromError(error));
+      if (hintMs !== undefined) {
+        // The server told us when the quota/window resets, so wait exactly that
+        // long instead of guessing with exponential backoff. A hinted wait is
+        // NOT a failed attempt — the server told us when to return — so
+        // parkAttempt is deliberately left unchanged.
+        state.status = "waiting";
+        state.lastError = cause;
+        state.updatedAt = Date.now();
+        log.warn("synth.workflow.parked", { attempt: parkAttempt, backoffMs: hintMs, reason: "server-retry-hint", error: cause });
+        await condition(() => cancelled, hintMs);
+        if (cancelled) break;
+        continue;
+      }
       parkAttempt += 1;
       const backoffMs = nextParkBackoffMs(parkAttempt, state.parkBackoff);
       state.status = "waiting";
       state.lastError = cause;
       state.updatedAt = Date.now();
-      log.warn("synth.workflow.parked", { attempt: parkAttempt, backoffMs, error: cause });
+      log.warn("synth.workflow.parked", { attempt: parkAttempt, backoffMs, reason: "backoff", error: cause });
       // Wake early only for cancellation: new messages do NOT cut the backoff
       // short, because the provider is presumably still down. Messages that
       // arrive meanwhile stay queued and are picked up after the wait.

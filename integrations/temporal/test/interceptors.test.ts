@@ -5,9 +5,11 @@ import {
   agentIdFromArgs,
   agentIdFromWorkflowId,
   compactCorrelation,
+  clampParkHintMs,
   isNonRetryableFailure,
   messageKindFromArgs,
   nextParkBackoffMs,
+  retryAfterMsFromError,
   rootCauseMessage,
 } from "../src/correlation.js";
 import { createSynthActivityInterceptors, type SynthTraceEvent } from "../src/activity-interceptors.js";
@@ -67,6 +69,30 @@ test("isNonRetryableFailure walks the cause chain for the nonRetryable marker", 
   const cyclic: { cause?: unknown; nonRetryable?: boolean } = {};
   cyclic.cause = cyclic;
   assert.equal(isNonRetryableFailure(cyclic), false);
+});
+
+test("retryAfterMsFromError reads a plain property, a nested cause, or details", () => {
+  assert.equal(retryAfterMsFromError(new Error("plain")), undefined);
+  assert.equal(retryAfterMsFromError(Object.assign(new Error("hinted"), { retryAfterMs: 2_000 })), 2_000);
+  const nested = new Error("Activity task failed", { cause: Object.assign(new Error("429"), { retryAfterMs: 4_000 }) });
+  assert.equal(retryAfterMsFromError(nested), 4_000);
+  // ApplicationFailure carries it in `details` across the activity boundary.
+  assert.equal(retryAfterMsFromError({ message: "429", details: [{ retryAfterMs: 5_000 }] }), 5_000);
+  // Non-finite values are ignored.
+  assert.equal(retryAfterMsFromError({ retryAfterMs: Number.NaN }), undefined);
+  assert.equal(retryAfterMsFromError({ retryAfterMs: Number.POSITIVE_INFINITY }), undefined);
+});
+
+test("clampParkHintMs accepts only finite, positive, at-most-one-hour hints", () => {
+  assert.equal(clampParkHintMs(2_000), 2_000);
+  assert.equal(clampParkHintMs(1), 1);
+  assert.equal(clampParkHintMs(60 * 60 * 1000), 60 * 60 * 1000);
+  assert.equal(clampParkHintMs(undefined), undefined);
+  assert.equal(clampParkHintMs(0), undefined);
+  assert.equal(clampParkHintMs(-5), undefined);
+  assert.equal(clampParkHintMs(Number.NaN), undefined);
+  assert.equal(clampParkHintMs(Number.POSITIVE_INFINITY), undefined);
+  assert.equal(clampParkHintMs(60 * 60 * 1000 + 1), undefined, "absurd waits are rejected");
 });
 
 test("nextParkBackoffMs grows exponentially, caps, and honours overrides", () => {
