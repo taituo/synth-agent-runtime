@@ -1,36 +1,51 @@
 # Recovery and reconciliation
 
-> **Runtime consolidation (2026-09-20).** Temporal is the single durable engine
-> and the shared `GatewayAgentEngine` is the one turn body. The homegrown
-> `AgentRuntime`, `DurableTurn`/`transactional-turn`, `TemporalDurabilityProvider`,
-> `EffectReconciler`, `AgentRunner`/`LeasedAgentRunner`, `CommandCoordinator`,
-> `EffectPolicy` and orchestration `Supervisor` were deleted (`CHANGELOG.md`,
-> Unreleased). References below to those APIs are historical. The Postgres stores
-> (leases/fencing, effect receipts, mailbox cursors, world revisions) remain; see
-> the root `README.md` and `docs/KNOWN-OPEN.md` for the current shape.
+Durable execution is Temporal's job: `durableAgentWorkflow` owns the agent
+lifecycle and mailbox, and every turn runs as the `runTurn` activity. Recovery
+is therefore replay + activity retry, with store-level fences and effect
+receipts as the backstops. (The former homegrown recovery runtime is deleted and
+archived under `docs/history/`.)
 
-## Recovery ownership
+## 1. Interrupted turn with no external effect
 
-Recovery of a durable agent state in a distributed PostgreSQL deployment must occur under a current agent lease when it needs to mutate an already-fenced `AgentSnapshot`. `AgentRecoveryOptions.fence` can supply that ownership proof. Unfenced local/JSON recovery remains available for explicitly single-writer deployments.
+Temporal retries the activity; the workflow replays committed history, so turns
+that already committed are not re-run. The retried activity repeats only the
+turn whose result was never recorded.
 
-Recovery has three distinct cases. They must not be collapsed into one generic retry policy.
+## 2. Crash near an external effect
 
-## 1. Pre-exposure interrupted turn
+`ExecutionBroker` claims an effect by `effect.id` and persists a receipt. A
+receipt left `started` by a crash is returned to a later attempt as
+`EFFECT_OUTCOME_UNCERTAIN`, not replayed. A `committed` receipt is replayed
+(idempotency key). Reconciliation of an uncertain effect is an explicit operator
+decision; timeout alone is not permission to repeat an external action.
 
-If a durable turn is still `started` and `semanticExposed=false`, recovery restores its pre-turn workspace snapshot and marks it rolled back.
+## 3. Worker death (SIGKILL)
 
-## 2. Post-exposure interrupted turn
+The workflow's activity heartbeat timeout detects the dead worker; Temporal
+retries the in-flight activity on a fresh worker and replays the rest. Proven
+live, asserting call counts rather than a status:
 
-If `semanticExposed=true`, recovery marks the turn failed/reconciliation-required. It does not call the interruption a transparent rollback.
+- `integrations/temporal/durable-restart-worker.ts` — SIGKILLs a worker running
+  `durableAgentWorkflow` mid-turn; committed turn `committedCalls=1`, in-flight
+  turn `hangCalls=2` (attempts `[1, 2]`), final state idle.
+- `integrations/temporal/graph-restart-worker.ts` — SIGKILLs a worker running a
+  graph with a loop and a fan-out/join; committed nodes `pre=1, iter=3, left=1,
+  right=1`, in-flight node `hang=2`.
 
-## 3. Abandoned distributed command/effect
+## 4. Transient failure / park
 
-A stale `started` command requires `CommandCoordinator.reconcile()`. A stale effect requires an effect-specific `EffectReconciler` probe. Neither primitive interprets timeout alone as permission to repeat an external side effect.
+A transient activity failure is retried by Temporal; if retries are exhausted the
+workflow parks (`waiting`) with exponential backoff and retries the same turn,
+honouring a server retry hint when present. An activity may also defer by
+returning `state: "waiting"` without consuming its mailbox; that is treated as
+the same park.
 
-## Process death evidence
+## Store-level fence
 
-`test/process-crash.test.ts` uses a real child process and `SIGKILL`, then reopens durable state in a new process/runtime. This contract passed for this artifact.
-
-## Agent run leases
-
-`LeasedAgentRunner` adds renewable ownership around a logical run and cancels the runtime if renewal is lost. The fencing generation it carries is checked atomically against `synth_leases` on every durable agent-state mutation in PostgreSQL (`putAgentFenced()`), not only cooperatively in the runtime; a stale generation is rejected with `AGENT_FENCE_REJECTED` rather than silently applied. See `docs/ARCHITECTURE.md` and `docs/HARDENING.md` for the full fencing model.
+When a durable agent-state mutation must be made for an already-fenced agent in a
+distributed deployment, `putAgentFenced()` validates owner, token and DB-time
+expiry against `synth_leases` atomically. A stale generation is rejected with
+`AGENT_FENCE_REJECTED` rather than silently applied. Covered by
+`test/postgres-control.test.ts` and the live 32-worker proof. See
+`docs/HARDENING.md` for the full fencing model.

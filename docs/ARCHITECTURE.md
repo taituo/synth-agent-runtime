@@ -1,132 +1,185 @@
 # Architecture
 
-> **Historical design doc (2026-09-20).** This describes the pre-consolidation
-> architecture. The homegrown "Agent Runtime" / "Distributed CP" boxes below were
-> deleted: Temporal's `durableAgentWorkflow` owns the durable loop and the
-> `runTurn` activity runs the shared `GatewayAgentEngine`. See the root
-> `README.md` and `docs/TEMPORAL.md` for the current shape. The Postgres
-> durability layer below still exists.
+The runtime is **Temporal-driven**: Temporal owns durable execution and state, and
+one shared turn body does the model/tool work. This document describes what
+exists now. (The pre-consolidation design — a homegrown agent runtime and
+control plane — is archived under `docs/history/`.)
 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
-│ Presentation                                                │
-│ OpenCode / TUI / Desktop / voice / RPC / Temporal clients   │
+│ Clients                                                     │
+│ Temporal client · OpenAI-compatible gateway client          │
 └──────────────────────────┬──────────────────────────────────┘
                            │
 ┌──────────────────────────▼──────────────────────────────────┐
-│ Agent Runtime                                               │
-│ AgentInstance · Task · Relation · Message · Effect          │
-│ attach / unattended / recover / fork / supervise            │
-└───────────────┬──────────────────────┬──────────────────────┘
-                │                      │
-        ┌───────▼────────┐      ┌──────▼─────────────────┐
-        │ Distributed CP │      │ Inference Gateway      │
-        │ leases/fences  │      │ Responses + Chat       │
-        │ mailbox/cursor │      │ route health/affinity  │
-        │ CAS world      │      │ continuation state     │
-        │ reconciliation │      │ tenant boundary        │
-        └───────┬────────┘      └──────────┬─────────────┘
+│ Temporal (the durable engine)                               │
+│ durableAgentWorkflow  — agent lifecycle + mailbox           │
+│ runGraphWorkflow      — loops / fan-out / join / branches   │
+│ runTurn activity      — one turn, the shared turn body      │
+└───────────────┬──────────────────────────┬──────────────────┘
                 │                          │
-        ┌───────▼──────────────────────────▼─────────────┐
-        │ Shared durability / PostgreSQL                 │
-        └───────┬────────────────────────────────────────┘
+     ┌──────────▼─────────┐      ┌─────────▼─────────────────┐
+     │ GatewayAgentEngine │      │ Inference Gateway         │
+     │ the one turn body  │      │ Chat + Responses          │
+     │ → gateway call     │      │ router / affinity         │
+     │ → tool calls       │      │ continuation / tenant     │
+     └──────────┬─────────┘      └─────────┬─────────────────┘
+                │                          │
+     ┌──────────▼──────────────────────────▼─────────────────┐
+     │ Execution rung (ExecutionBroker)                      │
+     │ synthetic (in-memory, UNISOLATED)                      │
+     │ sandbox   (persistent gVisor Pod: workspace + exec)    │
+     └──────────┬─────────────────────────────────────────────┘
                 │
-        ┌───────▼────────────────────────────────────────┐
-        │ Workspace + Execution                          │
-        │ MemoryWorkspace / lazy Git / snapshots         │
-        │ synthetic → gVisor/Kubernetes → ProjectCell    │
-        └────────────────────────────────────────────────┘
+     ┌──────────▼─────────────────────────────────────────────┐
+     │ Durable stores (PostgreSQL)                            │
+     │ leases/fencing · effect receipts · mailbox cursors     │
+     │ world CAS · continuations · route health · rate limits │
+     └────────────────────────────────────────────────────────┘
 ```
 
-## Agent identity
+## Durable execution (Temporal)
 
-An `AgentInstance` can live for days. Its identity is created exactly once: `DurabilityProvider.createAgent(snapshot)` is an atomic identity-creation primitive, not a read-then-write preflight check. `AgentRuntime.spawn()` treats a `false`/non-insertion result as `AGENT_ALREADY_EXISTS`, so two concurrent `spawn()` calls for the same ID can never both succeed, whether they land on one runtime or on two runtimes sharing one durability provider. See `docs/DISTRIBUTED.md` for the exact per-provider implementation.
+- `durableAgentWorkflow` owns the agent's lifecycle, status and mailbox. It is
+  the agent-lifecycle leaf.
+- Each turn runs as the `runTurn` activity, which invokes the shared
+  `GatewayAgentEngine` (`src/runtime/gateway-engine.ts`). The activity makes no
+  model HTTP call of its own.
+- `runGraphWorkflow` (`integrations/temporal/src/graph-workflow.ts`) composes
+  turns into durable flows: `loop`, `fanout` (parallel children, joined),
+  `branch`, and `child` workflows (a nested graph, or `durableAgentWorkflow`).
+  It exposes a `cancelGraph` signal and a `getGraphState` query, and
+  continues-as-new after `CONTINUE_AS_NEW_AFTER_NODES` completed nodes.
+- Failure semantics: a permanent failure ends the agent; a transient failure is
+  retried by Temporal, then the workflow parks with backoff (server retry hints
+  honoured). A `waiting` activity return defers the turn without consuming its
+  mailbox.
+- Worker death: Temporal retries the in-flight activity and replays the rest
+  from history. Committed turns are not re-run — proven live by
+  `integrations/temporal/durable-restart-worker.ts` and
+  `graph-restart-worker.ts`.
+
+## The turn body
+
+`GatewayAgentEngine.run(messages, context)` is the only turn body:
+
+1. calls an OpenAI-compatible provider (`baseUrl` + `model` from configuration,
+   see `docs/INFERENCE.md`);
+2. maps the model's tool calls to execution-rung `Effect`s (`toEffect`), and
+   calls `context.executeEffect` for each;
+3. returns the assistant content, tool calls and observations.
+
+The `runTurn` activity resolves the per-agent `turnConfig` (system prompt, tool
+surface, rung selection) and sets `executeEffect` on the context. There is no
+second turn body and no second model client.
+
+## Execution rung
+
+`ExecutionBroker` (`src/execution/broker.ts`) selects an `Executor` by fidelity
+and policy, and records an effect receipt keyed by `effect.id`:
+
+- **synthetic** (`src/execution/synthetic.ts`) — `MemoryWorkspace`, fidelity 0.
+  It is explicitly **unisolated**; a scored run refuses it
+  (`assertRungAllowedForScored`). It is the cheap rung.
+- **sandbox** (`src/execution/kubernetes/sandbox-workspace.ts`,
+  `src/execution/kubernetes/executor.ts`) — a persistent Kubernetes/gVisor Pod
+  where `workspace.read/write/list/delete` **and** `process.exec` run. The
+  `MemoryWorkspace` is only a seed/checkpoint cache, never the medium.
+
+An effect receipt left `started` by a crash is returned as
+`EFFECT_OUTCOME_UNCERTAIN`; it is never blindly replayed.
+
+## Durable stores (PostgreSQL)
+
+Postgres is the store for what is genuinely store-shaped, and it is the only
+durability that remains outside Temporal:
+
+- **leases + fencing** — `synth_leases` with monotonic fencing tokens and the
+  database clock; `putAgentFenced()` validates owner, token and DB-time expiry
+  atomically.
+- **effect receipts** — `claimEffect`/`putEffect`; a committed receipt is
+  replayed, a started one is uncertain.
+- **mailbox** — `appendMailbox` returns `{ envelope, inserted }`, so only the
+  inserting replica steers; named consumer cursors and ACK clamping.
+- **world** — project/task/artifact revision CAS.
+- **inference shared state** — continuation store, route health/affinity,
+  tenant rate limits (`PostgresDistributedControlStore`).
+- **events** — append-only, sequence-addressable, with a named-consumer ACK
+  registry and a safe retention watermark.
+
+`test/postgres.test.ts` and `test/postgres-control.test.ts` cover the store
+contracts; `integrations/postgres/concurrency.ts` is the live 32-worker
+concurrency + hard-fencing proof, run in CI on every push.
 
 ## Ownership and fencing
 
-A lease only says which control-plane worker may currently drive a particular logical resource. Ownership is not identity: a Pod is a temporary execution resource, an `AgentInstance` is durable for the project's lifetime.
-
-```text
-AgentInstance ── durable for project lifetime
-    │
-    ├─ control-plane lease ── seconds
-    │
-    └─ executor lease ─────── seconds/minutes
-```
-
-Every successful re-acquisition of a resource gets a higher fencing token, and a stale owner cannot renew or release a newer generation:
+A lease says which worker may drive a resource; ownership is not identity. Every
+re-acquisition gets a higher fencing token, and the fence is enforced at the
+persistence layer:
 
 ```text
 worker A: fence 41 ── expires
 worker B: fence 42 ── owns resource
-worker A: late write with 41 ── rejected
+worker A: late write with 41 ── rejected (AGENT_FENCE_REJECTED)
 ```
 
-This fencing is enforced at the persistence layer, not only cooperatively in the runtime. `LeasedAgentRunner` passes an `AgentWriteFence` into `AgentRuntime.run()`, and every durable agent-state transition is persisted through `DurabilityProvider.putAgentFenced()` with that proof attached. `PostgresPersistence.putAgentFenced()` accepts the mutation only when the matching `synth_leases` row still has the same owner/token and is unexpired according to PostgreSQL's own clock; `synth_agents.fencing_token` additionally prevents generation regression at the row level.
-
-```text
-lease generation 41 ──> runtime state write ──> DB validates 41 ──> commit
-lease generation 42 ──> takeover
-stale generation 41 ──> runtime state write ──> DB rejects      ──> stop
-```
-
-A stale worker that wakes up after takeover receives `AGENT_FENCE_REJECTED`; it never publishes a false durable completed/failed terminal state. PostgreSQL lease time is authoritative: acquire, renew, release, and `validateLease()` all use `clock_timestamp()`, so worker wall clocks are never part of the ownership decision. `CommandCoordinator` uses the same authoritative `LeaseStore.validateLease()` before terminal commit rather than comparing database timestamps against `Date.now()` from another machine.
-
-Kubernetes executor leases and control-plane agent/command leases are independent of each other. A long-lived logical agent can change control-plane owner and physical sandbox without those two ownership changes being coupled.
+`PostgresPersistence.putAgentFenced()` commits only when the matching
+`synth_leases` row still has the same owner/token and is unexpired by
+PostgreSQL's own clock; `synth_agents.fencing_token` prevents generation
+regression. A stale worker never publishes a false terminal state.
 
 ## Mailbox
 
-The durable mailbox is append-only from the consumer's perspective. Delivery is at-least-once until ACK; processing becomes effectively-once only if the consumer's own work is idempotent/transactional. The engine cursor advances only after a successful `AgentRuntime.run()`.
-
-`MailboxStore.appendMailbox()` returns `{ envelope, inserted }`. Only the replica whose call actually performed the insertion steers the live engine; a replica that observes an already-inserted envelope (because another replica's append won the race) does not re-steer. This is what prevents duplicate cross-replica steering when multiple runtime replicas share one durable mailbox.
+The durable mailbox is append-only from the consumer's perspective; delivery is
+at-least-once until ACK, and effectively-once only when the consumer's work is
+idempotent. In the runtime path the workflow owns the mailbox
+(`durableAgentWorkflow` splices exactly the messages a turn consumed); the
+Postgres `MailboxStore` is the shared store for multi-replica consumers.
 
 ## World concurrency
 
-Projects use optimistic concurrency:
-
-```text
-read revision 8
-   │
-modify
-   │
-CAS(expected=8)
-   ├─ success → revision 9
-   └─ conflict → reload and retry/merge
-```
-
-Task and artifact records remain separately stored; project membership and accepted decisions are protected by project revision CAS.
-
-## Transaction boundary
-
-The semantic-exposure barrier governs every turn:
-
-```text
-snapshot workspace
-  → provider/tool attempt
-  → buffer semantic output
-  → persist semanticExposed=true
-  → cross irreversible effect/publication boundary
-  → terminal durable commit
-```
-
-A crash before semantic exposure may roll back. A crash after exposure requires reconciliation and must not be represented as a transparent replay.
+Projects, tasks and artifacts use optimistic concurrency: read a revision,
+modify, `compareAndSwap(expected)`; a stale writer receives the current record
+instead of overwriting it. `putProject()` accepts only a strictly newer
+revision once a project exists.
 
 ## Inference
 
-`ProfileRouterBackend` does not require process-local health/affinity state. A `RouterStateStore` can be PostgreSQL-backed, and continuation state for `previous_response_id` has the same shared-store shape through `ContinuationStore`. Health state is shared per virtual-model/route; affinity is additionally tenant + virtual-model + session scoped, so a disposable gateway replica does not need process-local memory to route correctly.
+`ProfileRouterBackend` routes a virtual model across provider routes with
+failover, cooldown and tenant-scoped sticky affinity. `RouterStateStore` and
+`ContinuationStore` can be PostgreSQL-backed, so a gateway replica is
+disposable. Providers are configuration (`src/inference/gateway/provider-config.ts`),
+not code; `opencode-go` is one provider among many.
 
 ## Workspace and physical execution
 
-Normal source manipulation can remain in `MemoryWorkspace`. Commands unsupported by the synthetic shell are escalated through the `ExecutionBroker` to physical resource classes (Kubernetes/gVisor sandboxes). Warm sandbox reset is verified before reuse; a failed reset destroys the slot rather than being handed to the next caller.
+Source manipulation starts in `MemoryWorkspace` (lazy Git source, snapshots,
+diffs). On the sandbox rung the workspace lives in the Pod; on the synthetic
+rung it is in-process RAM. A checkpoint syncs the Pod back into the cache and
+writes the workspace diff to the blob store (`snapshot-codec.ts` +
+`exportArtifact`); a large workspace uses the git transport. Warm sandbox reset
+is verified before reuse; a failed reset destroys the slot.
 
 ## Recovery
 
-`LeasedAgentRunner` adds renewable ownership around a logical run and cancels the runtime if renewal is lost. Recovery of durable agent state in a distributed PostgreSQL deployment occurs under a current agent lease when it needs to mutate an already-fenced `AgentSnapshot`; unfenced local/JSON recovery remains available for explicitly single-writer deployments. See `docs/RECOVERY.md` for the three distinct recovery cases (pre-exposure, post-exposure, abandoned command/effect).
+- **Interrupted turn, no external effect** — Temporal retries the activity; no
+  committed side effect is repeated.
+- **Crash near an external effect** — the effect receipt stays `started`, and a
+  later attempt gets `EFFECT_OUTCOME_UNCERTAIN` rather than a blind replay.
+- **Worker death** — Temporal replays committed history and retries only the
+  in-flight activity (live-proven, see above).
+
+The store-level `putAgentFenced()` invariant is covered by
+`test/postgres-control.test.ts` and the live concurrency proof.
 
 ## Storage hierarchy
 
 ```text
-PostgreSQL / durable store
+Temporal
+├ workflow history (lifecycle, mailbox, graph position, timers, retries)
+└ activity/child-workflow records
+
+PostgreSQL
 ├ agents/tasks/relations/events
 ├ command/turn/effect receipts
 ├ projects/artifacts
@@ -136,10 +189,10 @@ PostgreSQL / durable store
 └ route health + affinity
 
 RAM
-├ live AgentEngine objects
-├ MemoryWorkspace dirty overlays
-├ local router caches
+├ live GatewayAgentEngine objects
+├ MemoryWorkspace overlays (synthetic rung / sandbox seed cache)
 └ attached client listeners
 ```
 
-RAM is acceleration, not canonical project truth.
+Temporal is canonical for execution; PostgreSQL is canonical for the stores it
+owns; RAM is acceleration, not truth.

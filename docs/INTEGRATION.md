@@ -1,13 +1,9 @@
 # Integration guide
 
 > **Runtime consolidation (2026-09-20).** Temporal is the single durable engine
-> and the shared `GatewayAgentEngine` is the one turn body. The homegrown
-> `AgentRuntime`, `DurableTurn`/`transactional-turn`, `TemporalDurabilityProvider`,
-> `EffectReconciler`, `AgentRunner`/`LeasedAgentRunner`, `CommandCoordinator`,
-> `EffectPolicy` and orchestration `Supervisor` were deleted (`CHANGELOG.md`,
-> Unreleased). References below to those APIs are historical. The Postgres stores
-> (leases/fencing, effect receipts, mailbox cursors, world revisions) remain; see
-> the root `README.md` and `docs/KNOWN-OPEN.md` for the current shape.
+> and the shared `GatewayAgentEngine` is the one turn body; the pre-consolidation
+> runtime and control plane are deleted and archived under `docs/history/`. See
+> `docs/ARCHITECTURE.md` and `docs/TEMPORAL.md` for the current shape.
 
 ## Local contracts
 

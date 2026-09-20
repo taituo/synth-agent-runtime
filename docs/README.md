@@ -1,50 +1,37 @@
 # Documentation index
 
-> **Runtime consolidation (2026-09-20).** Temporal is the single durable engine
-> and the shared `GatewayAgentEngine` is the one turn body. The homegrown
-> durable-control-plane stack was deleted (`CHANGELOG.md`, Unreleased): the
-> `AgentRuntime`, `DurableTurn`/`transactional-turn`, `TemporalDurabilityProvider`,
-> `EffectReconciler`, `AgentRunner`, `CommandCoordinator`, `EffectPolicy` and
-> orchestration `Supervisor` modules no longer exist. Docs that describe those
-> subsystems (`DISTRIBUTED.md`, `TRANSACTIONS.md`, `SUPER.md`, parts of
-> `ARCHITECTURE.md`/`HARDENING.md`/`RECOVERY.md`) are retained as design history;
-> the current runtime is described in the root `README.md`, `docs/TEMPORAL.md`,
-> and `docs/KNOWN-OPEN.md`. The Postgres stores (leases/fencing, effect
-> receipts, mailbox cursors, world revisions) are the durability that remains.
-> Unwired modules were quarantined to `history/museum/`: the in-memory/JSON
-> durability stores, the in-memory/JSON world implementations, the chaos
-> harness, `PiAgentEngine`/the Pi bridge, and the vendored Pi prototype. See
-> `/tmp/opencode/orch/quarantine-report.md` for the module→caller→verdict table.
-
 Start with the root [`README.md`](../README.md) and [`CHANGELOG.md`](../CHANGELOG.md).
-Everything below is design/subsystem detail, in rough reading order.
+Everything below is design/subsystem detail, in rough reading order. Each entry
+is labelled **current** or *historical*.
+
+The runtime is Temporal-driven: `durableAgentWorkflow` → `runTurn` →
+`GatewayAgentEngine`, with the execution rung and the Postgres stores. The
+pre-consolidation design (a homegrown agent runtime and control plane) is
+archived under [`history/`](history/); unwired modules are in
+[`history/museum/`](history/museum/).
 
 ## Core design
 
-- [`HARNESS.md`](HARNESS.md) — **canonical, current**: the Temporal graph harness (loops, fan-out/join, branches, child workflows).
+- [`HARNESS.md`](HARNESS.md) — **current**: the Temporal graph harness (loops, fan-out/join, branches, child workflows).
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — **current**: the runtime layers (Temporal, the turn body, the execution rung, the Postgres stores).
+- [`DISTRIBUTED.md`](DISTRIBUTED.md) — **current**: the Postgres store contracts (leases/fencing, effect receipts, mailbox, world CAS, shared inference state).
 - [`MAP.md`](MAP.md) — plain-language map of the layers and what each is not.
-- [`SPEC.md`](SPEC.md) — *historical*: v0.2 design spec; superseded by the root `README.md`.
-- [`ARCHITECTURE.md`](ARCHITECTURE.md) — *historical*: pre-consolidation runtime layers and invariants.
-- [`DISTRIBUTED.md`](DISTRIBUTED.md) — *historical*: deleted control-plane distribution model.
+- [`SPEC.md`](SPEC.md) — *historical*: v0.2 design spec; superseded by `ARCHITECTURE.md` and the root `README.md`.
 - [`WORLD.md`](WORLD.md) — *historical*: the in-memory/JSON world implementations are quarantined; `src/world/types.ts` and the Postgres store remain.
-- [`TRANSACTIONS.md`](TRANSACTIONS.md) — *historical*: the deleted transactional turn.
-- [`SUPER.md`](SUPER.md) — *historical*: the deleted orchestration supervisor.
 
 ## Hardening and review
 
-- [`HARDENING.md`](HARDENING.md) — agent-state fencing, lease model.
-- [`RECOVERY.md`](RECOVERY.md) — crash/SIGKILL recovery.
+- [`HARDENING.md`](HARDENING.md) — **current**: the security/correctness model (Temporal execution, store-level fencing, effect receipts).
+- [`RECOVERY.md`](RECOVERY.md) — **current**: Temporal restart/replay recovery and effect-receipt uncertainty.
+- [`RELEASE-GATE.md`](RELEASE-GATE.md) — **current**: checklist gating `1.0.0` GA.
 - [`CHAOS.md`](CHAOS.md) — *historical*: the `src/chaos/*` harness is quarantined (no production caller).
-- [`CODE-REVIEW.md`](CODE-REVIEW.md) — *historical snapshot* (point-in-time v0.9 review); prioritized findings from the backward code review, with pointers to current status.
-- [`SECOND-REVIEW.md`](SECOND-REVIEW.md) — *historical snapshot*; external-audit second-review findings (SR-P1/SR-P2) from the v0.9 → v0.9.1 audit cycle.
-- [`RELEASE-GATE.md`](RELEASE-GATE.md) — **canonical, current**: checklist gating `1.0.0` GA.
 
 ## Infrastructure
 
 - [`POSTGRES.md`](POSTGRES.md) — PostgreSQL durability/distributed-state backend.
 - [`KUBERNETES.md`](KUBERNETES.md) — Kubernetes + gVisor execution backend design.
 - [`KUBERNETES-RUN.md`](KUBERNETES-RUN.md) — real, executed run guide: install gVisor, wire it into k3s, prove isolation, run the kill contract.
-- [`TEMPORAL.md`](TEMPORAL.md) — **canonical, current**: the Temporal runtime (workflow, signals/queries, retry/park semantics, redelivery rule).
+- [`TEMPORAL.md`](TEMPORAL.md) — **current**: the Temporal runtime (workflow, signals/queries, retry/park semantics, redelivery rule).
 - [`SESSION-SUPERVISOR.md`](SESSION-SUPERVISOR.md) — durable supervisor for interactive agent sessions (separate Temporal deployment).
 - [`BLOB-STORE.md`](BLOB-STORE.md) — content-addressed store: access model (digest-as-capability, tenant isolation) and lifecycle.
 - [`GIT-PUSH-CREDENTIALS.md`](GIT-PUSH-CREDENTIALS.md) — scoped, one-shot sandbox push grants for git-as-transport, and the residual risk.
@@ -53,16 +40,16 @@ Everything below is design/subsystem detail, in rough reading order.
 
 ## Inference gateway
 
-- [`INFERENCE.md`](INFERENCE.md), [`RESPONSES.md`](RESPONSES.md), [`LIVE-CONTRACTS.md`](LIVE-CONTRACTS.md), [`LIVE-PROOF.md`](LIVE-PROOF.md) — gateway protocol, contracts, live-proof harness.
-- [`PI-E2E.md`](PI-E2E.md) — Pi checkout end-to-end test notes.
+- [`INFERENCE.md`](INFERENCE.md), [`RESPONSES.md`](RESPONSES.md), [`LIVE-CONTRACTS.md`](LIVE-CONTRACTS.md), [`LIVE-PROOF.md`](LIVE-PROOF.md) — gateway protocol, config-driven providers, contracts, live-proof harness.
+- [`PI-E2E.md`](PI-E2E.md) — *historical*: Pi checkout end-to-end test notes (the Pi adapter is quarantined).
 
 ## Status and verification
 
-- [`KNOWN-OPEN.md`](KNOWN-OPEN.md) — **canonical, current**: deliberately unfinished work, one line each on why it is open and what closing it needs.
+- [`KNOWN-OPEN.md`](KNOWN-OPEN.md) — **current**: deliberately unfinished work, one line each on why it is open and what closing it needs.
 - [`VERIFICATION-LOG.md`](VERIFICATION-LOG.md) — failing-first evidence: per commit, the mutation applied, the failure it produced, and the restore.
 
 ## Other
 
 - [`INTEGRATION.md`](INTEGRATION.md) — third-party integration notes.
 - [`ROADMAP.md`](ROADMAP.md) — forward-looking plans.
-- [`history/`](history/) — *fully historical archive*: complete Markdown sets from prior releases (v0.1–v0.8), kept for reference only; not maintained and not reconciled with current status.
+- [`history/`](history/) — *fully historical archive*: prior-release Markdown sets (v0.1–v0.8); the point-in-time reviews (`CODE-REVIEW.md`, `SECOND-REVIEW.md`); the deleted transactional-turn and supervisor docs (`TRANSACTIONS.md`, `SUPER.md`); and the quarantined code under `history/museum/`. Not maintained and not reconciled with current status.

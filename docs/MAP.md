@@ -1,14 +1,9 @@
 # Plain-language map: what each layer is, and what it is NOT
 
 > **Runtime consolidation (2026-09-20).** Temporal is the single durable engine
-> and the shared `GatewayAgentEngine` is the one turn body. The homegrown
-> `AgentRuntime`, `DurableTurn`/`transactional-turn`, `TemporalDurabilityProvider`,
-> `EffectReconciler`, `AgentRunner`/`LeasedAgentRunner`, `CommandCoordinator`,
-> `EffectPolicy` and orchestration `Supervisor` were deleted (`CHANGELOG.md`,
-> Unreleased); the in-memory/JSON durability stores, the world implementations
-> and the chaos modules were quarantined to `docs/history/museum/`. References
-> below to those APIs are historical. The root `README.md`, `docs/TEMPORAL.md`,
-> `docs/HARNESS.md` and `docs/KNOWN-OPEN.md` describe the current shape.
+> and the shared `GatewayAgentEngine` is the one turn body; the pre-consolidation
+> runtime and control plane are deleted and archived under `docs/history/`. See
+> `docs/ARCHITECTURE.md` and `docs/TEMPORAL.md` for the current shape.
 
 Written because the vocabulary had drifted and several distinct things were being discussed
 as if they were one. Each section names the thing, says what it does, and names what it is
@@ -21,7 +16,7 @@ imply anything about the others.
 
 1. **Which brain answers?** (model / provider / gateway)
 2. **Where does the work physically happen?** (execution rung: memory vs sandbox)
-3. **What keeps it alive across failures?** (the runtime: leases, mailbox, receipts)
+3. **What keeps it alive across failures?** (durability: Temporal history + the Postgres stores)
 
 Confusion mostly comes from treating these as one stack. They are not. An agent can run on a
 cheap model, inside a real sandbox, with full durability — or any other combination.
@@ -89,11 +84,13 @@ providers. Changing the model does not change the rung, and vice versa.
 
 ## Axis 3: what keeps it alive
 
-**The runtime (synth)** — durability: leases with fencing tokens, the durable mailbox,
-effect receipts, the CAS world store. This is the part being tested by killing things.
+**Temporal (synth's durable engine)** — the agent loop (`durableAgentWorkflow`), the mailbox,
+the graph position, retries and timers all live in Temporal workflow history. It is not a
+model or a provider; it is the thing that keeps execution alive across worker death.
 
-**Temporal** — one durability backend for the runtime, used by the integration. It is not the
-runtime itself, and not a model or a provider.
+**The Postgres stores (synth)** — the state that is genuinely store-shaped and shared:
+leases with fencing tokens, effect receipts, mailbox cursors, the CAS world store,
+continuations/affinity. This is the part exercised by killing workers and racing replicas.
 
 *The control arm in the gym milestone removes THIS axis only* — same model, same rung, no
 durability — so the comparison measures durability rather than something else.
@@ -103,14 +100,13 @@ durability — so the comparison measures durability rather than something else.
 ## Pi — a fourth thing, on none of those axes
 
 **Pi** is a separate agent harness: it runs an agent's loop, prompts and tools. It is not
-ours and it is not inference.
+ours and it is not inference. The former Pi adapter (`PiAgentEngine`) and the Pi bridge had
+no caller and are quarantined under `docs/history/museum/`; Pi is not a wired harness here.
 
 - `pi-opencode-stack-router` makes several OpenCode Go accounts look like ONE ordinary
   provider to Pi.
-- `pi-runtime-bridge` is the seam between our `AgentRuntime` and Pi's harness.
-- `pi-synthetic-git-prototype` runs Pi's real tools against a fully in-memory workspace —
-  i.e. Pi on the synthetic rung. This is why rung parity matters: if the synthetic rung lies,
-  that prototype teaches something false.
+- `pi-runtime-bridge` was the seam between the (now deleted) homegrown runtime and Pi's
+  harness; it is quarantined as unwired.
 
 "Harness" is the most overloaded word in this project: Pi's `AgentHarness` runs agents, while
 our `live:*` scripts are test harnesses. Different things entirely.

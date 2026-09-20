@@ -1,71 +1,62 @@
 # Release Gate
 
-> **Runtime consolidation (2026-09-20).** Temporal is the single durable engine
-> and the shared `GatewayAgentEngine` is the one turn body. The homegrown
-> `AgentRuntime`, `DurableTurn`/`transactional-turn`, `TemporalDurabilityProvider`,
-> `EffectReconciler`, `AgentRunner`/`LeasedAgentRunner`, `CommandCoordinator`,
-> `EffectPolicy` and orchestration `Supervisor` were deleted (`CHANGELOG.md`,
-> Unreleased). References below to those APIs are historical. The Postgres stores
-> (leases/fencing, effect receipts, mailbox cursors, world revisions) remain; see
-> the root `README.md` and `docs/KNOWN-OPEN.md` for the current shape.
-
-The release question is no longer "can a stale replica overwrite the current agent?" (closed — see `HARDENING.md`) but "have we proven the whole stack under real infrastructure and operational load?"
+The release question is no longer "can a stale replica overwrite the current
+agent?" (closed — see `docs/HARDENING.md`) but "have we proven the whole stack
+under real infrastructure and operational load?". This is the authoritative
+current checklist; `docs/KNOWN-OPEN.md` itemises the open work.
 
 ## Closed correctness gates
 
-- Agent-state writes carry a fencing generation under `LeasedAgentRunner`.
-- PostgreSQL atomically validates owner, token, and lease expiry on fenced agent writes.
-- Lower fencing generations cannot overwrite a higher stored agent generation.
-- Unfenced PostgreSQL updates cannot overwrite an agent after fenced ownership has begun.
-- PostgreSQL lease acquire/renew/validate uses the PostgreSQL clock.
-- `CommandCoordinator` validates its lease authoritatively before terminal commit.
-- Durable command reconciliation, project CAS, mailbox ACK, effect reconciliation, continuation isolation, route affinity, SIGKILL recovery, Responses contracts, and sandbox contracts from v0.8 remain intact.
+- Durable execution is Temporal's: `durableAgentWorkflow` → `runTurn` →
+  `GatewayAgentEngine` is the only turn path.
+- PostgreSQL atomically validates owner, token and DB-time lease expiry on fenced
+  agent writes (`putAgentFenced()`); a lower fencing generation cannot overwrite
+  a higher stored generation, and unfenced updates cannot overwrite an agent
+  after fenced ownership has begun.
+- PostgreSQL lease acquire/renew/validate uses the database clock.
+- Effect receipts are claim/replay-safe: a committed receipt replays, a `started`
+  one is `EFFECT_OUTCOME_UNCERTAIN`.
+- Agent identity creation and mailbox append are atomic at the insertion
+  boundary (no duplicate spawn, no cross-replica double-steer).
+- Project/task/artifact CAS, mailbox ACK clamping, continuation isolation, route
+  affinity/health, and the named-consumer event retention watermark hold.
+- Worker death is recovered by Temporal (retry in-flight, replay committed);
+  proven live with call counts by the durable and graph restart proofs.
+- The execution rung is boundary-aware: the sandbox rung runs the workspace and
+  `process.exec` in a persistent gVisor Pod; the synthetic rung is explicitly
+  unisolated and refused for scored runs.
 
-## Required before 1.0 RC
+## Required before 1.0 GA
 
 ```text
-[x] live PostgreSQL concurrency: no SKIP
+[x] live PostgreSQL concurrency: no SKIP (32 workers, CI every push)
 [x] DB-clock skew scenario on real PostgreSQL
 [x] hard agent takeover scenario on real PostgreSQL
-[x] pinned Pi checkout E2E: no SKIP
-[x] disposable Kubernetes + gVisor Pod-kill test: no SKIP
-[x] external gateway/provider probe: no SKIP (incl. abort-survival,
-    continuation, tool calls, concurrency — see docs/history for the
-    full live-matrix run)
-[x] cross-replica race coverage for duplicate spawn and duplicate mailbox
-    steer (two replicas sharing one durability provider)
-[~] sustained race/load, not just a bounded repro — proven for the
-    distributed-state/durability layer directly (32-256 concurrent
-    workers against real PostgreSQL, 15-45s soaks, 100/100+ contention
-    rounds, 0 errors; see CHANGELOG). Still open: running this against
-    >= 2 actual control-plane/gateway service replicas under sustained
-    traffic, not just many client connections against one durable store.
+[x] durable/graph worker-restart recovery with call counts
+[x] disposable Kubernetes + gVisor Pod-kill test (self-hosted/manual)
+[x] sandbox workspace runs read/write/list + exec in the Pod (live gVisor proof)
+[~] external gateway/provider probe (historical live run; not re-runnable here
+    without credentials — see docs/history)
+[~] sustained race/load: proven for the distributed stores directly (32-256
+    concurrent workers against real PostgreSQL). Still open against >= 2 actual
+    service replicas under sustained traffic.
 [ ] rolling schema/application upgrade test
-[ ] soak test with forced worker/provider/pod restarts — the sustained
-    load above did not include chaos (killed workers/pods) mid-soak
-[~] production IAM + shared rate limiting + durable audit — shared
-    rate limiting is closed (`SharedTenantRateLimitPolicy` +
-    `PostgresRateLimitStore`, atomic per-tenant/window upsert, verified live
-    against PostgreSQL). A real identity provider and a durable audit sink
-    are still open.
-[x] durable named event-consumer ACK + safe retention watermark — the event
-    log now has a named-consumer ACK registry (`ackEvent`/`getEventCursor`/
-    `listEventCursors`/`forgetEventConsumer`) and `safeEventWatermark`/
-    `pruneEventsSafe`, which prune only up to the slowest registered consumer
-    (0 when none is registered, so an unconfigured deployment fails closed).
-    The raw `pruneEvents(throughSeq)` remains available and caller-owned.
-[x] task/artifact per-record revision/CAS or equivalent ownership rule —
-    `compareAndSwapTask`/`compareAndSwapArtifact` mirror `compareAndSwapProject`
-[ ] continuation size, encryption, retention, and cleanup policy
+[ ] soak test with forced worker/provider/pod restarts
+[~] production IAM + distributed rate limiting + durable audit — shared rate
+    limiting is closed (SharedTenantRateLimitPolicy + PostgresRateLimitStore,
+    verified live). A real identity provider and a durable audit sink are open.
+[x] durable named event-consumer ACK + safe retention watermark
+[x] task/artifact per-record revision/CAS (compareAndSwapTask/Artifact)
+[ ] continuation size, encryption, retention and cleanup policy
+[ ] one enforced boundary for all agent-controlled execution (the scoring
+    worker is still not isolated; see docs/KNOWN-OPEN.md)
 ```
 
 ## Interpretation
 
-A green local/unit suite is necessary but not sufficient for `1.0`. A release candidate should require the live matrix to run against actual PostgreSQL and Kubernetes infrastructure and should record the exact Pi revision/provider path used by the test.
-
-The unchecked items above, plus the "Known issues carried into this RC"
-section in `CHANGELOG.md`, are the actual gap between `1.0.0-rc.1` and a
-`1.0.0` GA tag. None of them are known-exploitable correctness or security
-bugs (unlike the git ref/remote argument-injection issue fixed in this RC);
-they are missing coverage/hardening for the fully-loaded production
-deployment shape.
+A green local/unit suite is necessary but not sufficient for `1.0`. A release
+candidate should require the live matrix to run against actual PostgreSQL and
+Kubernetes infrastructure. The unchecked items above, plus the itemised
+`docs/KNOWN-OPEN.md`, are the actual gap between `1.0.0-rc.1` and a `1.0.0` GA
+tag; none are known-exploitable correctness bugs — they are missing
+coverage/hardening for the fully-loaded production deployment shape.

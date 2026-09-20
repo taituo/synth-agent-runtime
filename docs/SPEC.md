@@ -1,14 +1,9 @@
 # Pi Synthetic Agent Runtime — Design Spec
 
 > **Runtime consolidation (2026-09-20).** Temporal is the single durable engine
-> and the shared `GatewayAgentEngine` is the one turn body. The homegrown
-> `AgentRuntime`, `DurableTurn`/`transactional-turn`, `TemporalDurabilityProvider`,
-> `EffectReconciler`, `AgentRunner`/`LeasedAgentRunner`, `CommandCoordinator`,
-> `EffectPolicy` and orchestration `Supervisor` were deleted (`CHANGELOG.md`,
-> Unreleased); the in-memory/JSON durability stores, the world implementations
-> and the chaos modules were quarantined to `docs/history/museum/`. References
-> below to those APIs are historical. The root `README.md`, `docs/TEMPORAL.md`,
-> `docs/HARNESS.md` and `docs/KNOWN-OPEN.md` describe the current shape.
+> and the shared `GatewayAgentEngine` is the one turn body; the pre-consolidation
+> runtime and control plane are deleted and archived under `docs/history/`. See
+> `docs/ARCHITECTURE.md` and `docs/TEMPORAL.md` for the current shape.
 
 **Status:** Draft v0.2  
 **Target:** Pi (`earendil-works/pi`)  

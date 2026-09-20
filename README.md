@@ -28,7 +28,7 @@ The broader goal is to make agents behave more like normal distributed workloads
 > (a disconnecting client could crash the whole process), and a git
 > ref/remote argument-injection fix (a workspace source ref could reach
 > git's own option parser and run a program on the control-plane host). See
-> `docs/SECOND-REVIEW.md` and `CHANGELOG.md` for the full history, including
+> `docs/history/SECOND-REVIEW.md` and `CHANGELOG.md` for the full history, including
 > the known issues carried into this RC.
 
 
@@ -201,11 +201,13 @@ npm test --prefix integrations/temporal
 npm run live:proof
 ```
 
-Current docs: `docs/TEMPORAL.md` (the runtime), `docs/HARNESS.md` (the graph
-harness), `docs/POSTGRES.md`, `docs/INFERENCE.md`, and `docs/KNOWN-OPEN.md`.
-`docs/ARCHITECTURE.md`, `docs/DISTRIBUTED.md`, `docs/HARDENING.md`,
-`docs/RECOVERY.md`, `docs/TRANSACTIONS.md`, `docs/SUPER.md`, `docs/CHAOS.md` and
-`docs/WORLD.md` are retained as design history; each carries a banner.
+Current docs: `docs/ARCHITECTURE.md` (the runtime), `docs/TEMPORAL.md`,
+`docs/HARNESS.md` (the graph harness), `docs/DISTRIBUTED.md` (store contracts),
+`docs/HARDENING.md`, `docs/RECOVERY.md`, `docs/RELEASE-GATE.md`,
+`docs/POSTGRES.md`, `docs/INFERENCE.md`, and `docs/KNOWN-OPEN.md`.
+`docs/SPEC.md`, `docs/WORLD.md`, `docs/CHAOS.md` and `docs/UPGRADE.md` are
+historical, and the point-in-time reviews, the deleted transactional-turn doc and
+the deleted supervisor doc are under `docs/history/`.
 
 `docs/` holds every other design/subsystem doc (see `docs/README.md` for the
 full index). All prior release documentation (the v0.1–v0.8 root Markdown

@@ -1,13 +1,9 @@
 # Upgrade: v0.8 → v0.9
 
 > **Runtime consolidation (2026-09-20).** Temporal is the single durable engine
-> and the shared `GatewayAgentEngine` is the one turn body. The homegrown
-> `AgentRuntime`, `DurableTurn`/`transactional-turn`, `TemporalDurabilityProvider`,
-> `EffectReconciler`, `AgentRunner`/`LeasedAgentRunner`, `CommandCoordinator`,
-> `EffectPolicy` and orchestration `Supervisor` were deleted (`CHANGELOG.md`,
-> Unreleased). References below to those APIs are historical. The Postgres stores
-> (leases/fencing, effect receipts, mailbox cursors, world revisions) remain; see
-> the root `README.md` and `docs/KNOWN-OPEN.md` for the current shape.
+> and the shared `GatewayAgentEngine` is the one turn body; the pre-consolidation
+> runtime and control plane are deleted and archived under `docs/history/`. See
+> `docs/ARCHITECTURE.md` and `docs/TEMPORAL.md` for the current shape.
 
 v0.9 keeps the v0.8 distributed-control-plane APIs but tightens ownership semantics. The important change is that a leased agent run now carries a fencing proof all the way to the persistence write.
 
@@ -26,7 +22,7 @@ psql "$SYNTH_POSTGRES_URL" -f deploy/postgres/003_release_hardening.sql
 
 Deploy all control-plane replicas with v0.9 before treating hard fencing as a production invariant. A mixed fleet with older writers is not considered hard-fenced.
 
-Agent-state writes carry a fencing generation. `DurabilityProvider.putAgentFenced()` validates the owner, the fencing token and the lease's PostgreSQL-clock expiry atomically against `synth_leases`, so a stale writer is rejected with `AGENT_FENCE_REJECTED`. The `LeasedAgentRunner`/`AgentRuntime` helpers that used to pass the lease generation are gone with the deleted runtime; the store-level fence remains and is covered by `test/postgres-control.test.ts` and the live 32-worker proof.
+Agent-state writes carry a fencing generation. `DurabilityProvider.putAgentFenced()` validates the owner, the fencing token and the lease's PostgreSQL-clock expiry atomically against `synth_leases`, so a stale writer is rejected with `AGENT_FENCE_REJECTED`. The former runner helpers that passed the lease generation are gone with the deleted runtime; the store-level fence remains and is covered by `test/postgres-control.test.ts` and the live 32-worker proof.
 
 ## Custom implementations
 
