@@ -14,7 +14,12 @@ cannot steal or extend a lease.
 
 Effect execution is receipt-backed: `ExecutionBroker` claims an effect by id, a
 committed receipt is replayed, and a receipt left `started` by a crash is
-returned as `EFFECT_OUTCOME_UNCERTAIN` — never a blind replay. Agent identity
+returned as `EFFECT_OUTCOME_UNCERTAIN` — never a blind replay. The shipped
+Temporal rung persists those receipts in Temporal activity state
+(`TemporalActivityStateStore`, carried in heartbeat details), so a retried
+`runTurn` activity starts with the committed receipts and does not re-execute a
+committed effect; `PostgresPersistence` implements the same `RuntimeStateStore`
+contract where a shared store is wanted. Agent identity
 creation (`DurabilityProvider.createAgent()`) and mailbox delivery
 (`MailboxStore.appendMailbox()` returning `{ envelope, inserted }`) are atomic at
 the insertion boundary, closing the duplicate-spawn and cross-replica

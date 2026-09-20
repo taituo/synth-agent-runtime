@@ -14,11 +14,17 @@ turn whose result was never recorded.
 
 ## 2. Crash near an external effect
 
-`ExecutionBroker` claims an effect by `effect.id` and persists a receipt. A
-receipt left `started` by a crash is returned to a later attempt as
+`ExecutionBroker` claims an effect by `effect.id` and persists a receipt. In the
+shipped Temporal rung the receipts live in Temporal activity state
+(`TemporalActivityStateStore`, carried in heartbeat details), so a retried
+activity begins with the previous attempt's receipts; the broker's own
+`RuntimeStateStore` is swappable (e.g. `PostgresPersistence`). A receipt left
+`started` by a crash is returned to a later attempt as
 `EFFECT_OUTCOME_UNCERTAIN`, not replayed. A `committed` receipt is replayed
-(idempotency key). Reconciliation of an uncertain effect is an explicit operator
-decision; timeout alone is not permission to repeat an external action.
+(idempotency key); on a retry the committed effect is not executed again (proven
+live by `effect-receipt-live.ts`). Reconciliation of an uncertain effect is an
+explicit operator decision; timeout alone is not permission to repeat an
+external action.
 
 ## 3. Worker death (SIGKILL)
 

@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased — persist effect receipts in the shipped rung
+
+- The Temporal rung now passes a durable `RuntimeStateStore` to
+  `ExecutionBroker`: `createGatewayRunTurn` resolves a
+  `TemporalActivityStateStore` from the activity context (unless one is
+  injected) and hands it to the rung factory, and both the synthetic and sandbox
+  rungs build `new ExecutionBroker(executors, state)`. Effect receipts therefore
+  live in Temporal activity state (heartbeat details), and a retried `runTurn`
+  activity starts with the committed receipts and dedupes a committed effect by
+  `effect.id` instead of re-executing it. The rung's store heartbeat is also the
+  turn's heartbeat, so the engine's periodic heartbeats carry the receipts
+  rather than erasing them. `PostgresPersistence` remains the injectable
+  `RuntimeStateStore` for a shared store.
+- Failing-first: `gateway-run-turn.test.ts` retried a turn and saw the executor
+  run twice before the wiring; it now runs once and the receipt is committed.
+  A second test round-trips receipts through the heartbeat details and asserts a
+  committed receipt cannot be regressed.
+- Live `effect-receipt` proof (Temporal `:7243`, wired into
+  `scripts/live-proofs.mjs`): a two-call turn fails after committing the first
+  effect; the activity retries (attempts `[1,2]`), attempt 2's seed carries
+  `write_file:0=committed`, and the first effect executed exactly once.
+- Docs (`README`, `ARCHITECTURE`, `HARDENING`, `RECOVERY`, `DISTRIBUTED`,
+  `TEMPORAL`) now state where receipts actually live.
+
 ## Unreleased — live-prove graph child workflows, continue-as-new and cancel
 
 - Three live proofs against Temporal `:7243`, wired into

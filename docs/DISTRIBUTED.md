@@ -47,9 +47,13 @@ claim effect:<id> receipt
 ```
 
 A receipt left `started` by a crash is uncertain until reconciliation; timeout
-alone is not permission to repeat an external action. `PostgresPersistence`
-implements `claimEffect`/`putEffect`; a resolved receipt cannot be regressed
-(covered by `test/postgres.test.ts`).
+alone is not permission to repeat an external action. The shipped Temporal rung
+stores receipts in Temporal activity state (`TemporalActivityStateStore`, in the
+heartbeat details), so a retried activity dedupes a committed effect by
+`effect.id` (`integrations/temporal/effect-receipt-live.ts`). `PostgresPersistence`
+also implements `claimEffect`/`putEffect` and can be injected as the broker's
+store; a resolved receipt cannot be regressed (covered by
+`test/postgres.test.ts`).
 
 ## Mailbox contract
 

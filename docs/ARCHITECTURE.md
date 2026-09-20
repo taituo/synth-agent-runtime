@@ -87,7 +87,12 @@ and policy, and records an effect receipt keyed by `effect.id`:
   `MemoryWorkspace` is only a seed/checkpoint cache, never the medium.
 
 An effect receipt left `started` by a crash is returned as
-`EFFECT_OUTCOME_UNCERTAIN`; it is never blindly replayed.
+`EFFECT_OUTCOME_UNCERTAIN`; it is never blindly replayed. The shipped Temporal
+rung gives the broker `TemporalActivityStateStore`, which keeps the receipts in
+Temporal activity state (heartbeat details), so a retried `runTurn` activity
+dedupes a committed effect by `effect.id`; `PostgresPersistence` implements the
+same `RuntimeStateStore` contract when a shared store is wanted. Proven live by
+`integrations/temporal/effect-receipt-live.ts` (`effect-receipt`).
 
 ## Durable stores (PostgreSQL)
 
@@ -97,8 +102,9 @@ durability that remains outside Temporal:
 - **leases + fencing** — `synth_leases` with monotonic fencing tokens and the
   database clock; `putAgentFenced()` validates owner, token and DB-time expiry
   atomically.
-- **effect receipts** — `claimEffect`/`putEffect`; a committed receipt is
-  replayed, a started one is uncertain.
+- **effect receipts** — `claimEffect`/`putEffect` when this store is injected;
+  a committed receipt is replayed, a started one is uncertain. The shipped
+  Temporal rung defaults to Temporal activity state instead (see Execution rung).
 - **mailbox** — `appendMailbox` returns `{ envelope, inserted }`, so only the
   inserting replica steers; named consumer cursors and ACK clamping.
 - **world** — project/task/artifact revision CAS.
