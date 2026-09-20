@@ -160,6 +160,12 @@ export interface GymToolOptions {
   visibleTestPath: string;
   protectedPatterns?: readonly RegExp[];
   nodeBin?: string;
+  /**
+   * Node binary used by `run_visible_test`. On the local runner this is the
+   * host node; on the sandbox runner the command runs inside the Pod, so it must
+   * be the Pod's own `node` on PATH, not a host path the Pod cannot see.
+   */
+  visibleTestNodeBin?: string;
   execTimeoutMs?: number;
 }
 
@@ -223,7 +229,7 @@ export interface GymTools {
 }
 
 export function createGymTools(runner: EffectRunner, options: GymToolOptions): GymTools {
-  const node = options.nodeBin ?? process.execPath;
+  const node = options.visibleTestNodeBin ?? options.nodeBin ?? process.execPath;
   const timeoutMs = options.execTimeoutMs ?? 120_000;
 
   async function execute(call: GymToolCall): Promise<GymToolResult> {

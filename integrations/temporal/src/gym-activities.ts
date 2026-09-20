@@ -74,6 +74,9 @@ export function createGymActivities(): GymAttemptActivities {
             maxTurns: input.maxTurns,
             deadlineMs: input.deadlineMs,
             checkpoint,
+            // run_visible_test must invoke the Pod's own node, not the host path
+            // the Pod cannot see (which is a 127 "not found").
+            ...(useSandbox ? { visibleTestNodeBin: "node" } : {}),
             ...(input.checkpointKey ? { checkpointKey: input.checkpointKey } : {}),
             onTool: ({ call, observation }) => {
               if (call.name === "read_file") {

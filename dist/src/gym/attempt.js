@@ -29,6 +29,7 @@ export async function runGymAttempt(options) {
         visibleTestPath,
         ...(options.protectedPatterns ? { protectedPatterns: options.protectedPatterns } : {}),
         ...(options.nodeBin ? { nodeBin: options.nodeBin } : {}),
+        ...(options.visibleTestNodeBin ? { visibleTestNodeBin: options.visibleTestNodeBin } : {}),
         ...(options.execTimeoutMs ? { execTimeoutMs: options.execTimeoutMs } : {}),
     });
     const transcript = [];

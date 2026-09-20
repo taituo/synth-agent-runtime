@@ -48,6 +48,12 @@ export interface GymToolOptions {
     visibleTestPath: string;
     protectedPatterns?: readonly RegExp[];
     nodeBin?: string;
+    /**
+     * Node binary used by `run_visible_test`. On the local runner this is the
+     * host node; on the sandbox runner the command runs inside the Pod, so it must
+     * be the Pod's own `node` on PATH, not a host path the Pod cannot see.
+     */
+    visibleTestNodeBin?: string;
     execTimeoutMs?: number;
 }
 export declare const GYM_TOOL_DEFINITIONS: readonly GymToolDefinition[];

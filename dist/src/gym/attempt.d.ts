@@ -82,6 +82,12 @@ export interface RunGymAttemptOptions {
     /** Wall-clock budget for the whole attempt. Default 10 minutes. */
     deadlineMs?: number;
     nodeBin?: string;
+    /**
+     * Node binary the `run_visible_test` tool invokes. Defaults to `nodeBin`.
+     * The sandbox runner must set this to the Pod's own `node` (on PATH), because
+     * a host node path does not exist inside the Pod (exit 127).
+     */
+    visibleTestNodeBin?: string;
     execTimeoutMs?: number;
     /** Extra protected path patterns beyond the scorer's defaults. */
     protectedPatterns?: readonly RegExp[];

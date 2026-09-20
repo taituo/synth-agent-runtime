@@ -115,6 +115,19 @@ export class KubectlSandboxBackend {
     }
     async exec(sandbox, request) {
         const cwd = request.cwd ? safeWorkspacePath(request.cwd) : "/workspace";
+        // /workspace is an emptyDir owned by root and group-owned by the pod's
+        // fsGroup; the pod runs as a non-root uid, so git refuses to operate in it
+        // ("detected dubious ownership"). The workspace is materialized by the
+        // trusted control plane, so mark it safe via env (no config file is written,
+        // which matters because the pod's root filesystem is read-only). This covers
+        // every exec, including an agent's own `git` commands, not just the
+        // baseline init that already set it.
+        const env = {
+            GIT_CONFIG_COUNT: "1",
+            GIT_CONFIG_KEY_0: "safe.directory",
+            GIT_CONFIG_VALUE_0: "/workspace",
+            ...(request.env ?? {}),
+        };
         const args = [
             "exec",
             "-n",
@@ -122,7 +135,7 @@ export class KubectlSandboxBackend {
             sandbox.podName,
             "--",
             "env",
-            ...envArgs(request.env),
+            ...envArgs(env),
             "sh",
             "-lc",
             `cd ${shQuote(cwd)} && ${request.command}`,

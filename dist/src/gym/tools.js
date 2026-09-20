@@ -171,7 +171,7 @@ function isProtected(path, options) {
     return patterns.some((pattern) => pattern.test(p));
 }
 export function createGymTools(runner, options) {
-    const node = options.nodeBin ?? process.execPath;
+    const node = options.visibleTestNodeBin ?? options.nodeBin ?? process.execPath;
     const timeoutMs = options.execTimeoutMs ?? 120_000;
     async function execute(call) {
         const args = call.arguments ?? {};

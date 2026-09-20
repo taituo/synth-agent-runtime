@@ -110,3 +110,42 @@ test("the tool set and system prompt are fixed for both arms", () => {
     assert.ok(prompt.includes("tool_calls"));
     assert.ok(prompt.includes("replace_in_file"), "the prompt must advertise every tool");
 });
+test("run_visible_test uses the runner's node, not the host path", async () => {
+    const commands = [];
+    const runner = {
+        id: "fake",
+        async read() { return ""; },
+        async write() { },
+        async list() { return []; },
+        async exec(command) {
+            commands.push(command);
+            return { code: 0, stdout: "", stderr: "" };
+        },
+    };
+    const tools = createGymTools(runner, {
+        visibleTestPath: "test/visible.test.mjs",
+        nodeBin: "/host/node",
+        visibleTestNodeBin: "node",
+    });
+    await tools.execute({ name: "run_visible_test" });
+    // The sandbox command runs inside the Pod, where a host node path is a 127
+    // "not found"; it must invoke the Pod's own `node`.
+    assert.match(commands[0] ?? "", /^node --test /);
+    assert.doesNotMatch(commands[0] ?? "", /\/host\/node/);
+});
+test("run_visible_test falls back to nodeBin when no pod node is given", async () => {
+    const commands = [];
+    const runner = {
+        id: "fake",
+        async read() { return ""; },
+        async write() { },
+        async list() { return []; },
+        async exec(command) {
+            commands.push(command);
+            return { code: 0, stdout: "", stderr: "" };
+        },
+    };
+    const tools = createGymTools(runner, { visibleTestPath: "test/visible.test.mjs", nodeBin: "/host/node" });
+    await tools.execute({ name: "run_visible_test" });
+    assert.match(commands[0] ?? "", /^\/host\/node --test /);
+});

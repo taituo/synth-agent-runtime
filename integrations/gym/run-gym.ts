@@ -217,6 +217,8 @@ async function runLivePlain(
       turn: tracedTurn,
       maxTurns,
       deadlineMs,
+      // On the sandbox runner, run_visible_test must invoke the Pod's node.
+      ...(runnerKind === "sandbox" ? { visibleTestNodeBin: "node" } : {}),
       onTool: ({ call, observation }) => trace.push(`tool ${call.name}: ${observation.slice(0, 300)}`),
     });
     return {

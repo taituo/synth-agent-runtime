@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   DEFAULT_KUBERNETES_RESOURCE_CLASSES,
   ExecutionBroker,
@@ -529,4 +532,26 @@ test("pod+NetworkPolicy delete uses type/name form so both resources are actuall
   ]);
   assert.ok(!args.includes("pod"), "must not pass bare 'pod' as a resource type followed by extra name-only tokens");
   assert.ok(!args.includes("networkpolicy"), "must not pass bare 'networkpolicy' as a second name under the 'pod' type");
+});
+
+test("sandbox exec marks the control-plane workspace safe for git", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "kubectl-backend-"));
+  try {
+    const capture = join(dir, "args.txt");
+    const fakeKubectl = join(dir, "kubectl");
+    await writeFile(fakeKubectl, `#!/bin/sh\nprintf '%s\\n' "$@" > ${JSON.stringify(capture)}\n`);
+    await chmod(fakeKubectl, 0o755);
+    const backend = new KubectlSandboxBackend({ kubectlBin: fakeKubectl, namespace: "synth-test" });
+    const sandbox: SandboxIdentity = { id: "s", namespace: "synth-test", podName: "pod", resourceClassId: "sandbox-small", createdAt: 0 };
+    const result = await backend.exec(sandbox, { command: "git status --porcelain" });
+    assert.equal(result.exitCode, 0);
+    const args = (await readFile(capture, "utf8")).trim().split("\n");
+    // /workspace is root-owned inside the Pod while the process is non-root;
+    // without safe.directory every agent `git` call dies with "dubious
+    // ownership". The env must reach the Pod's process, not a host file.
+    assert.ok(args.includes("GIT_CONFIG_KEY_0=safe.directory"), "exec must set safe.directory for the Pod");
+    assert.ok(args.includes("GIT_CONFIG_VALUE_0=/workspace"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
