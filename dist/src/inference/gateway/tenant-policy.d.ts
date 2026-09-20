@@ -66,4 +66,6 @@ export declare class CompositeTenantPolicy implements GatewayTenantPolicy {
     private readonly policies;
     constructor(policies: readonly GatewayTenantPolicy[]);
     authorize(principal: GatewayPrincipal, model: string): Promise<void>;
+    /** Forward to every sub-policy so a composed lane policy frees its slot. */
+    release(principal: GatewayPrincipal): Promise<void>;
 }

@@ -127,7 +127,25 @@ export class SharedTenantRateLimitPolicy implements GatewayTenantPolicy {
 
 export class CompositeTenantPolicy implements GatewayTenantPolicy {
   constructor(private readonly policies: readonly GatewayTenantPolicy[]) {}
+
   async authorize(principal: GatewayPrincipal, model: string): Promise<void> {
-    for (const policy of this.policies) await policy.authorize(principal, model);
+    const authorized: GatewayTenantPolicy[] = [];
+    try {
+      for (const policy of this.policies) {
+        await policy.authorize(principal, model);
+        authorized.push(policy);
+      }
+    } catch (error) {
+      // A later policy failing must not leak an earlier policy's admission
+      // (e.g. the lane slot taken by PriorityLanePolicy before the rate-limit
+      // policy throws).
+      for (const policy of authorized.reverse()) await policy.release?.(principal);
+      throw error;
+    }
+  }
+
+  /** Forward to every sub-policy so a composed lane policy frees its slot. */
+  async release(principal: GatewayPrincipal): Promise<void> {
+    for (const policy of this.policies) await policy.release?.(principal);
   }
 }

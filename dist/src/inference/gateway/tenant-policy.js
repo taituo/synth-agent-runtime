@@ -105,7 +105,25 @@ export class CompositeTenantPolicy {
         this.policies = policies;
     }
     async authorize(principal, model) {
+        const authorized = [];
+        try {
+            for (const policy of this.policies) {
+                await policy.authorize(principal, model);
+                authorized.push(policy);
+            }
+        }
+        catch (error) {
+            // A later policy failing must not leak an earlier policy's admission
+            // (e.g. the lane slot taken by PriorityLanePolicy before the rate-limit
+            // policy throws).
+            for (const policy of authorized.reverse())
+                await policy.release?.(principal);
+            throw error;
+        }
+    }
+    /** Forward to every sub-policy so a composed lane policy frees its slot. */
+    async release(principal) {
         for (const policy of this.policies)
-            await policy.authorize(principal, model);
+            await policy.release?.(principal);
     }
 }

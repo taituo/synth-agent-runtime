@@ -240,7 +240,9 @@ export class PriorityLanePolicy {
         this.#scheduler.cancel(decision.ticket);
         reject(laneError("deadline", maxWaitMs));
       }, Math.max(1, maxWaitMs));
-      timer.unref?.();
+      // Deliberately NOT unref'd: this timer is what rejects a queued request
+      // whose deadline passes, so it must fire even if nothing else keeps the
+      // loop alive.
       this.#waiters.set(decision.ticket, { resolve: () => { clearTimeout(timer); resolve(); } });
     });
   }

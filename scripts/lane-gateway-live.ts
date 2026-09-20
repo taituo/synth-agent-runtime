@@ -12,8 +12,11 @@
  */
 import { setTimeout as sleep } from "node:timers/promises";
 import {
+  CompositeTenantPolicy,
   createInferenceGateway,
+  InMemoryTenantRateLimitPolicy,
   LaneScheduler,
+  ModelAclPolicy,
   PriorityLanePolicy,
   StaticBearerAuthenticator,
   type GatewayBackend,
@@ -46,12 +49,16 @@ const scheduler = new LaneScheduler(
   { capacity: 1, estimatedServiceMs: 600 },
 );
 const policy = new PriorityLanePolicy(scheduler, { defaultLane: "batch" });
+// The spec mandates composing the lane policy with ACL and rate-limit policies
+// via CompositeTenantPolicy. Pass the COMPOSITE (not the lane policy directly),
+// so the release-forwarding the server relies on is actually exercised.
+const tenantPolicy = new CompositeTenantPolicy([new ModelAclPolicy(), policy, new InMemoryTenantRateLimitPolicy()]);
 
 const gateway = createInferenceGateway({
   backend,
   port: 0,
   authenticator: new StaticBearerAuthenticator(TOKENS),
-  tenantPolicy: policy,
+  tenantPolicy,
 });
 await gateway.listen();
 
@@ -94,12 +101,15 @@ const dResult = completed.find((entry) => entry.id === "D")!;
 
 const interactiveOvertookBatch = cResult.atMs < bResult.atMs;
 const deadlineRejected = dResult.status === 429 && dResult.retryAfter !== null;
+// No slot leak: after every request finished, the lane scheduler is empty.
+const slotsFreed = scheduler.inFlight() === 0 && policy.pending().length === 0;
 const ok =
   aResult.status === 200 &&
   bResult.status === 200 &&
   cResult.status === 200 &&
   interactiveOvertookBatch &&
-  deadlineRejected;
+  deadlineRejected &&
+  slotsFreed;
 
 console.log(
   JSON.stringify(
@@ -109,6 +119,8 @@ console.log(
       results: completed,
       interactiveOvertookBatch,
       deadlineRejected,
+      slotsFreed,
+      inFlightAfter: scheduler.inFlight(),
       ok,
     },
     null,
