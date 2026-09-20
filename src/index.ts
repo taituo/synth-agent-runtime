@@ -1,6 +1,7 @@
 export * from "./core/ids.js";
 export * from "./core/types.js";
 export * from "./runtime/agent-engine.js";
+export * from "./runtime/gateway-engine.js";
 export * from "./runtime/agent-runtime.js";
 export * from "./workspace/source.js";
 export * from "./workspace/memory-workspace.js";

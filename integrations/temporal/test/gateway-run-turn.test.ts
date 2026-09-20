@@ -1,7 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import type { AgentId } from "../../../src/core/ids.js";
+import { LocalMemoryDurability } from "../../../src/durability/local-memory.js";
+import type { AgentEngine } from "../../../src/runtime/agent-engine.js";
+import { AgentRuntime } from "../../../src/runtime/agent-runtime.js";
+import { createGatewayAgentEngine } from "../../../src/runtime/gateway-engine.js";
 import type { DurableMailboxMessage } from "../src/contracts.js";
 import {
+  TRIAGE_SYSTEM_PROMPT,
   buildTriageUserMessage,
   createGatewayRunTurn,
   extractJsonObject,
@@ -211,4 +217,84 @@ test("user message lists every event in order", () => {
     buildTriageUserMessage([message("first"), message("second")]),
     "Classify these 2 event(s), in order:\n1. first\n2. second",
   );
+});
+
+test("runTurn invokes the shared engine body and makes no HTTP call of its own", async () => {
+  const engineCalls: Array<readonly unknown[]> = [];
+  let rawHttpCalls = 0;
+  const engine: AgentEngine = {
+    async run(messages) {
+      engineCalls.push(messages);
+      return {
+        content: JSON.stringify({ events: [{ classification: "incident", reaction: "page on-call" }] }),
+        toolCalls: [],
+        observations: [],
+        requestedModel: "m",
+        servedModel: "m",
+        modelSubstituted: false,
+        latencyMs: 3,
+      };
+    },
+  };
+  const runTurn = createGatewayRunTurn({
+    baseUrl: "http://gw.test",
+    model: "m",
+    heartbeat: () => {},
+    engine,
+    fetchImpl: (async () => {
+      rawHttpCalls++;
+      throw new Error("the activity must not make its own HTTP call");
+    }) as unknown as typeof fetch,
+  });
+
+  const result = await runTurn({ agentId: "a", messages: [message("central bank holds rates")] });
+
+  assert.equal(engineCalls.length, 1, "the activity must invoke the shared body exactly once");
+  assert.equal(engineCalls[0]!.length, 1);
+  assert.equal(rawHttpCalls, 0, "the old raw-HTTP turn path must be gone");
+  assert.deepEqual((result.result as { classifications: unknown[] }).classifications, [
+    { classification: "incident", reaction: "page on-call" },
+  ]);
+});
+
+test("the durable activity and the in-process driver run the same engine body", async () => {
+  const bodies: string[] = [];
+  let engineRuns = 0;
+  const body = createGatewayAgentEngine({
+    baseUrl: "http://gw.test",
+    model: "m",
+    heartbeat: () => {},
+    systemPrompt: TRIAGE_SYSTEM_PROMPT,
+    buildUserMessage: (messages) => buildTriageUserMessage(messages),
+    fetchImpl: (async (_url: string, init: RequestInit) => {
+      bodies.push(String(init.body));
+      return chatReply('{"events":[{"classification":"news","reaction":"log it"}]}');
+    }) as unknown as typeof fetch,
+  });
+  const engine: AgentEngine = {
+    async run(messages, context) {
+      engineRuns++;
+      return body.run(messages, context);
+    },
+  };
+
+  // Durable path: the workflow's runTurn activity.
+  const runTurn = createGatewayRunTurn({ baseUrl: "http://gw.test", model: "m", heartbeat: () => {}, engine });
+  await runTurn({ agentId: "agt_shared", messages: [message("event one")] });
+
+  // In-process path: AgentRuntime.run with the same engine.
+  const runtime = new AgentRuntime(new LocalMemoryDurability());
+  const workspace = await runtime.createWorkspace();
+  await runtime.spawn({
+    id: "agt_shared" as AgentId,
+    definition: { id: "def", inferenceProfile: { id: "m", model: "m" } },
+    engine,
+    workspace,
+  });
+  await runtime.send("agt_shared" as AgentId, "event one");
+  await runtime.run("agt_shared" as AgentId);
+
+  assert.equal(engineRuns, 2, "both drivers must go through the one shared body");
+  assert.equal(bodies.length, 2, "both drivers must reach the gateway through that body");
+  assert.equal(bodies[0], bodies[1], "the shared body must build the same request for both drivers");
 });

@@ -1,18 +1,19 @@
 import { ApplicationFailure, Context as ActivityContext } from "@temporalio/activity";
+import type { AgentId, WorkspaceId } from "../../../src/core/ids.js";
+import type { AgentMessage } from "../../../src/core/types.js";
+import type { AgentEngine, AgentEngineContext } from "../../../src/runtime/agent-engine.js";
+import {
+  GatewayHttpError,
+  createGatewayAgentEngine,
+  type GatewayTurnOutcome,
+} from "../../../src/runtime/gateway-engine.js";
 import type { AgentActivities, DurableMailboxMessage, RunTurnInput, RunTurnResult } from "./contracts.js";
-import { parseRetryHintMs } from "./retry-hints.js";
 
 /**
- * HTTP statuses that will never succeed on retry (bad request, auth, missing
- * route/model, validation). Everything else — 408/409/425/429, 5xx, timeouts,
- * network errors, empty or malformed completions — is treated as transient and
- * left to Temporal's retry policy and, after that, the workflow's park/backoff.
- */
-const PERMANENT_HTTP_STATUSES = new Set([400, 401, 402, 403, 404, 422]);
-
-/**
- * A `runTurn` activity that does REAL inference through an OpenAI-compatible
- * gateway (this repo's own gateway, or any Chat Completions endpoint).
+ * The `runTurn` activity. It is a thin Temporal adapter: it maps the durable
+ * mailbox input into the shared turn body (`GatewayAgentEngine`, in `src/`) and
+ * the turn outcome back into the workflow's result shape. It does NOT make the
+ * model HTTP call itself — that would be a second turn implementation.
  *
  * Task given to the model: classify each event in the turn's batch. The typed
  * `kind` tag on a message is deliberately NEVER sent to the model, so it stays
@@ -29,6 +30,14 @@ const PERMANENT_HTTP_STATUSES = new Set([400, 401, 402, 403, 404, 422]);
  * model the activity heartbeats, because the workflow configures a heartbeat
  * timeout and a slow (reasoning) model would otherwise be failed for silence.
  */
+
+/**
+ * HTTP statuses that will never succeed on retry (bad request, auth, missing
+ * route/model, validation). Everything else — 408/409/425/429, 5xx, timeouts,
+ * network errors, empty or malformed completions — is treated as transient and
+ * left to Temporal's retry policy and, after that, the workflow's park/backoff.
+ */
+const PERMANENT_HTTP_STATUSES = new Set([400, 401, 402, 403, 404, 422]);
 
 export const EVENT_CLASSES = ["news", "social_post", "incident"] as const;
 export type EventClass = (typeof EVENT_CLASSES)[number];
@@ -68,6 +77,11 @@ export interface GatewayRunTurnOptions {
   heartbeat?: () => void;
   /** Called with one record per successful turn (in-process observers, e.g. a live driver). */
   onTurn?: (record: GatewayTurnRecord) => void;
+  /**
+   * The shared turn body. Defaults to `GatewayAgentEngine` configured for event
+   * triage; tests inject one to observe that the activity really runs it.
+   */
+  engine?: AgentEngine;
 }
 
 export const TRIAGE_SYSTEM_PROMPT = [
@@ -133,75 +147,75 @@ function currentAttempt(): number {
   }
 }
 
+function toAgentMessage(message: DurableMailboxMessage): AgentMessage {
+  return { id: message.id, role: message.role, text: message.text, createdAt: message.createdAt };
+}
+
+function buildTurnContext(input: RunTurnInput, model: string): AgentEngineContext {
+  const inferenceProfile = { id: model, model };
+  return {
+    agentId: input.agentId as AgentId,
+    workspaceId: `temporal:${input.agentId}` as WorkspaceId,
+    definition: { id: input.agentId, inferenceProfile },
+    inferenceProfile,
+    signal: new AbortController().signal,
+    // The durable workflow owns observable state; the activity is pure compute.
+    emitOutput: () => {},
+    emitTool: () => {},
+  };
+}
+
+/** Translate the shared body's status-carrying error into Temporal's retry taxonomy. */
+function toTemporalError(error: unknown): unknown {
+  if (error instanceof GatewayHttpError) {
+    if (PERMANENT_HTTP_STATUSES.has(error.status)) {
+      return ApplicationFailure.nonRetryable(error.message, `GatewayHTTP${error.status}`);
+    }
+    if (error.retryAfterMs !== undefined && (error.status === 429 || error.status === 503)) {
+      // Carry the server's reset hint across the activity boundary so the
+      // workflow waits for the real window instead of a blind backoff.
+      return ApplicationFailure.create({ message: error.message, type: "RateLimited", details: [{ retryAfterMs: error.retryAfterMs }] });
+    }
+  }
+  return error;
+}
+
 export function createGatewayRunTurn(options: GatewayRunTurnOptions): AgentActivities["runTurn"] {
-  const doFetch = options.fetchImpl ?? fetch;
-  const heartbeat = options.heartbeat ?? defaultHeartbeat;
-  const timeoutMs = options.timeoutMs ?? 120_000;
-  const heartbeatIntervalMs = options.heartbeatIntervalMs ?? 10_000;
-  const url = `${options.baseUrl.replace(/\/$/, "")}/v1/chat/completions`;
+  const engine = options.engine ?? createGatewayAgentEngine({
+    baseUrl: options.baseUrl,
+    model: options.model,
+    ...(options.apiKey ? { apiKey: options.apiKey } : {}),
+    ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+    ...(options.heartbeatIntervalMs !== undefined ? { heartbeatIntervalMs: options.heartbeatIntervalMs } : {}),
+    ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+    heartbeat: options.heartbeat ?? defaultHeartbeat,
+    systemPrompt: TRIAGE_SYSTEM_PROMPT,
+    buildUserMessage: (messages) => buildTriageUserMessage(messages),
+  });
 
   return async function runTurn(input: RunTurnInput): Promise<RunTurnResult> {
-    const startedAt = Date.now();
-    const headers: Record<string, string> = { "content-type": "application/json" };
-    if (options.apiKey) headers.authorization = `Bearer ${options.apiKey}`;
-
-    heartbeat();
-    const timer = setInterval(heartbeat, heartbeatIntervalMs);
-    let body: {
-      choices?: Array<{ message?: { content?: string | null } }>;
-      usage?: GatewayTurnRecord["usage"];
-      model?: string;
-    };
+    const messages = input.messages.map(toAgentMessage);
+    let outcome: GatewayTurnOutcome;
     try {
-      const response = await doFetch(url, {
-        method: "POST",
-        headers,
-        signal: AbortSignal.timeout(timeoutMs),
-        body: JSON.stringify({
-          model: options.model,
-          messages: [
-            { role: "system", content: TRIAGE_SYSTEM_PROMPT },
-            { role: "user", content: buildTriageUserMessage(input.messages) },
-          ],
-        }),
-      });
-      const text = await response.text();
-      if (!response.ok) {
-        const message = `gateway returned HTTP ${response.status}: ${text.slice(0, 300)}`;
-        if (PERMANENT_HTTP_STATUSES.has(response.status)) {
-          throw ApplicationFailure.nonRetryable(message, `GatewayHTTP${response.status}`);
-        }
-        const retryAfterMs = parseRetryHintMs(response.headers);
-        if (retryAfterMs !== undefined && (response.status === 429 || response.status === 503)) {
-          // Carry the server's reset hint across the activity boundary so the
-          // workflow waits for the real window instead of a blind backoff.
-          throw ApplicationFailure.create({ message, type: "RateLimited", details: [{ retryAfterMs }] });
-        }
-        throw new Error(message);
-      }
-      body = JSON.parse(text);
-    } finally {
-      clearInterval(timer);
+      outcome = (await engine.run(messages, buildTurnContext(input, options.model))) as GatewayTurnOutcome;
+    } catch (error) {
+      throw toTemporalError(error);
     }
+    const classifications = parseClassifications(outcome.content, input.messages.length);
 
-    const content = body.choices?.[0]?.message?.content;
-    if (typeof content !== "string" || content.length === 0) throw new Error("gateway reply had no message content");
-    const classifications = parseClassifications(content, input.messages.length);
-
-    // The upstream is the only authority on which model answered. If it omits the
-    // field we record `null` (unknown) rather than back-filling the requested id,
-    // which would hide a router substitution behind failover or cooldown.
-    const servedModel = typeof body.model === "string" && body.model.trim() ? body.model.trim() : null;
     const record: GatewayTurnRecord = {
       agentId: input.agentId,
       attempt: currentAttempt(),
       plantedKinds: input.messages.map((message) => message.kind ?? null),
       classifications,
-      requestedModel: options.model,
-      servedModel,
-      modelSubstituted: servedModel !== null && servedModel !== options.model,
-      latencyMs: Date.now() - startedAt,
-      ...(body.usage ? { usage: body.usage } : {}),
+      requestedModel: outcome.requestedModel ?? options.model,
+      // The upstream is the only authority on which model answered. If it omits
+      // the field we record `null` (unknown) rather than back-filling the
+      // requested id, which would hide a router substitution.
+      servedModel: outcome.servedModel ?? null,
+      modelSubstituted: outcome.modelSubstituted ?? false,
+      latencyMs: outcome.latencyMs ?? 0,
+      ...(outcome.usage ? { usage: outcome.usage } : {}),
     };
     options.onTurn?.(record);
     return { result: { classifications, latencyMs: record.latencyMs }, state: "idle" };
