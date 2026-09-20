@@ -83,3 +83,12 @@ disk and via `/proc/<ppid>/cwd`) are pinned too; the worker runs under Node's
 permission model confined to the scoring work dir and refuses to run if the
 model is unavailable. `scoreGymPatch` now takes held-out `cases` instead of a
 `hiddenTestPath`; the `he/decimal-option` fixture ships `hidden.cases.json`.
+
+Follow-up on the same commit: a legacy-shaped call (`hiddenTestPath` plus
+`expectedHiddenTests`, no `cases`) reached `options.cases.length` and threw
+`TypeError: cannot read properties of undefined`, breaking the rule that the
+scorer returns an outcome rather than throwing (the same class as the
+hidden-test-dest-as-a-directory crash). `isolatedScoreGymPatch` now checks
+`Array.isArray(options.cases)` and returns `errored` with a clear detail.
+Failing-first: `test/gym-scoring.test.ts` "a legacy hiddenTestPath call is
+errored, not a crash" failed with `TypeError` before the guard and passes after.

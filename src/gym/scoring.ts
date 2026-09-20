@@ -249,6 +249,13 @@ export async function isolatedScoreGymPatch(options: IsolatedScoreOptions): Prom
   if (isTampering(touchedPaths)) {
     return { outcome: "tampered", touchedPaths, cases: [], detail: `patch touches protected paths: ${touchedPaths.join(", ")}` };
   }
+  // The scorer must always return one of the outcomes, never throw. The type
+  // requires `cases`, but a JS or legacy-shaped caller (hiddenTestPath plus
+  // expectedHiddenTests, no cases) reaches here with `cases` undefined; return a
+  // clear `errored` rather than a TypeError.
+  if (!Array.isArray(options.cases)) {
+    return { outcome: "errored", touchedPaths, cases: [], detail: "the scorer requires held-out cases; the legacy hiddenTestPath/expectedHiddenTests signature is no longer supported" };
+  }
   if (options.cases.length === 0) {
     // No test vectors is not a pass: a vacuous run must be a distinct non-pass.
     return { outcome: "errored", touchedPaths, cases: [], detail: "no hidden cases: refusing a vacuous pass" };

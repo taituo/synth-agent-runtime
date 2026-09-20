@@ -244,6 +244,22 @@ test("a patch that does not apply is errored", async () => {
   }
 });
 
+test("a legacy hiddenTestPath call is errored, not a crash", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "gym-"));
+  try {
+    const repo = await makeTaskRepo(parent);
+    const patch = await patchFor(repo, (dir) => writeFile(join(dir, "lib.mjs"), FIXED));
+    // A JS or pre-cases caller still passes hiddenTestPath/expectedHiddenTests and
+    // no cases. The scorer must return an outcome, never throw a TypeError.
+    const legacy = { patchText: patch, baseRepoDir: repo, hiddenTestPath: "hidden.test.mjs", expectedHiddenTests: 2 } as unknown as Parameters<typeof scoreGymPatch>[0];
+    const score = await scoreGymPatch(legacy);
+    assert.equal(score.outcome, "errored");
+    assert.match(score.detail ?? "", /held-out cases/);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
 test("a case that outlives the timeout is errored, not passed", async () => {
   const parent = await mkdtemp(join(tmpdir(), "gym-"));
   try {
