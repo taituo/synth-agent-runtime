@@ -2,6 +2,50 @@
 
 ## 1.0.0-rc.1 — abort-safety fix folded in, git ref/remote argument-injection fixed
 
+### Gym scoring: score the diff, against a test the agent never sees
+
+- **The gym's first half is the scoring pipeline** (`src/gym/scoring.ts`): apply
+  the agent's patch to a fresh checkout of the pinned commit, copy in a
+  held-out test the agent never sees, and record one of `passed`, `failed`,
+  `tampered`, `timed-out`, `errored`, `skipped`. A diff that touches test files
+  or runner config is `tampered`, not `failed`. Path extraction uses git's own
+  parser (`git apply --numstat -z`) plus both sides of renames and the
+  `---`/`+++` headers, so a hand-crafted patch cannot hide a protected path.
+- **`passed` is not "node exited 0".** The hidden test imports the
+  agent-controlled module, so a top-level `process.exit(0)` or an `assert`
+  monkeypatch would otherwise score green — `node --test` even marks an early
+  exited-0 file as a passing subtest. `passed` now requires a real TAP summary
+  with zero failures, the expected number of passing subtests, and a per-run
+  completion marker the hidden test prints only after its assertions. `assert`
+  is frozen before agent code loads, and a hidden test that runs no assertions
+  is `skipped`/`errored`, never `passed`.
+
+### Model visibility: never guess which model answered
+
+- **The answering model is recorded as it happened.** `GatewayTurnRecord` now
+  carries `requestedModel` and `servedModel` separately, with
+  `modelSubstituted` when the upstream names a different model; an upstream that
+  omits the field is recorded as unknown, never back-filled with the requested
+  id. A hardcoded `modelIds` filter in a probe host had made 27 available models
+  look like one, and every accuracy/latency figure was that single model's.
+  Discovery is no longer filtered (authorization belongs in the gateway's tenant
+  policy), and `npm run models:list` prints the catalog with provider/profile.
+  Live: the unfiltered adapter lists all 27 models, with zero quota spent.
+
+### Verification fixes: a third copy removed, dead claims retired
+
+- The Temporal integration's retry-hint parser was a third copy; the canonical
+  parser lives in `src/inference/gateway/retry-hint.ts`, the router and the
+  integration use it, and the stack-router's standalone copy is pinned by a
+  parity test over shared header sets.
+- Fault-matrix `proven` rows now require evidence recording an executed run and
+  a runnable artifact, not a `.test.ts` filename; the six provider rows were
+  never measured under both rungs and are now `reasoned`.
+- The real-429 driver asserts the park tracks the parsed hint, not merely that
+  the agent parked. A lane-scheduler property test covers arrival streams. The
+  blob-store "receipt digest" test, which proved only the store round-trip under
+  a receipt name, is replaced by an explicit known-open canary.
+
 ### Artifact handoff by reference, with provenance and a flat history
 
 - **Artifacts now carry provenance and can be handed onward without bytes
