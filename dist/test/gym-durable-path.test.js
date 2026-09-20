@@ -57,6 +57,13 @@ test("gym-worker.ts registers the gym workflow and its activity", () => {
     const GYM_ACTIVITIES = readFileSync(repoFile("integrations/temporal/src/gym-activities.ts"), "utf8");
     assert.match(GYM_ACTIVITIES, /const runTurn = async/, "the gym must provide the one-turn runTurn activity");
     assert.match(GYM_ACTIVITIES, /executeEffect:/, "the turn must execute tools through the rung");
+    // The scored-local refusal is enforced at the activity boundary, not only in
+    // the drivers, so a direct workflow start cannot run a scored attempt on the
+    // unisolated host runner. Behaviour is exercised by the temporal suite
+    // (integrations/temporal/test/gym-activities.test.ts); this pins the wiring
+    // in the root suite so a silent removal is caught here too.
+    assert.match(GYM_ACTIVITIES, /GymUnisolatedScoredRun/, "the activity must refuse a scored local run");
+    assert.match(GYM_ACTIVITIES, /turnScopedEffectId/, "the turn must scope effect ids per turn (no broker replay)");
 });
 test("there is exactly one gateway turn body, and the gym turn is a thin adapter over it", () => {
     const gymTurn = readFileSync(repoFile("src/gym/turn.ts"), "utf8");

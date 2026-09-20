@@ -30,3 +30,33 @@ jobs:
       - run: npm test --prefix integrations/temporal
       - name: live proofs (infra-absent proofs skip honestly, never pass)
         run: node scripts/live-proofs.mjs
+
+  # The gym anti-cheat and boundary regressions, run explicitly so a future
+  # change to the test glob cannot silently drop them. Unit-level only: the
+  # gVisor pod tests SKIP without a cluster (they are never counted as passes).
+  # The gym branch is not on main yet; this job runs once the branch is checked
+  # out (push/PR) and after it merges.
+  gym:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - run: npm run build
+      - name: gym scorer forgeries, hardening and boundary (unit level)
+        run: >-
+          node --test
+          dist/test/gym-forge.test.js
+          dist/test/gym-scoring.test.js
+          dist/test/gym-scoring-hardening.test.js
+          dist/test/gym-patch-paths.test.js
+          dist/test/gym-runner-isolation.test.js
+          dist/test/gym-sandbox-boundary.test.js
+          dist/test/gym-durable-path.test.js
+          dist/test/symlink-target.test.js
+      - name: gym durable-turn activity boundary (temporal)
+        run: |
+          npm install --prefix integrations/temporal
+          integrations/temporal/node_modules/.bin/tsx --test integrations/temporal/test/gym-activities.test.ts

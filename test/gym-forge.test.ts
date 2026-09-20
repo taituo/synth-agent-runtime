@@ -1,14 +1,17 @@
 /**
  * Permanent regression tests for every scorer forgery demonstrated in review.
  *
- * FORGE 1-3 were the round-five payloads (env nonce, early exit, assert
- * mutation). FORGE 4 is review round six ONE-a, the one that broke the HMAC
- * design: the harness holding the signing key was written INTO the clone and
- * exported check()/complete(), so agent code used it as a signing oracle and got
- * a genuine MAC over a forged transcript. There is no in-process signer now, so
- * the payload cannot even load. FORGE 5/5b are the ground-truth-read channel
- * (a worker found the held-out vectors through /proc/<ppid>/cwd); the worker runs
- * under Node's permission model and the read is denied.
+ * This is the single consolidated FORGE file (the duplicate copies that lived in
+ * `gym-isolated-score.test.ts` are gone). FORGE 1-3 are the round-five payloads
+ * (env nonce, early exit, assert mutation). FORGE 4 is review round six ONE-a,
+ * the one that broke the HMAC design: the harness holding the signing key was
+ * written INTO the clone and exported check()/complete(), so agent code used it
+ * as a signing oracle and got a genuine MAC over a forged transcript. There is
+ * no in-process signer now, so the payload cannot even load. FORGE 5/5b are the
+ * ground-truth-read channel (a worker found the held-out vectors through
+ * /proc/<ppid>/cwd); the worker runs under Node's permission model and the read
+ * is denied. FORGE 6 is the leaf-symlink escape and FORGE 7 the same escape via
+ * openSync+readSync; the scorer resolves the checkout's symlinks and refuses.
  *
  * The golden control runs every time: a scorer that rejects everything is not a
  * defence, it is a broken scorer.
@@ -234,6 +237,42 @@ test("FORGE 6 (round-six survivor): a leaf symlink to the held-out vectors does 
     await git(repo, "checkout", "--", ".");
     const score = await scoreGymPatch({ patchText: patch, baseRepoDir: repo, cases: CASES });
     assert.notEqual(score.outcome, "passed", "a symlink to the held-out vectors must not pass");
+    assert.equal(score.outcome, "tampered", score.detail);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("FORGE 7: reading the vectors through a leaf symlink via openSync+readSync is tampered", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "gym-iso-"));
+  try {
+    const repo = await makeRepo(parent);
+    // Same leaf-symlink escape as FORGE 6, through a different fs entry point.
+    // The guard resolves the checkout's symlinks BEFORE the worker runs, so it
+    // is not specific to `readFileSync` (review: the symlink primitive reaches
+    // readFileSync, fs.promises.readFile, openSync+readSync, statSync, ...).
+    const vectors = join(parent, "vectors.json");
+    await writeFile(vectors, JSON.stringify(CASES));
+    const attack = [
+      'import { openSync, readSync, closeSync } from "node:fs";',
+      'const fd = openSync("./escape.json", "r");',
+      "const buf = Buffer.alloc(65536);",
+      "const n = readSync(fd, buf, 0, buf.length, 0);",
+      "closeSync(fd);",
+      'const table = new Map(JSON.parse(buf.subarray(0, n).toString("utf8")).map((c) => [JSON.stringify(c.args), c.expect]));',
+      "export function addOne(n) {",
+      "  const key = JSON.stringify([n]);",
+      "  return table.has(key) ? table.get(key) : n;",
+      "}",
+    ].join("\n");
+    await writeFile(join(repo, "lib.mjs"), attack);
+    await symlink(vectors, join(repo, "escape.json"));
+    await git(repo, "add", "-A");
+    const patch = await git(repo, "diff", "--cached");
+    await git(repo, "reset", "-q", "HEAD");
+    await git(repo, "checkout", "--", ".");
+    const score = await scoreGymPatch({ patchText: patch, baseRepoDir: repo, cases: CASES });
+    assert.notEqual(score.outcome, "passed", "the openSync read through a leaf symlink must not pass");
     assert.equal(score.outcome, "tampered", score.detail);
   } finally {
     await rm(parent, { recursive: true, force: true });
