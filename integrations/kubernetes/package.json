@@ -8,6 +8,7 @@
   "scripts": {
     "kill-chaos": "tsx kill-chaos.ts",
     "fault-rungs": "tsx fault-rungs.ts",
+    "sandbox-workspace": "tsx sandbox-workspace-live.ts",
     "mixed-chain": "tsx mixed-chain.ts",
     "git-transport": "tsx git-transport-live.ts"
   }

@@ -54,6 +54,7 @@ const PROOFS = [
   { name: "session-supervisor", cwd: TEMPORAL, runner: "tsx", script: "supervisor/live.ts", requires: "tmux+separate-temporal:7244" },
 
   { name: "fault-rungs", cwd: KUBERNETES, runner: "tsx", script: "fault-rungs.ts", requires: "k8s+gvisor" },
+  { name: "sandbox-workspace", cwd: KUBERNETES, runner: "tsx", script: "sandbox-workspace-live.ts", requires: "k8s+gvisor" },
   { name: "git-transport", cwd: KUBERNETES, runner: "tsx", script: "git-transport-live.ts", requires: "k8s+gvisor" },
   { name: "kill-chaos", cwd: KUBERNETES, runner: "tsx", script: "kill-chaos.ts", requires: "k8s+gvisor" },
   { name: "mixed-chain", cwd: KUBERNETES, runner: "tsx", script: "mixed-chain.ts", requires: "k8s+gvisor" },

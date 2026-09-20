@@ -6,6 +6,22 @@ removed only when the closing work lands.
 
 ## Runtime and deploy
 
+- **The scored gym path is on `gym-runner`; `main` only provides the rung.**
+  `SandboxWorkspaceExecutor` and `assertRungAllowedForScored` exist on `main`,
+  but the scored loop (`runGymAttempt`, `gym-activities.ts`) is on the
+  `gym-runner` branch. Until it merges and calls the sandbox rung / the refusal,
+  a scored run there can still use the host `localEffectRunner`. Closing: `gym-2`
+  drives the shared sandbox rung and calls the refusal.
+- **Sandbox workspace checkpoints are diffs; huge workspaces still need the git
+  transport.** `checkpointSandboxWorkspace` writes the workspace diff
+  (`exportArtifact`) to the blob store and restores by digest. A very large
+  overlay is encoded in memory; the git transport
+  (`workspace/git-transport.ts`) is the path for those. Closing: stream the diff
+  or checkpoint via git for large workspaces.
+- **The synthetic rung stays unisolated by design.** It is labelled
+  `isolated: false`; it is for cheap/unscored runs. A scored run must use the
+  sandbox rung or be refused.
+
 - **Per-run provider selection is an API, not yet threaded through the turn
   config.** `provider-config.ts` exposes `selectProvider`/`directProviderSettings`
   so a run can pick a provider/profile, and the worker selects one provider at

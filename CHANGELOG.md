@@ -1,5 +1,43 @@
 # Changelog
 
+## Unreleased — the sandbox rung's workspace lives in the Pod
+
+### `workspace.read/write/list` now execute inside the boundary
+
+- New `src/execution/kubernetes/sandbox-workspace.ts`
+  (`SandboxWorkspaceExecutor`): holds a persistent Pod per workspace and runs
+  `workspace.read/write/list/delete` AND `process.exec` inside it via the
+  `SandboxBackend`. `MemoryWorkspace` is only a seed/checkpoint cache, never the
+  read/write medium, so model-authored reads/writes are boundary-enforced.
+- The sandbox rung (`integrations/temporal/src/gateway-run-turn.ts`) now builds
+  `SandboxWorkspaceExecutor` per resource class and **no** `SyntheticExecutor`,
+  so workspace effects cannot be served from worker RAM. The rung is cached per
+  agent (the Pod outlives one turn) and checkpoints after each turn instead of
+  closing.
+- Durability: `checkpointSandboxWorkspace` syncs the Pod back into its cache and
+  writes the workspace diff to the blob store; `restoreSandboxWorkspace` restores
+  a digest into a fresh cache, which the next executor materializes into a new
+  Pod. Reuses `workspace/snapshot-codec.ts`/`exportArtifact` and the blob store —
+  no second store.
+- The synthetic rung is explicitly `isolated: false`; the sandbox rung is
+  `isolated: true`. `assertRungAllowedForScored(rung, scored)` refuses a scored
+  run on an unisolated rung (the same rule as the gym's `runner:"local"` refusal).
+
+### Evidence
+
+- `test/sandbox-workspace.test.ts` (2 tests) with a fake Pod backend: workspace
+  write/read/list run on the sandbox executor (asserts executor id and backend
+  call counts), the host cache is untouched until checkpoint, a host sentinel is
+  untouched, and a checkpointed workspace is restored from the blob digest into a
+  new Pod. Red without `sandbox-workspace.ts` (build error), green with it.
+- `integrations/kubernetes/sandbox-workspace-live.ts` — live proof against real
+  k3s + gVisor (`sandbox-workspace` in `scripts/live-proofs.mjs`):
+  `executor=sandbox-workspace:sandbox-small`, `readBack=pod-bytes`,
+  `execOutput=pod-bytes`, cache untouched before checkpoint, `hostSentinel=
+  host-untouched`, `checkpointDigest=sha256:77fffe5e…`, `ok:true`.
+- Temporal suite: `assertRungAllowedForScored` refuses the synthetic rung and
+  accepts the sandbox rung.
+
 ## Unreleased — provider-agnostic, config-driven backends
 
 ### Any OpenAI-compatible endpoint plugs in from configuration

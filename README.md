@@ -46,16 +46,21 @@ GatewayAgentEngine.run(messages, context)   ← the single turn body
                 ▼
         ExecutionBroker (execution rung)
                 │
-                ├─ synthetic / in-memory workspace (cheap, fidelity 0)
-                └─ Kubernetes + gVisor executor Pod (process.exec)
+                ├─ synthetic: in-memory workspace, UNISOLATED (cheap, fidelity 0)
+                └─ sandbox: a persistent Kubernetes + gVisor Pod where
+                   workspace.read/write/list AND process.exec run
 ```
 
 The workflow's per-agent `turnConfig` (system prompt, tool surface, rung
 selection) is carried into the activity, which resolves the rung and sets
-`executeEffect`; a tool call then runs instead of being refused. Model-authored
-code only ever runs through the execution rung, never in the worker process.
-The `runTurn` activity is a thin Temporal adapter over the engine; it makes no
-model HTTP call of its own.
+`executeEffect`; a tool call then runs instead of being refused. On the sandbox
+rung the workspace medium is the Pod, not worker RAM: `SandboxWorkspaceExecutor`
+holds a persistent Pod per workspace and runs `workspace.read/write/list/delete`
+and `process.exec` inside it, with `MemoryWorkspace` only a seed/checkpoint
+cache. The synthetic rung is explicitly labelled unisolated and a scored run
+refuses it (`assertRungAllowedForScored`). Model-authored code runs only through
+the execution rung. The `runTurn` activity is a thin Temporal adapter over the
+engine; it makes no model HTTP call of its own.
 
 A separate store-level invariant still holds for fenced writes: a stale worker
 cannot publish a later terminal `AgentSnapshot` after a newer lease generation
@@ -161,13 +166,13 @@ Measured under Node v22.20.0 (`node --version`), on commit `HEAD`:
 
 ```text
 npm test  (root suite)
-196 passed / 0 failed
+198 passed / 0 failed
 
 npm test --prefix integrations/temporal  (durable workflow + turn body + graph harness)
-89 passed / 0 failed
+90 passed / 0 failed
 
 npm run integrations:syntax
-81 TypeScript integration files / 0 syntax diagnostics
+82 TypeScript integration files / 0 syntax diagnostics
 3 shell files / syntax OK
 
 integrations/opencode-http-gateway: npm test
