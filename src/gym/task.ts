@@ -20,6 +20,7 @@ import { access, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
+import type { GymCase } from "./isolated-score.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -46,6 +47,12 @@ export interface GymTask {
   hiddenTestPath: string;
   /** The clean -> bugged patch, applied and committed by `materializeGymTask`. */
   mutationPatch: string;
+  /**
+   * Held-out test vectors for the isolated (unforgeable) scorer. Loaded from
+   * `hidden.cases.json` when present; the runner uses them instead of running a
+   * node:test file in-process with agent code.
+   */
+  hiddenCases?: GymCase[];
   /** Directory the fixture was loaded from; used to locate the visible test. */
   taskDir: string;
   /** Stable identifier for reports. */
@@ -67,6 +74,7 @@ export interface GymTaskDescriptor {
 export const VISIBLE_TEST_FIXTURE = "visible.test.mjs";
 export const MUTATION_PATCH_FIXTURE = "bug.patch";
 export const TASK_DESCRIPTOR_FIXTURE = "task.json";
+export const HIDDEN_CASES_FIXTURE = "hidden.cases.json";
 
 function requireString(value: unknown, field: string, where: string): string {
   if (typeof value !== "string" || value.length === 0) throw new Error(`gym task ${where} is missing string field "${field}"`);
@@ -85,7 +93,19 @@ export async function loadGymTask(taskDir: string): Promise<GymTask> {
   const seed = typeof raw.seed === "number" ? raw.seed : 0;
   const mutationPatch = await readFile(join(taskDir, MUTATION_PATCH_FIXTURE), "utf8");
   if (mutationPatch.trim().length === 0) throw new Error(`gym task ${taskDir} has an empty ${MUTATION_PATCH_FIXTURE}`);
-  return { repo, commit, seed, visibleTestPath, hiddenTestPath, mutationPatch, taskDir, slug };
+  let hiddenCases: GymCase[] | undefined;
+  try {
+    const parsed = JSON.parse(await readFile(join(taskDir, HIDDEN_CASES_FIXTURE), "utf8")) as GymCase[] | { cases?: GymCase[] };
+    hiddenCases = Array.isArray(parsed) ? parsed : parsed.cases;
+    if (hiddenCases && hiddenCases.length === 0) {
+      // An empty held-out set must not be silently treated as "no cases": the
+      // scorer refuses a vacuous pass, but fail loudly here too.
+      throw new Error(`gym task ${taskDir} has an empty ${HIDDEN_CASES_FIXTURE}`);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error;
+  }
+  return { repo, commit, seed, visibleTestPath, hiddenTestPath, mutationPatch, taskDir, slug, ...(hiddenCases ? { hiddenCases } : {}) };
 }
 
 export interface MaterializeGymTaskOptions {

@@ -14,6 +14,7 @@ import type { GymOutcome, GymScore } from "./scoring.js";
 import { isTampering, patchTargetPaths, scoreGymPatch, PROTECTED_PATTERNS } from "./scoring.js";
 import { buildGymSystemPrompt, buildGymUserPrompt, createGymTools, GYM_TOOL_DEFINITIONS, type EffectRunner, type GymToolCall, type GymToolDefinition } from "./tools.js";
 import { harvestPatch } from "./harvest.js";
+import { isolatedScoreGymPatch } from "./isolated-score.js";
 import type { GymCheckpointStore } from "./checkpoint.js";
 import type { MaterializedGymTask } from "./task.js";
 
@@ -290,7 +291,14 @@ export async function runGymAttempt(options: RunGymAttemptOptions): Promise<GymA
         // as malformed; this is a runner-level fact, not a scorer decision.
         score = { outcome: "failed", touchedPaths: [], detail: "no changes; the planted bug is still present" };
       } else {
-        const scorer = options.score ?? scoreGymPatch;
+        // When the task ships held-out cases, always use the isolated scorer:
+        // the pass decision is the verifier's comparison, never a child process
+        // the agent's code controls. Only case-less tasks fall back to the
+        // legacy in-process scorer.
+        const cases = task.task.hiddenCases;
+        const scorer: GymScorer = options.score ?? (cases
+          ? (request) => isolatedScoreGymPatch({ patchText: request.patchText, baseRepoDir: request.baseRepoDir, cases, ...(options.nodeBin ? { nodeBin: options.nodeBin } : {}) })
+          : scoreGymPatch);
         score = await scorer({
           patchText: patch,
           baseRepoDir: task.baseRepoDir,

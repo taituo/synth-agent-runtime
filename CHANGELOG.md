@@ -52,6 +52,20 @@
   from the next turn. A patch is O(delta) per turn rather than a full-repo
   bundle, which is the right unit for in-progress state; the git transport's
   mode/symlink fidelity remains for final egress.
+- **The gym pass decision is now unforgeable: it is made where the agent's code
+  cannot run, reach or observe it.** `src/gym/isolated-score.ts` runs the agent
+  module in a separate worker that is given one input per request and never sees
+  an expected output or a secret; the verifier (which never loads agent code)
+  holds the test vectors and decides by comparing returned values. The child's
+  exit code is not consulted, so `process.exit(0)` before assertions is
+  `errored`, not `passed`, and there is no `GYM_HIDDEN_NONCE` in the child's
+  environment to read. Zero cases is `errored`, never a vacuous pass. The
+  fixture's held-out vectors live in `hidden.cases.json`; a task with them always
+  uses the isolated scorer. Regression tests pin the exact fifth-round forges
+  (nonce read, early exit, constant stub, assert mutation) and the control
+  confirms the legacy in-process scorer still passes the early-exit forge while
+  the isolated scorer rejects it. This is additive: `src/gym/scoring.ts` is
+  untouched so the fix cannot conflict with concurrent work there.
 
 ### Artifact handoff by reference, with provenance and a flat history
 
