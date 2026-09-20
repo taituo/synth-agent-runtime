@@ -135,3 +135,29 @@ Reviewer channel inventory. What was checked, not a conclusion:
 - Permanent regressions added: `FORGE 6b` (symlink via `openSync`/`readSync` is
   `tampered`) and `FORGE 7` (`require` of the vectors is denied). `FORGE 5`
   already pins the direct-read denial.
+
+## Node permission model does not gate node:sqlite (2026-09-20)
+
+Reviewer finding: `node:sqlite` is NOT covered by Node's permission model. The
+worker, confined by `--permission --allow-fs-read=<work>`, could still open and
+mutate SQLite databases anywhere writable — a host-integrity escape independent
+of the verdict, and a latent forgery channel if expected values were ever stored
+in a SQLite file.
+
+Measured on this runtime: `node:sqlite` is available by default; with
+`--no-experimental-sqlite`, `require("node:sqlite")` fails with
+`ERR_UNKNOWN_BUILTIN_MODULE`.
+
+Fix: `workerArgs` adds an explicit `node:sqlite` deny. It probes whether the
+runtime exposes `node:sqlite` and whether `--no-experimental-sqlite` is
+accepted; if sqlite is present and cannot be denied, the scorer refuses to run
+rather than fail open.
+
+Failing-first: `FORGE 8` (worker opens and mutates a host DB outside the work
+dir) — without the deny, the host database file is created and the test fails on
+`the host database must not be created`; with the deny, the file is absent and
+the module reports `ERR_UNKNOWN_BUILTIN_MODULE`.
+
+Wording corrected: the confinement is a guardrail, not a security boundary
+(Node documents the model as such). Real isolation needs an OS sandbox; recorded
+in docs/KNOWN-OPEN.md.

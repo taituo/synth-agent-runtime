@@ -25,10 +25,13 @@
  *     expected values. The child's exit code is not consulted at all, so
  *     `process.exit(0)` (early exit) is a failure: the worker dies before
  *     answering and the run is `errored`, never `passed`.
- *   - The worker runs under Node's permission model, confined to the scoring
- *     work directory, so it cannot read the held-out vectors off the filesystem
- *     (a worker once found them through `/proc/<ppid>/cwd`). No permission model
- *     is a refusal to run, not a fail-open.
+ *   - The worker is confined by Node's permission model PLUS an explicit
+ *     `node:sqlite` deny. That confinement is a GUARDRAIL, not a security
+ *     boundary: Node documents the model as such, and it does not gate every
+ *     builtin — `node:sqlite` reached and mutated host state regardless of the
+ *     allowlist (review round six). It is defense-in-depth only; real isolation
+ *     needs an OS sandbox (see docs/KNOWN-OPEN.md). A runtime with no permission
+ *     model is a refusal to run, not a fail-open.
  *   - Zero cases is `errored`, not a vacuous pass.
  */
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -216,28 +219,66 @@ async function git(cwd: string, ...args: string[]): Promise<void> {
 }
 
 let cachedPermissionFlag: string | undefined;
+let cachedSqliteDeny: string[] | undefined;
+
+/**
+ * `node:sqlite` is NOT gated by the permission model: an allowlisted work dir
+ * still lets the worker open and mutate SQLite databases anywhere writable,
+ * including host state outside the work dir. Deny the builtin outright. If the
+ * runtime exposes `node:sqlite` but has no flag to deny it, refuse to run rather
+ * than leave the channel open.
+ */
+async function sqliteDenyArgs(node: string): Promise<string[]> {
+  if (cachedSqliteDeny) return cachedSqliteDeny;
+  let available = false;
+  try {
+    await execFileAsync(node, ["-e", "require('node:sqlite')"], { timeout: 10_000 });
+    available = true;
+  } catch {
+    available = false;
+  }
+  if (!available) {
+    cachedSqliteDeny = [];
+    return cachedSqliteDeny;
+  }
+  for (const flag of ["--no-experimental-sqlite"]) {
+    try {
+      await execFileAsync(node, [flag, "-e", "0"], { timeout: 10_000 });
+      cachedSqliteDeny = [flag];
+      return cachedSqliteDeny;
+    } catch {
+      // flag unsupported; try the next spelling
+    }
+  }
+  throw new Error("node:sqlite is available and cannot be denied on this runtime; refusing to run the scoring worker");
+}
 
 /**
  * The worker is untrusted agent code, so it must not be able to read the
  * held-out vectors off the filesystem (a worker read `hidden.cases.json` via
  * `/proc/<ppid>/cwd`). Node's permission model confines filesystem reads to the
  * scoring work directory, which contains only the clone and the worker script;
- * the fixture tree and `/proc/<ppid>` are outside it and are denied. If the
+ * the fixture tree and `/proc/<ppid>` are outside it and are denied. That model
+ * is a guardrail, not a boundary, so the sqlite deny is added explicitly. If the
  * runtime has no permission model we refuse to run rather than fail open.
  */
-async function permissionArgs(node: string, workDir: string): Promise<string[]> {
+async function workerArgs(node: string, workDir: string): Promise<string[]> {
   const allow = `--allow-fs-read=${workDir}`;
-  if (cachedPermissionFlag) return [cachedPermissionFlag, allow];
-  for (const flag of ["--permission", "--experimental-permission"]) {
-    try {
-      await execFileAsync(node, [flag, allow, "-e", "0"], { timeout: 10_000 });
-      cachedPermissionFlag = flag;
-      return [flag, allow];
-    } catch {
-      // flag unsupported; try the next spelling
+  let permission: string | undefined = cachedPermissionFlag;
+  if (!permission) {
+    for (const flag of ["--permission", "--experimental-permission"]) {
+      try {
+        await execFileAsync(node, [flag, allow, "-e", "0"], { timeout: 10_000 });
+        permission = flag;
+        cachedPermissionFlag = flag;
+        break;
+      } catch {
+        // flag unsupported; try the next spelling
+      }
     }
   }
-  throw new Error("Node has no permission model; refusing to run the scoring worker unsandboxed");
+  if (!permission) throw new Error("Node has no permission model; refusing to run the scoring worker unsandboxed");
+  return [permission, allow, ...(await sqliteDenyArgs(node))];
 }
 
 /**
@@ -330,7 +371,7 @@ export async function isolatedScoreGymPatch(options: IsolatedScoreOptions): Prom
     delete env.NODE_TEST_CONTEXT;
 
     const node = options.nodeBin ?? process.execPath;
-    const sandbox = await permissionArgs(node, work);
+    const sandbox = await workerArgs(node, work);
     child = spawn(node, [...sandbox, workerPath], {
       cwd: clone,
       env,

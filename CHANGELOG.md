@@ -14,9 +14,14 @@
   code. A worker child evaluates one call per request and reports the raw return
   value on a dedicated fd; the verdict is the verifier's comparison against the
   expected value. The child's exit code is not consulted, so `process.exit(0)`
-  is `errored`. The worker runs under Node's permission model confined to the
-  scoring work dir, so it cannot read the held-out vectors off the filesystem;
-  if no permission model exists the scorer refuses to run rather than fail open.
+  is `errored`. The worker is confined by Node's permission model (filesystem
+  reads limited to the scoring work dir) PLUS an explicit `node:sqlite` deny,
+  because the model does not gate every builtin: `node:sqlite` reached and
+  mutated host SQLite state regardless of the allowlist. This confinement is a
+  GUARDRAIL, not a security boundary (Node documents it as such); real isolation
+  needs an OS sandbox, recorded in docs/KNOWN-OPEN.md. If no permission model
+  exists, or `node:sqlite` is present with no way to deny it, the scorer refuses
+  to run rather than fail open.
 - `ScoreGymPatchOptions.hiddenTestPath`/`expectedHiddenTests` are replaced by
   `cases: GymCase[]`. The `he/decimal-option` task fixture ships
   `hidden.cases.json` in place of the in-clone TAP test. The `HIDDEN_HARNESS_*`
@@ -28,8 +33,9 @@
   broken) before the worker starts. A worker cannot create a link at runtime
   because it has no write permission.
 - Every demonstrated forgery is a permanent regression test in
-  `test/gym-vacuity.test.ts` (FORGE 1-6, including the signing oracle, the
-  `/proc/<ppid>/cwd` vector read, and the leaf symlink).
+  `test/gym-vacuity.test.ts` (FORGE 1-8, including the signing oracle, the
+  `/proc/<ppid>/cwd` vector read, the leaf symlink, and the `node:sqlite` host
+  escape).
 
 ## 1.0.0-rc.1 — abort-safety fix folded in, git ref/remote argument-injection fixed
 

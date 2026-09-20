@@ -21,6 +21,22 @@ removed only when the closing work lands.
   ceiling, and an audit event on `get`.
 
 
+## Gym scoring isolation
+
+- **The scoring worker's confinement is a guardrail, not a security boundary.**
+  The worker runs under Node's permission model (`--permission
+  --allow-fs-read=<work>`) plus an explicit `node:sqlite` deny, because the model
+  does NOT gate every builtin: `node:sqlite` reached and mutated host SQLite
+  state regardless of the allowlist (review round six). The deny closes that
+  channel and `FORGE 8` pins it, but Node documents the permission model as a
+  guardrail against accidental damage, not a boundary against in-process code.
+  Closing: run the worker in an OS-level sandbox with only the clone
+  bind-mounted and no host `/tmp` (a mount namespace, `unshare`/`bwrap`, or the
+  existing gVisor rung), so confinement does not depend on a builtin allowlist.
+  Until then, the scorer must not persist expected values, case data or secrets
+  anywhere a path from the worker can name — a SQLite file would reopen the
+  forgery channel.
+
 ## Measurement
 
 - **The corpus is a smoke test, not a benchmark.** The four `cve-*` items were

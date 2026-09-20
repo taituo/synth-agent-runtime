@@ -16,6 +16,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -296,6 +297,35 @@ test("FORGE 7: require of the held-out vectors is denied by the permission model
     // The permission model reports either ERR_ACCESS_DENIED (fs) or the
     // API-restricted message (module loader); both are a denial, not a read.
     assert.match(score.cases?.[0]?.error ?? "", /ERR_ACCESS_DENIED|Access to this API has been restricted/);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("FORGE 8: node:sqlite cannot reach host state from inside the worker", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "gym-iso-"));
+  try {
+    const repo = await makeRepo(parent);
+    // A path outside the scoring work dir. The permission model does not gate
+    // node:sqlite, so without an explicit deny the worker creates and mutates
+    // this host database regardless of the verdict.
+    const dbPath = join(parent, "host.sqlite");
+    const attack = [
+      'let __e = "ran";',
+      "try {",
+      '  const { DatabaseSync } = await import("node:sqlite");',
+      `  const db = new DatabaseSync(${JSON.stringify(dbPath)});`,
+      '  db.exec("CREATE TABLE IF NOT EXISTS pwn(x)");',
+      '  db.exec("INSERT INTO pwn VALUES (1)");',
+      '  __e = "wrote host db";',
+      "} catch (e) { __e = String(e.code || e.message); }",
+      'export function addOne() { return "DIAG:" + __e; }',
+    ].join("\n");
+    const patch = await patchFor(repo, attack);
+    const score = await scoreGymPatch({ patchText: patch, baseRepoDir: repo, cases: CASES });
+    assert.notEqual(score.outcome, "passed", "node:sqlite must not reach host state");
+    assert.equal(existsSync(dbPath), false, "the host database must not be created");
+    assert.match(score.cases?.[0]?.error ?? "", /ERR_UNKNOWN_BUILTIN_MODULE|Cannot find module|not supported/);
   } finally {
     await rm(parent, { recursive: true, force: true });
   }
