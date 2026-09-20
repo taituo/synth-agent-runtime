@@ -20,7 +20,7 @@ import { access, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { promisify } from "node:util";
-import type { GymCase } from "./isolated-score.js";
+import type { GymCase } from "./scoring.js";
 
 const execFileAsync = promisify(execFile);
 

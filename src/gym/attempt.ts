@@ -11,10 +11,9 @@
  * tools, harvests the patch from git, and scores it against the held-out test.
  */
 import type { GymOutcome, GymScore } from "./scoring.js";
-import { isTampering, patchTargetPaths, PROTECTED_PATTERNS } from "./scoring.js";
+import { isTampering, isolatedScoreGymPatch, patchTargetPaths, PROTECTED_PATTERNS } from "./scoring.js";
 import { buildGymSystemPrompt, buildGymUserPrompt, createGymTools, GYM_TOOL_DEFINITIONS, type EffectRunner, type GymToolCall, type GymToolDefinition } from "./tools.js";
 import { harvestPatch } from "./harvest.js";
-import { isolatedScoreGymPatch } from "./isolated-score.js";
 import type { GymCheckpointStore } from "./checkpoint.js";
 import type { MaterializedGymTask } from "./task.js";
 

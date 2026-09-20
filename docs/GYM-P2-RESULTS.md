@@ -149,7 +149,7 @@ fix, i.e. their `passed` came from the legacy in-process scorer. The traces show
 real work (`read_file` -> `replace_in_file` -> `finish`, 358 B canonical diff),
 but under the fifth-round finding a `passed` from that scorer is not a
 certification. A clean re-run of the SIGKILL samples under the isolated scorer
-(`src/gym/isolated-score.ts`) is the remaining measurement.
+(`src/gym/scoring.ts`) is the remaining measurement.
 
 ## Re-score of recorded patches under the isolated scorer (zero model calls)
 

@@ -17,7 +17,6 @@ export * from "./gym/harvest.js";
 export * from "./gym/attempt.js";
 export * from "./gym/turn.js";
 export * from "./gym/checkpoint.js";
-export * from "./gym/isolated-score.js";
 export * from "./workspace/native-git-source.js";
 export * from "./execution/types.js";
 export * from "./execution/workspace-errors.js";

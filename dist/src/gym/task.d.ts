@@ -1,4 +1,4 @@
-import type { GymCase } from "./isolated-score.js";
+import type { GymCase } from "./scoring.js";
 /** Same default as `test/fixtures/real-repos.ts`, overridable by env. */
 export declare const DEFAULT_GYM_FIXTURE_CACHE_DIR = "/tmp/opencode/fixture-repos";
 /** Raised when the pinned repo is not in the local fixture cache (offline). */

@@ -176,7 +176,7 @@
   attempt must make the edit` in `test/gym-checkpoint.test.ts`, not by the
   headline 4/4.
 - **The gym pass decision is now unforgeable: it is made where the agent's code
-  cannot run, reach or observe it.** `src/gym/isolated-score.ts` runs the agent
+  cannot run, reach or observe it.** `src/gym/scoring.ts` runs the agent
   module in a separate worker that is given one input per request and never sees
   an expected output or a secret; the verifier (which never loads agent code)
   holds the test vectors and decides by comparing returned values. The child's

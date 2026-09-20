@@ -1,7 +1,6 @@
-import { isTampering, patchTargetPaths, PROTECTED_PATTERNS } from "./scoring.js";
+import { isTampering, isolatedScoreGymPatch, patchTargetPaths, PROTECTED_PATTERNS } from "./scoring.js";
 import { buildGymSystemPrompt, buildGymUserPrompt, createGymTools, GYM_TOOL_DEFINITIONS } from "./tools.js";
 import { harvestPatch } from "./harvest.js";
-import { isolatedScoreGymPatch } from "./isolated-score.js";
 const DEFAULT_MAX_TURNS = 8;
 const DEFAULT_DEADLINE_MS = 10 * 60_000;
 /**

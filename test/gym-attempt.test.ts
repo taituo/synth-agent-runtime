@@ -88,7 +88,7 @@ test("a fix scores passed and records model attribution and call count", async (
       { requestedModel: "wanted-model", servedModel: "other-model" },
     );
     const record = await runGymAttempt({ task, runner, turn, nodeBin: process.execPath });
-    assert.equal(record.outcome, "passed", record.score.hiddenOutput ?? record.error);
+    assert.equal(record.outcome, "passed", record.score.detail ?? record.error);
     assert.equal(record.callCount, 1);
     assert.equal(record.turns, 1);
     assert.equal(record.requestedModel, "wanted-model");
@@ -112,7 +112,7 @@ test("editing the visible test scores tampered, with the path recorded", async (
       return { toolCalls: [{ name: "finish" }] };
     };
     const record = await runGymAttempt({ task, runner, turn, nodeBin: process.execPath });
-    assert.equal(record.outcome, "tampered", record.score.detail ?? record.score.hiddenOutput);
+    assert.equal(record.outcome, "tampered", record.score.detail ?? record.error);
     assert.ok(record.protectedPathsTouched.includes("test/visible.test.mjs"));
   } finally {
     await rm(parent, { recursive: true, force: true });
@@ -124,7 +124,7 @@ test("a no-op scores failed", async () => {
   try {
     const task = await makeMaterialized(parent);
     const record = await runGymAttempt({ task, runner: localEffectRunner(task.repoDir), turn: createScriptedGymTurn([{ toolCalls: [{ name: "finish" }] }]), nodeBin: process.execPath });
-    assert.equal(record.outcome, "failed", record.score.hiddenOutput ?? record.error);
+    assert.equal(record.outcome, "failed", record.score.detail ?? record.error);
     assert.equal(record.patch.trim(), "");
   } finally {
     await rm(parent, { recursive: true, force: true });
