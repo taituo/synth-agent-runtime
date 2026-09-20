@@ -18,16 +18,21 @@ import { access, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
+  assertScoredRunnerAllowed,
   createGatewayGymTurn,
   createScriptedGymTurn,
   DEFAULT_GATEWAY_RETRY,
   DEFAULT_GYM_FIXTURE_CACHE_DIR,
+  describeGymRunner,
   goldenReversePatch,
   loadGymTask,
   localEffectRunner,
   materializeGymTask,
+  parseGymRunner,
   runGymAttempt,
+  UnisolatedScoredRunError,
   type EffectRunner,
+  type GymRunnerKind,
   type GymTurn,
   type MaterializedGymTask,
 } from "../../src/index.js";
@@ -183,7 +188,7 @@ async function runLivePlain(
   image: string,
   maxTurns: number,
   deadlineMs: number,
-  runnerKind: "local" | "sandbox",
+  runnerKind: GymRunnerKind,
   gatewayTimeoutMs?: number,
   retry?: number,
 ): Promise<ArmResult> {
@@ -264,7 +269,7 @@ async function runDurableWorkflow(
   image: string,
   maxTurns: number,
   deadlineMs: number,
-  runnerKind: "local" | "sandbox",
+  runnerKind: GymRunnerKind,
   gatewayTimeoutMs?: number,
   retry?: number,
 ): Promise<ArmResult> {
@@ -326,7 +331,7 @@ async function main(): Promise<number> {
   const model = arg(args, "model") ?? process.env.SYNTH_GYM_MODEL ?? "deepseek-v4.1-flash";
   const gatewayBaseUrl = arg(args, "gateway") ?? process.env.SYNTH_GATEWAY_URL ?? "http://127.0.0.1:8787";
   const fixtureCacheDir = process.env.SYNTH_FIXTURE_REPOS ?? DEFAULT_GYM_FIXTURE_CACHE_DIR;
-  const runnerKind = (arg(args, "runner") ?? "sandbox") as "local" | "sandbox";
+  const runnerKind = parseGymRunner(arg(args, "runner"));
   const gatewayTimeoutMs = arg(args, "gateway-timeout-ms") ? Number(arg(args, "gateway-timeout-ms")) : undefined;
   const retry = arg(args, "retry") ? Number(arg(args, "retry")) : 0;
 
@@ -335,6 +340,9 @@ async function main(): Promise<number> {
   const results: ArmResult[] = [];
   try {
     if (!dryRun) {
+      // The cross-arm artifact must say which boundary the run had. A scored run
+      // may not proceed on the unisolated local runner (ground-truth leak).
+      assertScoredRunnerAllowed(runnerKind);
       await preflightFixtureCache(fixtureCacheDir, task.repo);
       await preflightGateway(gatewayBaseUrl);
     }
@@ -348,7 +356,20 @@ async function main(): Promise<number> {
     }
 
     const ok = results.every((result) => result.outcome === "passed");
-    console.log(JSON.stringify({ ok, dryRun, task: `${task.repo}/${task.slug}`, modelCalls: dryRun ? 0 : undefined, results }, null, 2));
+    // The dry-run arm always drives `localEffectRunner`, so it is labelled
+    // unisolated regardless of what `--runner` was passed. A live run carries
+    // the runner that actually ran.
+    const binding = describeGymRunner(dryRun ? "local" : runnerKind);
+    console.log(JSON.stringify({
+      ok,
+      dryRun,
+      task: `${task.repo}/${task.slug}`,
+      runner: binding.kind,
+      isolation: binding.isolation,
+      ...(binding.isolated ? {} : { unisolated: true }),
+      modelCalls: dryRun ? 0 : undefined,
+      results,
+    }, null, 2));
     return ok ? 0 : 1;
   } finally {
     await rm(work, { recursive: true, force: true });
@@ -360,6 +381,12 @@ main()
   .catch((error) => {
     if (error instanceof SkippedError) {
       console.log(JSON.stringify({ ok: false, skipped: true, reason: error.message }, null, 2));
+      process.exit(2);
+    }
+    if (error instanceof UnisolatedScoredRunError) {
+      // A refusal, not a pass: distinct exit 2 so a run that never happened is
+      // never reported as green.
+      console.log(JSON.stringify({ ok: false, skipped: true, unisolated: true, reason: error.message }, null, 2));
       process.exit(2);
     }
     console.error(error);

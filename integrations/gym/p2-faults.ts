@@ -7,8 +7,14 @@
  * worker, so for process faults its equivalent is a plain attempt child killed
  * mid-turn; the finding is whether recovery exists at all.
  *
- *   tsx integrations/gym/p2-faults.ts --fault 502
+ *   SYNTH_EXECUTOR_IMAGE=<node+git image pinned by digest> \
+ *     tsx integrations/gym/p2-faults.ts --fault 502
  *   tsx integrations/gym/p2-faults.ts --fault worker-restart
+ *
+ * The runner defaults to `sandbox` (gVisor): every scored attempt executes model
+ * code in the pod. `--runner local` is refused for scored runs because model code
+ * on the host can read the held-out vectors; it exists only so an unscored
+ * comparison can be labelled `unisolated`.
  *
  * Honest reporting is the point: a fault that does not differentiate the arms
  * is printed as `differentiated: false`, not retuned away.
@@ -20,13 +26,19 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
+  assertScoredRunnerAllowed,
   DEFAULT_GATEWAY_RETRY,
   createGatewayGymTurn,
+  describeGymRunner,
   loadGymTask,
   localEffectRunner,
   materializeGymTask,
+  parseGymRunner,
   runGymAttempt,
+  type EffectRunner,
+  type GymRunnerKind,
 } from "../../src/index.js";
+import { buildSandboxRunner } from "./sandbox.js";
 import { startFlakyGateway, type FlakyGatewayOptions } from "../temporal/flaky-gateway.js";
 
 const TASK_DIR = resolve("test/fixtures/gym-tasks/he/hex-decode");
@@ -72,6 +84,17 @@ interface Args {
    * has, which is the fair-control configuration.
    */
   retry: number;
+  /**
+   * Physical runner for BOTH arms. `sandbox` (the default) executes
+   * model-authored code in the gVisor Pod via `buildSandboxRunner`; `local`
+   * executes it on the host with no isolation and is refused for scored runs.
+   * The arms must share one value so the only variable is durability. `sandbox`
+   * requires `image` (node+git, pinned by digest).
+   */
+  runner: GymRunnerKind;
+  image: string;
+  namespace: string;
+  runtimeClassName: string;
 }
 
 function parse(argv: string[]): Args {
@@ -101,6 +124,10 @@ function parse(argv: string[]): Args {
     childPlain: map.has("child-plain"),
     resultTimeoutMs: num("result-timeout-ms", 600_000),
     retry: num("retry", 0),
+    runner: parseGymRunner(typeof map.get("runner") === "string" ? (map.get("runner") as string) : undefined),
+    image: str("image", process.env.SYNTH_EXECUTOR_IMAGE ?? ""),
+    namespace: str("namespace", process.env.SYNTH_KUBERNETES_NAMESPACE ?? "synth-audit-gvisor"),
+    runtimeClassName: str("runtime-class", process.env.SYNTH_RUNTIME_CLASS ?? "gvisor"),
   };
 }
 
@@ -115,7 +142,7 @@ async function loadTemporalClient(): Promise<{ Client: any; Connection: any }> {
   throw new Error("@temporalio/client unavailable");
 }
 
-function workflowInput(args: Args, taskDir: string, workDir: string, baseUrl: string, runner: "local" | "sandbox", checkpointKey: string) {
+function workflowInput(args: Args, taskDir: string, workDir: string, baseUrl: string, checkpointKey: string) {
   return {
     agentId: "gym-p2-fault",
     taskDir,
@@ -124,39 +151,66 @@ function workflowInput(args: Args, taskDir: string, workDir: string, baseUrl: st
     model: args.model,
     maxTurns: args.turns,
     deadlineMs: args.deadlineMs,
-    runner,
+    runner: args.runner,
     gatewayTimeoutMs: args.gatewayTimeoutMs,
     checkpointKey,
-    image: "",
+    image: args.runner === "sandbox" ? args.image : "",
+    ...(args.runner === "sandbox" ? { namespace: args.namespace, runtimeClassName: args.runtimeClassName } : {}),
     ...(args.retry > 0 ? { retryMaxAttempts: args.retry } : {}),
     ...(process.env.SYNTH_FIXTURE_REPOS ? { fixtureCacheDir: process.env.SYNTH_FIXTURE_REPOS } : {}),
   };
 }
 
+/** Build the physical runner for one plain attempt; close() tears down the sandbox. */
+async function makePlainRunner(args: Args, materialized: { repoDir: string }): Promise<{ runner: EffectRunner; close: () => Promise<void> }> {
+  if (args.runner !== "sandbox") {
+    return { runner: localEffectRunner(materialized.repoDir), close: async () => {} };
+  }
+  const sandbox = await buildSandboxRunner({
+    repoDir: materialized.repoDir,
+    image: args.image,
+    namespace: args.namespace,
+    runtimeClassName: args.runtimeClassName,
+    agentId: "gym-p2-fault-plain",
+  });
+  return { runner: sandbox.runner, close: () => sandbox.close() };
+}
+
 async function runPlainOnce(args: Args, baseUrl: string, workDir: string): Promise<ArmResult> {
   const task = await loadGymTask(TASK_DIR);
   const materialized = await materializeGymTask({ task, workDir, repoDirName: `plain-${Date.now().toString(36)}` });
-  const runner = localEffectRunner(materialized.repoDir);
-  const turn = createGatewayGymTurn({
-    baseUrl,
-    model: args.model,
-    timeoutMs: args.gatewayTimeoutMs,
-    ...(args.retry > 0 ? { retry: { ...DEFAULT_GATEWAY_RETRY, maxAttempts: args.retry } } : {}),
-  });
-  const record = await runGymAttempt({ task: materialized, runner, turn, maxTurns: args.turns, deadlineMs: args.deadlineMs });
-  return {
-    arm: "plain",
-    outcome: record.outcome,
-    callCount: record.callCount,
-    turns: record.turns,
-    httpAttempts: record.httpAttempts,
-    wallTimeMs: record.wallTimeMs,
-    patchBytes: record.patch.length,
-    requestedModel: record.requestedModel,
-    servedModel: record.servedModel,
-    ...(record.score.detail ? { detail: record.score.detail } : {}),
-    ...(record.error ? { error: record.error } : {}),
-  };
+  const { runner, close } = await makePlainRunner(args, materialized);
+  try {
+    const turn = createGatewayGymTurn({
+      baseUrl,
+      model: args.model,
+      timeoutMs: args.gatewayTimeoutMs,
+      ...(args.retry > 0 ? { retry: { ...DEFAULT_GATEWAY_RETRY, maxAttempts: args.retry } } : {}),
+    });
+    const record = await runGymAttempt({
+      task: materialized,
+      runner,
+      turn,
+      maxTurns: args.turns,
+      deadlineMs: args.deadlineMs,
+      ...(args.runner === "sandbox" ? { visibleTestNodeBin: "node" } : {}),
+    });
+    return {
+      arm: "plain",
+      outcome: record.outcome,
+      callCount: record.callCount,
+      turns: record.turns,
+      httpAttempts: record.httpAttempts,
+      wallTimeMs: record.wallTimeMs,
+      patchBytes: record.patch.length,
+      requestedModel: record.requestedModel,
+      servedModel: record.servedModel,
+      ...(record.score.detail ? { detail: record.score.detail } : {}),
+      ...(record.error ? { error: record.error } : {}),
+    };
+  } finally {
+    await close();
+  }
 }
 
 function spawnWorker(taskQueue: string, logPath: string): ChildProcess {
@@ -205,7 +259,7 @@ async function runDurableOnce(args: Args, baseUrl: string, workDir: string, faul
     const handle = await client.workflow.start("gymAttemptWorkflow", {
       taskQueue,
       workflowId,
-      args: [workflowInput(args, task.taskDir, workDir, baseUrl, "local", workflowId)],
+      args: [workflowInput(args, task.taskDir, workDir, baseUrl, workflowId)],
       workflowExecutionTimeout: "1 hour",
     });
 
@@ -272,7 +326,7 @@ async function runDurableOnce(args: Args, baseUrl: string, workDir: string, faul
 
 /** Kill a plain attempt child mid-turn: the no-durability arm loses the run. */
 async function runPlainKilled(args: Args, baseUrl: string, workDir: string, signal: NodeJS.Signals): Promise<ArmResult> {
-  const child = spawn(TSX, [SELF, "--child-plain", "--gateway", baseUrl, "--model", args.model, "--turns", String(args.turns), "--deadline-ms", String(args.deadlineMs), "--gateway-timeout-ms", String(args.gatewayTimeoutMs), ...(args.retry > 0 ? ["--retry", String(args.retry)] : [])], {
+  const child = spawn(TSX, [SELF, "--child-plain", "--gateway", baseUrl, "--model", args.model, "--turns", String(args.turns), "--deadline-ms", String(args.deadlineMs), "--gateway-timeout-ms", String(args.gatewayTimeoutMs), "--runner", args.runner, ...(args.retry > 0 ? ["--retry", String(args.retry)] : [])], {
     detached: true,
     stdio: ["ignore", "ignore", "ignore"],
     env: process.env,
@@ -311,13 +365,22 @@ function flakyOptionsFor(fault: string, upstream: string, port: number): { optio
 
 async function main(): Promise<number> {
   const args = parse(process.argv.slice(2));
+  // p2-faults runs SCORED attempts. The local runner is unisolated and its
+  // agent process can read the held-out vectors, so refuse it outright.
+  assertScoredRunnerAllowed(args.runner);
+  if (args.runner === "sandbox" && !args.image) {
+    throw new Error(
+      "--runner sandbox requires a node+git image pinned by digest: set SYNTH_EXECUTOR_IMAGE or pass --image " +
+        "(e.g. docker.io/library/node:22-bookworm@sha256:dd5847a04b0deee391fa145f1f4c6d214196668b6bcc7988ebed67249f226844)",
+    );
+  }
   const work = await mkdtemp(join(tmpdir(), "gym-fault-"));
 
   // Child mode: run one plain attempt and print it. The parent kills us.
   if (args.childPlain) {
     try {
       const result = await runPlainOnce(args, args.gateway, work);
-      console.log(JSON.stringify(result));
+      console.log(JSON.stringify({ ...result, isolation: describeGymRunner(args.runner).isolation }));
       return 0;
     } finally {
       await rm(work, { recursive: true, force: true });
@@ -355,7 +418,16 @@ async function main(): Promise<number> {
     const plain = results.find((result) => result.arm === "plain");
     const durable = results.find((result) => result.arm === "durable");
     const differentiated = Boolean(plain && durable && plain.outcome !== durable.outcome);
-    console.log(JSON.stringify({ fault: args.fault, model: args.model, differentiated, results }, null, 2));
+    const binding = describeGymRunner(args.runner);
+    console.log(JSON.stringify({
+      fault: args.fault,
+      model: args.model,
+      runner: binding.kind,
+      isolation: binding.isolation,
+      ...(binding.isolated ? {} : { unisolated: true }),
+      differentiated,
+      results: results.map((result) => ({ ...result, isolation: binding.isolation })),
+    }, null, 2));
     return 0;
   } finally {
     await rm(work, { recursive: true, force: true });

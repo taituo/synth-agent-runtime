@@ -11,6 +11,7 @@ export * from "./artifacts/blob-store.js";
 export * from "./artifacts/artifact-index.js";
 export * from "./artifacts/retention.js";
 export * from "./gym/scoring.js";
+export * from "./gym/runner.js";
 export * from "./gym/task.js";
 export * from "./gym/tools.js";
 export * from "./gym/harvest.js";
