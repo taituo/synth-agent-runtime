@@ -75,3 +75,4 @@ failure is the injected fault.
 |---|---|---|---|---|
 | 3 | timeout (hung request) | errored, 1 call, 20.0 s | passed, 6 calls, 27.9 s, 358 B, recovered | **yes** |
 | 4 | worker restart (SIGTERM) | **lost** — child killed, no result | **resumed**, passed, 4 calls, 22.0 s, 358 B, recovered | **yes** |
+| 5a | SIGKILL mid-turn | **lost** — child killed, no result | **resumed** (8 calls, 106.0 s), then **failed** — exhausted turns with no change, 0 B | resumed vs vanished, **not a pass** |
