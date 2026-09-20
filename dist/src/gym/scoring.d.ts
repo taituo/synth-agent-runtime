@@ -1,4 +1,4 @@
-export type GymOutcome = "passed" | "failed" | "tampered" | "timed-out" | "errored";
+export type GymOutcome = "passed" | "failed" | "tampered" | "timed-out" | "errored" | "skipped";
 export interface GymScore {
     outcome: GymOutcome;
     /** Paths the patch touched (repo-relative). */
@@ -34,7 +34,25 @@ export interface ScoreGymPatchOptions {
     hiddenTestPath: string;
     /** Where to place the hidden test inside the clone (default `hidden.test.mjs`). */
     hiddenTestDest?: string;
+    /**
+     * How many passing subtests the hidden test must report to score `passed`.
+     * A run with fewer (including zero) is not a pass. Default 1.
+     */
+    expectedHiddenTests?: number;
     timeoutMs?: number;
     nodeBin?: string;
 }
+/** Where the harness is written inside the clone. */
+export declare const HIDDEN_HARNESS_DEST = "gym-hidden-harness.mjs";
+/**
+ * The held-out test imports this harness. It reads the per-run key from a file
+ * and DELETES the file and the env pointer BEFORE the agent's module is
+ * imported, so the key is not observable to the agent (not in env — which
+ * survives in /proc/self/environ — not in argv, and not on disk by the time the
+ * agent runs). `complete()` prints an HMAC over the transcript of assertion
+ * outcomes; the scorer, which holds the key, verifies it. A forged transcript
+ * needs the key, which the agent cannot obtain, so the marker is no longer
+ * forgeable by reading the process it runs in.
+ */
+export declare const HIDDEN_HARNESS_SOURCE: string;
 export declare function scoreGymPatch(options: ScoreGymPatchOptions): Promise<GymScore>;

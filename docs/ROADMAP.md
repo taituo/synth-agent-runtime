@@ -2,7 +2,7 @@
 
 `v1.0.0-rc.1` closes the distributed correctness/security gaps found across two independent audit passes: hard agent-state fencing, PostgreSQL database-clock lease semantics, atomic agent-identity creation, cross-replica mailbox double-steer, a gateway abort-crash, and a git ref/remote argument-injection issue. It has also been verified against real infrastructure: PostgreSQL concurrency/fencing, a pinned Pi checkout E2E, Kubernetes + gVisor pod-kill, and a live external provider matrix (see `docs/RELEASE-GATE.md` and `CHANGELOG.md`).
 
-The next milestone is not another broad runtime abstraction layer. It is a GA hardening program driven by the unchecked items in `docs/RELEASE-GATE.md`:
+The next milestone is not another broad runtime abstraction layer. It is a GA hardening program driven by the unchecked items in `docs/RELEASE-GATE.md`. Deliberately unfinished items are tracked in [`KNOWN-OPEN.md`](KNOWN-OPEN.md), and failing-first evidence is recorded in [`VERIFICATION-LOG.md`](VERIFICATION-LOG.md).
 
 ## Path to `1.0.0` GA
 

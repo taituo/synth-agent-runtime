@@ -24,6 +24,9 @@ export type Effect = {
     path?: string;
 } | {
     id: string;
+    kind: "workspace.export";
+} | {
+    id: string;
     kind: "process.exec";
     command: string;
     cwd?: string;

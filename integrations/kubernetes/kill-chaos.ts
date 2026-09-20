@@ -6,7 +6,10 @@ import {
 } from "../../src/index.js";
 
 const image = process.env.SYNTH_EXECUTOR_IMAGE;
-if (!image) throw new Error("Set SYNTH_EXECUTOR_IMAGE to a shell/git capable image pinned by digest");
+if (!image) {
+  console.error(JSON.stringify({ skipped: true, reason: "SYNTH_EXECUTOR_IMAGE not set; must be a git-capable image pinned by digest" }));
+  process.exit(2);
+}
 const context = process.env.SYNTH_KUBECTL_CONTEXT;
 const namespace = process.env.SYNTH_KUBERNETES_NAMESPACE ?? "synth-sandboxes";
 const base = DEFAULT_KUBERNETES_RESOURCE_CLASSES.find((entry) => entry.id === "sandbox-small");

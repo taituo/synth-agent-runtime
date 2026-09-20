@@ -2,10 +2,12 @@ import { normalizeRelative } from "../workspace/source.js";
 import { WORKSPACE_IS_DIRECTORY, WORKSPACE_NOT_DIRECTORY, WORKSPACE_NOT_FOUND, WORKSPACE_PATH_ESCAPES, ancestorPaths, escapesWorkspace, workspaceError, } from "./workspace-errors.js";
 /** Lowest-fidelity executor: deterministic workspace operations only. */
 export class SyntheticExecutor {
+    blobStore;
     id = "synthetic";
     fidelity = 0;
     #workspaces;
-    constructor(workspaces) {
+    constructor(workspaces, blobStore) {
+        this.blobStore = blobStore;
         this.#workspaces = workspaces;
     }
     canExecute(effect) {
@@ -32,6 +34,13 @@ export class SyntheticExecutor {
             }
         }
         switch (effect.kind) {
+            case "workspace.export": {
+                // The receipt carries a reference; the bytes go to the blob store.
+                if (!this.blobStore)
+                    return { ok: false, error: "ARTIFACT_STORE_REQUIRED" };
+                const artifact = await workspace.exportArtifact(this.blobStore);
+                return { ok: true, artifact: artifact.ref, output: { digest: artifact.ref.digest, size: artifact.ref.size } };
+            }
             case "workspace.read": {
                 if (!p)
                     return { ok: false, error: workspaceError(WORKSPACE_IS_DIRECTORY, p) };

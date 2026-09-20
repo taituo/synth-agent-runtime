@@ -133,6 +133,120 @@ test("release never admits a request past its lane deadline", () => {
   assert.equal(scheduler.pending().length, 0, "and it is dropped");
 });
 
+/** Deterministic PRNG so a property failure is reproducible from the seed. */
+function mulberry32(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+test("property: release() never admits a request past its lane deadline", () => {
+  const rand = mulberry32(0xc0ffee);
+  const laneId = (i: number) => `l${i}`;
+  for (let trial = 0; trial < 300; trial++) {
+    const laneCount = 1 + Math.floor(rand() * 3);
+    const lanes: LaneSpec[] = [];
+    for (let i = 0; i < laneCount; i++) {
+      lanes.push({
+        id: laneId(i),
+        priority: Math.floor(rand() * 3),
+        weight: 1 + Math.floor(rand() * 3),
+        maxWaitMs: Math.floor(rand() * 50),
+      });
+    }
+    const capacity = 1 + Math.floor(rand() * 3);
+    let now = 0;
+    const scheduler = new LaneScheduler(lanes, { capacity, now: () => now });
+    const specByLane = new Map(lanes.map((lane) => [lane.id, lane]));
+    const enqueuedAt = new Map<string, number>();
+    const laneOfTicket = new Map<string, LaneSpec>();
+
+    const check = (released: { ticket: string; request: { lane: string } }): void => {
+      const spec = laneOfTicket.get(released.ticket)!;
+      const waited = now - enqueuedAt.get(released.ticket)!;
+      assert.ok(
+        waited <= spec.maxWaitMs,
+        `trial ${trial}: ${released.ticket} waited ${waited}ms, lane allows ${spec.maxWaitMs}ms`,
+      );
+    };
+
+    for (let step = 0; step < 80; step++) {
+      now += Math.floor(rand() * 10);
+      if (rand() < 0.5) {
+        const released = scheduler.release();
+        if (released) check(released);
+      }
+      if (rand() < 0.3) scheduler.expire();
+      const lane = lanes[Math.floor(rand() * laneCount)]!;
+      const decision = scheduler.admit({ lane: lane.id, tenantId: "t", key: `k${step}`, at: now });
+      if (decision.outcome === "queue") {
+        enqueuedAt.set(decision.ticket, now);
+        laneOfTicket.set(decision.ticket, lane);
+      }
+      assert.ok(scheduler.inFlight() <= capacity, `trial ${trial}: inFlight ${scheduler.inFlight()} > capacity ${capacity}`);
+      assert.ok(specByLane.has(lane.id));
+    }
+
+    for (let i = 0; i < 300; i++) {
+      now += Math.floor(rand() * 10);
+      const released = scheduler.release();
+      if (!released) break;
+      check(released);
+      assert.ok(scheduler.inFlight() <= capacity, `trial ${trial}: inFlight exceeded capacity while draining`);
+    }
+  }
+});
+
+test("a lower band is reserved a share, so sustained high-band load cannot starve it", () => {
+  const lanes: LaneSpec[] = [
+    { id: "high", priority: 10, weight: 1, maxWaitMs: 60_000 },
+    { id: "low", priority: 1, weight: 1, maxWaitMs: 60_000 },
+  ];
+  const scheduler = new LaneScheduler(lanes, { capacity: 1, lowerBandReserveFraction: 0.2 });
+  scheduler.admit(request("high", "seed")); // occupy the single slot
+  for (let i = 0; i < 50; i++) scheduler.admit(request("high", `h${i}`)); // high backlog never drains
+  scheduler.admit(request("low", "l0"));
+  let lowAdmittedAt = -1;
+  for (let i = 0; i < 100 && lowAdmittedAt < 0; i++) {
+    const next = scheduler.release();
+    if (!next) break;
+    if (next.request.lane === "low") lowAdmittedAt = i;
+    else scheduler.admit(request("high", `keep-${i}`)); // keep the high band saturated
+  }
+  assert.ok(lowAdmittedAt >= 0, "the low-band request must be admitted despite sustained high-band load");
+  // Assert the BOUND, not just that it eventually happened: with reserve 0.2 the
+  // reservation is owed after ~5 high-band admissions.
+  assert.ok(lowAdmittedAt <= 6, `low band admitted at admission ${lowAdmittedAt}; the bound is ~5`);
+});
+
+test("under sustained contention a lower band receives roughly its reserved share", () => {
+  const lanes: LaneSpec[] = [
+    { id: "high", priority: 10, weight: 1, maxWaitMs: 60_000 },
+    { id: "low", priority: 1, weight: 1, maxWaitMs: 60_000 },
+  ];
+  const scheduler = new LaneScheduler(lanes, { capacity: 1, lowerBandReserveFraction: 0.25 });
+  scheduler.admit(request("high", "seed"));
+  scheduler.admit(request("high", "h0"));
+  scheduler.admit(request("low", "l0"));
+  let high = 0;
+  let low = 0;
+  for (let i = 0; i < 400; i++) {
+    const next = scheduler.release();
+    if (!next) break;
+    if (next.request.lane === "low") low += 1;
+    else high += 1;
+    scheduler.admit(request(next.request.lane, `${next.request.lane}-${i}`)); // keep both bands backlogged
+  }
+  const share = low / (high + low);
+  assert.ok(share >= 0.25 - 0.05, `low share ${share.toFixed(3)} must approach the reserved 0.25`);
+  assert.ok(share <= 0.25 + 0.1, `low share ${share.toFixed(3)} must not greatly exceed the reservation`);
+});
+
 test("constructor rejects bad configuration", () => {
   assert.throws(() => new LaneScheduler([], { capacity: 1 }), /at least one lane/);
   assert.throws(() => new LaneScheduler(LANES, { capacity: 0 }), /Invalid capacity/);

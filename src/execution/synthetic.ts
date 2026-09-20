@@ -1,4 +1,5 @@
 import type { WorkspaceId } from "../core/ids.js";
+import type { BlobStore } from "../artifacts/blob-store.js";
 import { MemoryWorkspace } from "../workspace/memory-workspace.js";
 import { normalizeRelative } from "../workspace/source.js";
 import type { Effect, EffectContext, EffectResult, Executor } from "./types.js";
@@ -18,7 +19,7 @@ export class SyntheticExecutor implements Executor {
   readonly fidelity = 0;
   readonly #workspaces: Map<WorkspaceId, MemoryWorkspace>;
 
-  constructor(workspaces: Map<WorkspaceId, MemoryWorkspace>) {
+  constructor(workspaces: Map<WorkspaceId, MemoryWorkspace>, private readonly blobStore?: BlobStore) {
     this.#workspaces = workspaces;
   }
 
@@ -45,6 +46,12 @@ export class SyntheticExecutor implements Executor {
     }
 
     switch (effect.kind) {
+      case "workspace.export": {
+        // The receipt carries a reference; the bytes go to the blob store.
+        if (!this.blobStore) return { ok: false, error: "ARTIFACT_STORE_REQUIRED" };
+        const artifact = await workspace.exportArtifact(this.blobStore);
+        return { ok: true, artifact: artifact.ref, output: { digest: artifact.ref.digest, size: artifact.ref.size } };
+      }
       case "workspace.read": {
         if (!p) return { ok: false, error: workspaceError(WORKSPACE_IS_DIRECTORY, p) };
         const info = await workspace.stat(p);

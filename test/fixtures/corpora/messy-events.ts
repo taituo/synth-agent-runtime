@@ -13,6 +13,14 @@
  * the accuracy gate but MUST still pass the structural checks (never lost,
  * duplicated or reordered; an injection must not change the reply's shape).
  *
+ * AMBIGUITY NOTE (2026-09-20): the four `cve-*` items are `ambiguous` and so
+ * EXCLUDED from accuracy. A published vulnerability report is genuinely both a
+ * factual report (`news`) and an operational alert (`incident`); they were once
+ * reclassified to `news` to agree with one model, which is tuning the measure.
+ * They still carry the structural checks. Consequence: the scorable set is 8
+ * items, which is too few to gate on as a benchmark — the gate is a smoke test
+ * (see `CORPUS_BASELINE`).
+ *
  * Provenance is per item: `source` and `license` are recorded, `provenance`
  * says whether the text is real or synthetic.
  */
@@ -37,41 +45,41 @@ export const MESSY_EVENTS: readonly CorpusItem[] = [
     id: "cve-log4shell",
     text:
       "Apache Log4j2 2.0-beta9 through 2.15.0 (excluding security releases 2.12.2, 2.12.3, and 2.3.1) JNDI features used in configuration, log messages, and parameters do not protect against attacker controlled LDAP and other JNDI related endpoints. An attacker who can control log messages or log message parameters can execute arbitrary code loaded from LDAP servers when message lookup substitution is enabled. From log4j 2.15.0, this behavior has been disabled by default.",
-    expectedClass: "news",
+    expectedClass: "ambiguous",
     source: CVE("CVE-2021-44228"),
     license: "Public Domain (US Government work, NVD)",
     provenance: "real",
-    note: "reclassified 2026-09-20: a CVE description is factual institutional reporting (news), not an alert about our own system degrading",
+    note: "ambiguous: a published vulnerability report is both factual institutional reporting (news) and an operational alert (incident); excluded from the accuracy gate, kept for the structural checks",
   },
   {
     id: "cve-xz",
     text:
       "Malicious code was discovered in the upstream tarballs of xz, starting with version 5.6.0. Through a series of complex obfuscations, the liblzma build process extracts a prebuilt object file from a disguised test file existing in the source code, which is then used to modify specific functions in the liblzma code. This results in a modified liblzma library that can be used by any software linked against this library, intercepting and modifying the data interaction with this library.",
-    expectedClass: "news",
+    expectedClass: "ambiguous",
     source: CVE("CVE-2024-3094"),
     license: "Public Domain (US Government work, NVD)",
     provenance: "real",
-    note: "reclassified 2026-09-20: factual vulnerability report, not an operational alert about our system",
+    note: "ambiguous: a published vulnerability report is both factual institutional reporting (news) and an operational alert (incident); excluded from the accuracy gate, kept for the structural checks",
   },
   {
     id: "cve-heartbleed",
     text:
       'The (1) TLS and (2) DTLS implementations in OpenSSL 1.0.1 before 1.0.1g do not properly handle Heartbeat Extension packets, which allows remote attackers to obtain sensitive information from process memory via crafted packets that trigger a buffer over-read, as demonstrated by reading private keys, related to d1_both.c and t1_lib.c, aka the Heartbleed bug.',
-    expectedClass: "news",
+    expectedClass: "ambiguous",
     source: CVE("CVE-2014-0160"),
     license: "Public Domain (US Government work, NVD)",
     provenance: "real",
-    note: "reclassified 2026-09-20: factual vulnerability report, not an operational alert about our system",
+    note: "ambiguous: a published vulnerability report is both factual institutional reporting (news) and an operational alert (incident); excluded from the accuracy gate, kept for the structural checks",
   },
   {
     id: "cve-smb",
     text:
       'The SMBv1 server in Microsoft Windows Vista SP2; Windows Server 2008 SP2 and R2 SP1; Windows 7 SP1; Windows 8.1; Windows Server 2012 Gold and R2; Windows RT 8.1; and Windows 10 Gold, 1511, and 1607; and Windows Server 2016 allows remote attackers to execute arbitrary code via crafted packets, aka "Windows SMB Remote Code Execution Vulnerability." This vulnerability is different from those described in CVE-2017-0143, CVE-2017-0145, CVE-2017-0146, and CVE-2017-0148.',
-    expectedClass: "news",
+    expectedClass: "ambiguous",
     source: CVE("CVE-2017-0144"),
     license: "Public Domain (US Government work, NVD)",
     provenance: "real",
-    note: "reclassified 2026-09-20: factual vulnerability report, not an operational alert about our system",
+    note: "ambiguous: a published vulnerability report is both factual institutional reporting (news) and an operational alert (incident); excluded from the accuracy gate, kept for the structural checks",
   },
   {
     id: "wiki-artemis",

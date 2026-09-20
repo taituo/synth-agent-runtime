@@ -1,3 +1,4 @@
+import { parseRetryHintMs } from "./retry-hint.js";
 import { InMemoryRouterStateStore } from "./router-state.js";
 /**
  * Network-level router for OpenAI-compatible backends.
@@ -21,7 +22,13 @@ export class ProfileRouterBackend {
     now;
     affinityTtlMs;
     async listModels() {
-        return [...this.#profiles.values()].map((p) => ({ object: "model", owned_by: "synth-router", ...p.model }));
+        return [...this.#profiles.values()].map((p) => ({
+            object: "model",
+            owned_by: "synth-router",
+            provider: "router",
+            profile: p.model.id,
+            ...p.model,
+        }));
     }
     async handle(request, model) {
         const profile = this.#profiles.get(model);
@@ -166,7 +173,7 @@ function sessionAffinityKey(request, model, body) {
 }
 function retryableStatus(status) { return status === 408 || status === 409 || status === 425 || status === 429 || status >= 500; }
 function cooldownFor(response, configured, now) {
-    const retryAfter = parseRetryAfter(response.headers.get("retry-after"), now);
+    const retryAfter = parseRetryHintMs(response.headers, now);
     if (retryAfter !== undefined)
         return Math.max(configured ?? 0, retryAfter);
     if (configured !== undefined)
@@ -176,17 +183,6 @@ function cooldownFor(response, configured, now) {
     if (response.status >= 500)
         return 30_000;
     return 5_000;
-}
-function parseRetryAfter(value, now) {
-    if (!value)
-        return undefined;
-    const seconds = Number(value);
-    if (Number.isFinite(seconds) && seconds >= 0)
-        return seconds * 1_000;
-    const at = Date.parse(value);
-    if (!Number.isFinite(at))
-        return undefined;
-    return Math.max(0, at - now);
 }
 function jsonError(status, message) {
     return new Response(JSON.stringify({ error: { message } }), { status, headers: { "content-type": "application/json" } });

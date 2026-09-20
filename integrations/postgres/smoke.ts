@@ -2,7 +2,10 @@ import { openPostgresPersistence } from "./node-pg.js";
 import { newAgentId, newWorkspaceId } from "../../src/index.js";
 
 const url = process.env.SYNTH_POSTGRES_URL;
-if (!url) throw new Error("Set SYNTH_POSTGRES_URL");
+if (!url) {
+  console.error(JSON.stringify({ skipped: true, reason: "SYNTH_POSTGRES_URL not set; live Postgres required" }));
+  process.exit(2);
+}
 const opened = await openPostgresPersistence({ connectionString: url });
 try {
   const id = newAgentId();

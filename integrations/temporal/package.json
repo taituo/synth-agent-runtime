@@ -12,6 +12,8 @@
     "live:swarm-inference": "tsx swarm-inference-driver.ts",
     "live:park": "tsx park-live.ts",
     "live:corpus": "tsx corpus-inference-driver.ts",
+    "live:corpus-compare": "tsx corpus-model-compare.ts",
+    "live:rate-limit-scope": "tsx rate-limit-scope.ts",
     "live:mailbox-property": "tsx mailbox-property-driver.ts",
     "live:replay": "tsx replay-determinism.ts",
     "live:phases": "tsx phase-signals-driver.ts",
@@ -21,7 +23,9 @@
     "live:retry-hint": "tsx retry-hint-live.ts",
     "live:quota-exhausted": "tsx quota-exhausted-live.ts",
     "live:openrouter-429": "tsx openrouter-429-driver.ts",
-    "live:flaky-gateway": "tsx flaky-gateway.ts"
+    "live:flaky-gateway": "tsx flaky-gateway.ts",
+    "supervisor:worker": "tsx supervisor/worker-entry.ts",
+    "live:supervisor": "tsx supervisor/live.ts"
   },
   "dependencies": {
     "@temporalio/activity": "^1.13.0",

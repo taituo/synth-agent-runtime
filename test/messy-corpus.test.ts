@@ -19,9 +19,17 @@ test("the corpus is schema-valid and mixes real and synthetic items", () => {
   assert.ok(MESSY_EVENTS.length >= 12, "enough items to be a corpus");
   assert.ok(MESSY_EVENTS.some((item) => item.provenance === "real"), "has real texts");
   assert.ok(MESSY_EVENTS.some((item) => item.provenance === "synthetic"), "has synthetic texts");
-  assert.ok(SCORABLE_ITEMS.length >= 8 && SCORABLE_ITEMS.length < MESSY_EVENTS.length);
+  // The scorable set is deliberately small; the baseline is 8/8 = 1.0 and the
+  // gate is a smoke test, not a benchmark. If this changes, re-measure.
+  assert.equal(SCORABLE_ITEMS.length, 8, "smoke-test corpus: 8 scorable items");
+  assert.ok(SCORABLE_ITEMS.length < MESSY_EVENTS.length);
   // Ambiguous/hostile items must never be scored.
   assert.equal(SCORABLE_ITEMS.some((item) => item.expectedClass === "ambiguous"), false);
+  // The four CVE items are ambiguous, not scored, and carry a rationale.
+  const cveItems = MESSY_EVENTS.filter((item) => item.id.startsWith("cve-"));
+  assert.equal(cveItems.length, 4);
+  assert.ok(cveItems.every((item) => item.expectedClass === "ambiguous"), "CVE items are ambiguous, not scored");
+  assert.ok(cveItems.every((item) => (item.note ?? "").length > 0));
   // The gate is a real number in range and documented as measured.
   assert.ok(CORPUS_ACCURACY_GATE > 0 && CORPUS_ACCURACY_GATE <= 1);
 });

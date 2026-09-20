@@ -38,7 +38,13 @@ async function makeTaskRepo(parent: string, lib = BUGGY): Promise<string> {
   return repo;
 }
 
-/** Hidden test the agent never sees: cases the visible test does not cover. */
+/**
+ * Hidden test the agent never sees. It imports the harness (which reads and
+ * deletes the key before the agent module is imported), records each assertion
+ * outcome with `check`, and prints an HMAC-signed transcript with `complete`.
+ * It captures the real assert before dynamically importing the agent's module,
+ * so an agent that replaces `assert.equal` cannot win.
+ */
 async function makeHiddenTest(parent: string, sleepMs = 0): Promise<string> {
   const path = join(parent, "hidden.test.mjs");
   await writeFile(
@@ -46,8 +52,32 @@ async function makeHiddenTest(parent: string, sleepMs = 0): Promise<string> {
     [
       'import test from "node:test";',
       'import assert from "node:assert/strict";',
-      'import { slugify } from "./lib.mjs";',
-      `test("hidden", async () => {${sleepMs ? ` await new Promise((r) => setTimeout(r, ${sleepMs}));` : ""} assert.equal(slugify(""), ""); assert.equal(slugify("  A  B "), "a-b"); assert.equal(slugify("a__b--c"), "a-b-c"); });`,
+      'import { check, complete } from "./gym-hidden-harness.mjs";',
+      "const equal = assert.equal.bind(assert);",
+      'const { slugify } = await import("./lib.mjs");',
+      `test("hidden", async () => {${sleepMs ? ` await new Promise((r) => setTimeout(r, ${sleepMs}));` : ""} check("empty", () => equal(slugify(""), "")); check("spaces", () => equal(slugify("  A  B "), "a-b")); check("repeats", () => equal(slugify("a__b--c"), "a-b-c")); complete(); });`,
+      "",
+    ].join("\n"),
+  );
+  return path;
+}
+
+/** A hidden test that never signs a result (no harness). */
+async function makeEmptyHiddenTest(parent: string): Promise<string> {
+  const path = join(parent, "hidden.test.mjs");
+  await writeFile(path, 'import test from "node:test";\n');
+  return path;
+}
+
+/** A hidden test that signs an empty transcript: no assertions, so `skipped`. */
+async function makeSkippedHiddenTest(parent: string): Promise<string> {
+  const path = join(parent, "hidden.test.mjs");
+  await writeFile(
+    path,
+    [
+      'import test from "node:test";',
+      'import { complete } from "./gym-hidden-harness.mjs";',
+      'test("hidden", () => { complete(); });',
       "",
     ].join("\n"),
   );
@@ -69,7 +99,7 @@ test("a correct fix passes the held-out test", async () => {
     const hidden = await makeHiddenTest(parent);
     const patch = await patchFor(repo, (dir) => writeFile(join(dir, "lib.mjs"), FIXED));
     const score = await scoreGymPatch({ patchText: patch, baseRepoDir: repo, hiddenTestPath: hidden });
-    assert.equal(score.outcome, "passed", score.hiddenOutput);
+    assert.equal(score.outcome, "passed", `got ${score.outcome}: ${score.detail ?? score.hiddenOutput ?? ""}`);
   } finally {
     await rm(parent, { recursive: true, force: true });
   }
@@ -97,6 +127,87 @@ test("a constant stub passes the visible test but fails the held-out test", asyn
     // The visible test would pass; the hidden test (empty, repeats, spacing) fails.
     const score = await scoreGymPatch({ patchText: patch, baseRepoDir: repo, hiddenTestPath: hidden });
     assert.equal(score.outcome, "failed", "a constant-returning stub must not score");
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("a patch that exits 0 at import without fixing the bug does not pass", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "gym-"));
+  try {
+    const repo = await makeTaskRepo(parent);
+    const hidden = await makeHiddenTest(parent);
+    // Runs before the hidden assertions, and exits the test process cleanly.
+    const patch = await patchFor(repo, (dir) =>
+      writeFile(join(dir, "lib.mjs"), `process.exit(0);\nexport function slugify(text) {\n  return String(text).toUpperCase().replace(/[^A-Z0-9]+/g, "-");\n}\n`),
+    );
+    const score = await scoreGymPatch({ patchText: patch, baseRepoDir: repo, hiddenTestPath: hidden });
+    assert.notEqual(score.outcome, "passed", `exit(0) must never score: ${score.detail ?? score.hiddenOutput ?? ""}`);
+    assert.equal(score.outcome, "errored", score.detail);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("a patch that monkeypatches assert does not pass", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "gym-"));
+  try {
+    const repo = await makeTaskRepo(parent);
+    const hidden = await makeHiddenTest(parent);
+    const patch = await patchFor(repo, (dir) =>
+      writeFile(
+        join(dir, "lib.mjs"),
+        `import assert from "node:assert/strict";\nassert.equal = () => {};\nexport function slugify(text) {\n  return String(text).toUpperCase().replace(/[^A-Z0-9]+/g, "-");\n}\n`,
+      ),
+    );
+    const score = await scoreGymPatch({ patchText: patch, baseRepoDir: repo, hiddenTestPath: hidden });
+    assert.notEqual(score.outcome, "passed", `assert patching must never score: ${score.detail ?? score.hiddenOutput ?? ""}`);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("a hidden test that runs no assertions is skipped, not passed", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "gym-"));
+  try {
+    const repo = await makeTaskRepo(parent);
+    const hidden = await makeEmptyHiddenTest(parent);
+    const patch = await patchFor(repo, (dir) => writeFile(join(dir, "lib.mjs"), FIXED));
+    const score = await scoreGymPatch({ patchText: patch, baseRepoDir: repo, hiddenTestPath: hidden });
+    assert.notEqual(score.outcome, "passed", `an empty hidden test must never score: ${score.detail ?? ""}`);
+    // node --test marks a file with no tests as one passing subtest; the missing
+    // completion marker is what keeps that from being a pass.
+    assert.equal(score.outcome, "errored", score.detail);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("an all-skipped hidden test is skipped, not passed", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "gym-"));
+  try {
+    const repo = await makeTaskRepo(parent);
+    const hidden = await makeSkippedHiddenTest(parent);
+    const patch = await patchFor(repo, (dir) => writeFile(join(dir, "lib.mjs"), FIXED));
+    const score = await scoreGymPatch({ patchText: patch, baseRepoDir: repo, hiddenTestPath: hidden });
+    assert.equal(score.outcome, "skipped", score.detail);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("a patch that plants files under the hidden-test path is tampering, not a crash", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "gym-"));
+  try {
+    const repo = await makeTaskRepo(parent);
+    const hidden = await makeHiddenTest(parent);
+    await mkdir(join(repo, "hidden.test.mjs"), { recursive: true });
+    await writeFile(join(repo, "hidden.test.mjs/decoy.txt"), "not the hidden test\n");
+    await git(repo, "add", "-A");
+    const patch = await git(repo, "diff", "--cached");
+    await git(repo, "reset", "--hard");
+    const score = await scoreGymPatch({ patchText: patch, baseRepoDir: repo, hiddenTestPath: hidden });
+    assert.equal(score.outcome, "tampered", `got ${score.outcome}: ${score.detail ?? ""}`);
   } finally {
     await rm(parent, { recursive: true, force: true });
   }
@@ -177,6 +288,46 @@ test("a quoted non-ASCII path under test/ is still tampering", async () => {
     assert.ok(patch.includes('"a/test/caf'), "expected git to quote the non-ASCII path");
     const score = await scoreGymPatch({ patchText: patch, baseRepoDir: repo, hiddenTestPath: hidden });
     assert.equal(score.outcome, "tampered", `got ${score.outcome}: ${score.detail ?? score.hiddenOutput}`);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("a patch touching a tests/ directory (not just test/) is tampering", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "gym-"));
+  try {
+    const repo = await makeTaskRepo(parent);
+    await mkdir(join(repo, "tests"), { recursive: true });
+    await writeFile(join(repo, "tests/helper.js"), "// helper\n");
+    await git(repo, "add", "-A");
+    await git(repo, "commit", "-q", "-m", "add tests dir");
+    const hidden = await makeHiddenTest(parent);
+    const patch = await patchFor(repo, (dir) => writeFile(join(dir, "tests/helper.js"), "// tampered\n"));
+    const score = await scoreGymPatch({ patchText: patch, baseRepoDir: repo, hiddenTestPath: hidden });
+    assert.equal(score.outcome, "tampered", `got ${score.outcome}: ${score.detail ?? ""}`);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("a ./-prefixed protected path is tampering, not a different outcome", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "gym-"));
+  try {
+    const repo = await makeTaskRepo(parent);
+    const hidden = await makeHiddenTest(parent);
+    // git rejects `./` paths, but the spec says a protected-path touch is
+    // `tampered`, so it must be classified before apply can fail.
+    const patch = [
+      "diff --git a/./test/visible.test.mjs b/./test/visible.test.mjs",
+      "--- a/./test/visible.test.mjs",
+      "+++ b/./test/visible.test.mjs",
+      "@@ -1 +1 @@",
+      "-import test from \"node:test\";",
+      "+// tampered",
+      "",
+    ].join("\n");
+    const score = await scoreGymPatch({ patchText: patch, baseRepoDir: repo, hiddenTestPath: hidden });
+    assert.equal(score.outcome, "tampered", `got ${score.outcome}: ${score.detail ?? ""}`);
   } finally {
     await rm(parent, { recursive: true, force: true });
   }

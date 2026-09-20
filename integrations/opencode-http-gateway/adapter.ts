@@ -43,7 +43,20 @@ export class OpenCodeStackGatewayBackend implements GatewayBackend {
 
   constructor(
     private readonly models: Models,
-    private readonly options: { provider?: string; modelIds?: string[]; maxStoredResponses?: number; continuationStore?: ContinuationStore<StoredResponseContext>; continuationTtlMs?: number } = {},
+    private readonly options: {
+      provider?: string;
+      /**
+       * @deprecated Discovery is never filtered. This once made 27 available models
+       * look like one; access control belongs in the gateway's tenant policy
+       * (`principal.allowedModels`), not in what the backend reports. Accepted for
+       * compatibility and ignored.
+       */
+      modelIds?: string[];
+      profile?: string;
+      maxStoredResponses?: number;
+      continuationStore?: ContinuationStore<StoredResponseContext>;
+      continuationTtlMs?: number;
+    } = {},
   ) {
     this.#continuations = options.continuationStore ?? new InMemoryContinuationStore<StoredResponseContext>(Math.max(0, options.maxStoredResponses ?? 1_000));
     this.#continuationTtlMs = options.continuationTtlMs ?? 24 * 60 * 60 * 1000;
@@ -51,10 +64,16 @@ export class OpenCodeStackGatewayBackend implements GatewayBackend {
 
   async listModels(): Promise<GatewayModel[]> {
     const provider = this.options.provider ?? "opencode-go";
-    const allowed = this.options.modelIds ? new Set(this.options.modelIds) : undefined;
-    return this.models.getModels(provider)
-      .filter((model) => !allowed || allowed.has(model.id))
-      .map((model) => ({ id: model.id, object: "model", owned_by: "opencode-stack" }));
+    // Report everything the provider offers, with provenance, so a model that
+    // exists can never be invisible. Authorization is a separate decision made
+    // at the gateway (tenant policy), not by hiding models from discovery.
+    return this.models.getModels(provider).map((model) => ({
+      id: model.id,
+      object: "model",
+      owned_by: "opencode-stack",
+      provider,
+      ...(this.options.profile ? { profile: this.options.profile } : {}),
+    }));
   }
 
   async handle(request: Request, modelId: string): Promise<Response> {

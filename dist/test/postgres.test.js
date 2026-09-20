@@ -168,13 +168,14 @@ test("Postgres task and artifact compare-and-swap rejects a stale revision", asy
     const stale = await store.compareAndSwapTask({ id: "t1", title: "t", objective: "o", status: "completed" }, 0);
     assert.equal(stale.swapped, false);
     assert.equal(stale.task.status, "running");
-    db.artifacts.set("a1", { id: "a1", type: "report", createdAt: 1, data: { v: 1 } });
-    const artifactFirst = await store.compareAndSwapArtifact({ id: "a1", type: "report", createdAt: 1, data: { v: 2 } }, 0);
+    const ref = (v) => ({ digest: `sha256:${String(v).padStart(64, "0")}`, size: v, mediaType: "text/plain", mechanism: "test" });
+    db.artifacts.set("a1", { id: "a1", type: "report", createdAt: 1, ref: ref(1) });
+    const artifactFirst = await store.compareAndSwapArtifact({ id: "a1", type: "report", createdAt: 1, ref: ref(2) }, 0);
     assert.equal(artifactFirst.swapped, true);
     assert.equal(artifactFirst.artifact.revision, 1);
-    const artifactStale = await store.compareAndSwapArtifact({ id: "a1", type: "report", createdAt: 1, data: { v: 3 } }, 0);
+    const artifactStale = await store.compareAndSwapArtifact({ id: "a1", type: "report", createdAt: 1, ref: ref(3) }, 0);
     assert.equal(artifactStale.swapped, false);
-    assert.equal(artifactStale.artifact.data.v, 2);
+    assert.equal(artifactStale.artifact.ref.size, 2);
 });
 test("Postgres rate limit store shares one counter across store instances", async () => {
     const db = new FakePg();

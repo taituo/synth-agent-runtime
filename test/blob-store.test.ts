@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FileSystemBlobStore, sha256Hex } from "../src/index.js";
+import { digestOf, ExecutionBroker, FileSystemBlobStore, MemoryWorkspace, SyntheticExecutor, sha256Hex } from "../src/index.js";
 
 async function listFiles(dir: string): Promise<string[]> {
   const out: string[] = [];
@@ -65,19 +65,47 @@ test("a corrupted object is detected on read", async () => {
   }
 });
 
-test("stat round-trips the media type, and a receipt digest resolves to the bytes", async () => {
+test("stat round-trips the media type", async () => {
   const root = await mkdtemp(join(tmpdir(), "blob-"));
   try {
     const store = new FileSystemBlobStore(root);
     const bytes = new TextEncoder().encode("report");
     const ref = await store.put(bytes, { mediaType: "text/markdown" });
     assert.equal((await store.stat(ref.digest))?.mediaType, "text/markdown", "mediaType survives put/stat");
-    // A receipt carries the reference; the digest resolves to exactly the bytes.
-    const receipt = { ok: true, artifact: ref };
-    assert.ok(Buffer.from(await store.get(receipt.artifact.digest)).equals(Buffer.from(bytes)));
+    assert.ok(Buffer.from(await store.get(ref.digest)).equals(Buffer.from(bytes)));
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("a workspace.export effect puts the receipt's artifact reference in the store", async () => {
+  const root = await mkdtemp(join(tmpdir(), "blob-export-"));
+  try {
+    const store = new FileSystemBlobStore(root);
+    const workspace = new MemoryWorkspace();
+    workspace.write("a.txt", "exported");
+    const broker = new ExecutionBroker([new SyntheticExecutor(new Map([[workspace.id, workspace]]), store)]);
+    const result = await broker.execute(
+      { id: "e-export", kind: "workspace.export" },
+      { agentId: "agt_blob" as never, workspaceId: workspace.id },
+    );
+    assert.equal(result.ok, true);
+    assert.ok(result.artifact, "the receipt must carry an artifact reference, never inline bytes");
+    assert.equal(digestOf(await store.get(result.artifact!.digest)), result.artifact!.digest);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("workspace.export without a blob store fails loudly rather than faking a reference", async () => {
+  const workspace = new MemoryWorkspace();
+  const broker = new ExecutionBroker([new SyntheticExecutor(new Map([[workspace.id, workspace]]))]);
+  const result = await broker.execute(
+    { id: "e-export-2", kind: "workspace.export" },
+    { agentId: "agt_blob" as never, workspaceId: workspace.id },
+  );
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "ARTIFACT_STORE_REQUIRED");
 });
 
 test("stat reports the object, a missing digest is undefined, an invalid one throws", async () => {

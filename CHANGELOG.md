@@ -2,6 +2,88 @@
 
 ## 1.0.0-rc.1 — abort-safety fix folded in, git ref/remote argument-injection fixed
 
+### BREAKING: `Artifact.data` is now `Artifact.ref` (+ bounded `inline`)
+
+- The world store is where artifacts land, and it carried `data: unknown`
+  inline — content on the blackboard, which the rest of the system forbids
+  (references, never bytes). `Artifact` now carries `ref: ArtifactRef`
+  (`digest`/`size`/`mediaType`/`mechanism`, with `producedBy`/`producedFrom` for
+  provenance), and `MemoryWorkspace.exportArtifact(store)` writes the encoded
+  diff to a `BlobStore` and returns the reference. `decodeWorkspaceDiff` recovers
+  the changes from the digest. A small-inline escape hatch is kept but explicit:
+  `Artifact.inline` is opt-in and bounded by the same `MAX_INLINE_SNAPSHOT_BYTES`
+  ceiling as the snapshot path; over the ceiling it throws
+  `INLINE_ARTIFACT_TOO_LARGE` and the reference is the only carrier.
+- Writers and readers were enumerated first: the only production writer was
+  `exportArtifact` (plus the demo), and the only readers were the world-store
+  persistence and two tests. Callers that constructed an `Artifact` with `data`
+  must construct a `ref` (and optionally a bounded `inline`).
+
+### Blob store: an access model and a lifecycle primitive
+
+- The blob store had no stated access model, so any caller could resolve any
+  digest. Decided and implemented: within one trust domain the digest IS the
+  capability (256-bit, unguessable, and `get` re-hashes so integrity is verified
+  on every read) — that is why unrestricted read by digest is acceptable here.
+  Across tenants it is not, so `GuardedBlobStore` + `TenantBlobPolicy` enforce
+  isolation: a read requires the owning tenant, `stat` returns undefined rather
+  than leaking existence, and writes require a principal. `list`/`prune` add a
+  lifecycle primitive (reachability is the caller's job). Decision, rationale
+  and remaining gaps in `docs/BLOB-STORE.md`.
+
+### Lane scheduler: a lower band can no longer be starved
+
+- The spec reserves lower bands a fixed fraction of admissions, but the
+  scheduler always preferred the highest backlogged band, so a saturated high
+  band could starve a lower one indefinitely. Add `lowerBandReserveFraction`
+  (default 0.2): credit accrues on every admission and is spent on a reserved
+  lower band, so a backlogged lower band receives roughly its share. Tests
+  assert the BOUND — a low-band request is admitted within ~1/fraction
+  high-band admissions, not merely eventually — and the sustained-contention
+  share; failing-first with the reservation removed.
+
+### Git-as-transport: scoped, one-shot sandbox push grants
+
+- Mechanism 2 needs a credential inside the untrusted sandbox. Added
+  `createScopedPushGrant` plus a `pre-receive` hook on the runtime-controlled
+  bare repo: a push must be exactly one NEW ref matching an unexpired grant;
+  deletes and force/overwrite are rejected; the grant is consumed, so it is
+  one-shot. The sandbox carries only the transport secret; authorization is the
+  grant plus the hook, so a stolen credential can create the granted ref once
+  and nothing else. Residual risk (transport scope, untrusted content,
+  exfiltration, read access) is stated in `docs/GIT-PUSH-CREDENTIALS.md`. Tests
+  run against real git; failing-first with the hook neutered.
+
+### Gym: the completion marker is cryptographic, not held out
+
+- `passed` was decided by a per-run nonce the hidden test printed, which agent
+  code could read from the process it runs in (`/proc/self/environ` survives
+  deleting an env var). The decision is now an HMAC over the transcript of
+  assertion outcomes: the hidden harness reads a per-run key from a file and
+  DELETES the file and its env pointer before the agent's module is imported,
+  then signs the transcript; the scorer, which holds the key, verifies it. The
+  key is not observable in env, argv or on disk when the agent runs, so a forged
+  or absent result cannot authenticate. Tested with an agent that reads its own
+  environ and the hidden test source and forges a result — it scores `errored`.
+
+### Gym scoring: score the diff, against a test the agent never sees
+
+- **The gym's first half is the scoring pipeline** (`src/gym/scoring.ts`): apply
+  the agent's patch to a fresh checkout of the pinned commit, copy in a
+  held-out test the agent never sees, and record one of `passed`, `failed`,
+  `tampered`, `timed-out`, `errored`, `skipped`. A diff that touches test files
+  or runner config is `tampered`, not `failed`. Path extraction uses git's own
+  parser (`git apply --numstat -z`) plus both sides of renames and the
+  `---`/`+++` headers, so a hand-crafted patch cannot hide a protected path.
+- **`passed` is not "node exited 0".** The hidden test imports the
+  agent-controlled module, so a top-level `process.exit(0)` or an `assert`
+  monkeypatch would otherwise score green — `node --test` even marks an early
+  exited-0 file as a passing subtest. `passed` now requires a real TAP summary
+  with zero failures, the expected number of passing subtests, and a per-run
+  completion marker the hidden test prints only after its assertions. `assert`
+  is frozen before agent code loads, and a hidden test that runs no assertions
+  is `skipped`/`errored`, never `passed`.
+
 ### Gym end-to-end runner: plant the bug, run both arms, harvest, score
 
 - **The scoring half of the gym now has a runner half.** `src/gym/task.ts`
@@ -66,6 +148,51 @@
   confirms the legacy in-process scorer still passes the early-exit forge while
   the isolated scorer rejects it. This is additive: `src/gym/scoring.ts` is
   untouched so the fix cannot conflict with concurrent work there.
+
+### Model visibility: never guess which model answered
+
+- **The answering model is recorded as it happened.** `GatewayTurnRecord` now
+  carries `requestedModel` and `servedModel` separately, with
+  `modelSubstituted` when the upstream names a different model; an upstream that
+  omits the field is recorded as unknown, never back-filled with the requested
+  id. A hardcoded `modelIds` filter in a probe host had made 27 available models
+  look like one, and every accuracy/latency figure was that single model's.
+  Discovery is no longer filtered (authorization belongs in the gateway's tenant
+  policy), and `npm run models:list` prints the catalog with provider/profile.
+  Live: the unfiltered adapter lists all 27 models, with zero quota spent.
+
+### Verification fixes: a third copy removed, dead claims retired
+
+- The Temporal integration's retry-hint parser was a third copy; the canonical
+  parser lives in `src/inference/gateway/retry-hint.ts`, the router and the
+  integration use it, and the stack-router's standalone copy is pinned by a
+  parity test over shared header sets.
+- Fault-matrix `proven` rows now require evidence recording an executed run and
+  a runnable artifact, not a `.test.ts` filename; the six provider rows were
+  never measured under both rungs and are now `reasoned`.
+- The real-429 driver asserts the park tracks the parsed hint, not merely that
+  the agent parked. A lane-scheduler property test covers arrival streams. The
+  blob-store "receipt digest" test, which proved only the store round-trip under
+  a receipt name, is replaced by an explicit known-open canary.
+- The corpus baseline was withdrawn and re-measured. Four `cve-*` items had been
+  reclassified to `news` to agree with one model — tuning the measure — and a
+  second model disagreed; they are now `ambiguous` (excluded from accuracy,
+  kept for structural checks). The scorable set is 8, all three measured models
+  score 8/8 = 1.0, and the gate is documented as a smoke test, not a benchmark.
+
+### Durable session supervisor
+
+- **A Temporal workflow now supervises interactive agent sessions** instead of a
+  hand-re-armed 30-minute monitor that scraped tmux for `esc interrupt` and
+  could silently fail to deliver a message. One workflow per session, durable
+  check-in timers, signals for `redirect`/`pause`/`resume`/`stop`, escalation
+  when a session stays blocked past a threshold, and a per-session Temporal
+  Schedule that re-creates a supervisor if it dies. It runs on a **separate**
+  Temporal (default `:7244`), so restarting the system under test cannot take
+  its own supervisor down. Probes prefer a real state signal (herdr) and fall
+  back to a labelled tmux scrape; every poke is verified, never assumed. Live
+  proof: real tmux pane, escalation delivered, redirect delivered, and a worker
+  SIGKILL + restart the workflow survived. See `docs/SESSION-SUPERVISOR.md`.
 
 ### Artifact handoff by reference, with provenance and a flat history
 

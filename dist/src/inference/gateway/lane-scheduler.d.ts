@@ -3,8 +3,10 @@
  * /tmp/opencode/spec-priority-lanes.md, roadmap item 2).
  *
  * Pure and clock-injected so decisions are unit-testable with a fake clock and
- * no timers. Piece 1 covers the lane model, band ordering and queue-or-reject;
- * weighted fair-share within a band and real cooldowns are later pieces.
+ * no timers. Covers the lane model, band ordering, queue-or-reject, weighted
+ * fair-share within a band, and a reservation that stops a saturated high band
+ * from starving a lower one (`lowerBandReserveFraction`). Real cooldowns are a
+ * later piece.
  *
  * Capacity here is a concurrency cap. In deployment it is derived from the
  * per-window quota (open question 1 in the spec); the window arithmetic itself
@@ -52,6 +54,13 @@ export interface LaneSchedulerOptions {
     defaultLane?: LaneId;
     /** Rough per-request service time, used to estimate a queued request's wait. */
     estimatedServiceMs?: number;
+    /**
+     * Fraction of admissions reserved for bands below the currently highest one,
+     * so sustained high-band load cannot starve a lower band (spec: "each lower
+     * band is reserved a fixed fraction of every window, e.g. >= 20%"). 0 disables
+     * the reservation; default 0.2.
+     */
+    lowerBandReserveFraction?: number;
 }
 export declare class LaneScheduler {
     #private;

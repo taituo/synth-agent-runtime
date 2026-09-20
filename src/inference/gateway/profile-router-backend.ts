@@ -1,4 +1,5 @@
 import type { GatewayBackend, GatewayModel } from "./types.js";
+import { parseRetryHintMs } from "./retry-hint.js";
 import { InMemoryRouterStateStore, type RouterStateStore, type SharedRouteHealth } from "./router-state.js";
 
 export interface GatewayRoute {
@@ -47,7 +48,13 @@ export class ProfileRouterBackend implements GatewayBackend {
   private readonly affinityTtlMs: number;
 
   async listModels(): Promise<GatewayModel[]> {
-    return [...this.#profiles.values()].map((p) => ({ object: "model", owned_by: "synth-router", ...p.model }));
+    return [...this.#profiles.values()].map((p) => ({
+      object: "model",
+      owned_by: "synth-router",
+      provider: "router",
+      profile: p.model.id,
+      ...p.model,
+    }));
   }
 
   async handle(request: Request, model: string): Promise<Response> {
@@ -187,17 +194,12 @@ function sessionAffinityKey(request: Request, model: string, body: Uint8Array): 
 }
 function retryableStatus(status: number): boolean { return status === 408 || status === 409 || status === 425 || status === 429 || status >= 500; }
 function cooldownFor(response: Response, configured: number | undefined, now: number): number {
-  const retryAfter = parseRetryAfter(response.headers.get("retry-after"), now);
+  const retryAfter = parseRetryHintMs(response.headers, now);
   if (retryAfter !== undefined) return Math.max(configured ?? 0, retryAfter);
   if (configured !== undefined) return configured;
   if (response.status === 429) return 60_000;
   if (response.status >= 500) return 30_000;
   return 5_000;
-}
-function parseRetryAfter(value: string | null, now: number): number | undefined {
-  if (!value) return undefined;
-  const seconds = Number(value); if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1_000;
-  const at = Date.parse(value); if (!Number.isFinite(at)) return undefined; return Math.max(0, at - now);
 }
 function jsonError(status: number, message: string): Response {
   return new Response(JSON.stringify({ error: { message } }), { status, headers: { "content-type": "application/json" } });

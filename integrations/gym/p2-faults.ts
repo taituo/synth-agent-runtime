@@ -14,6 +14,7 @@
  * is printed as `differentiated: false`, not retuned away.
  */
 import { spawn, type ChildProcess } from "node:child_process";
+import { openSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -60,6 +61,7 @@ interface Args {
   arm: "both" | "plain" | "durable";
   flakyPort: number;
   childPlain: boolean;
+  resultTimeoutMs: number;
 }
 
 function parse(argv: string[]): Args {
@@ -87,6 +89,7 @@ function parse(argv: string[]): Args {
     arm: str("arm", "both") as Args["arm"],
     flakyPort: num("flaky-port", 8890),
     childPlain: map.has("child-plain"),
+    resultTimeoutMs: num("result-timeout-ms", 600_000),
   };
 }
 
@@ -138,10 +141,13 @@ async function runPlainOnce(args: Args, baseUrl: string, workDir: string): Promi
   };
 }
 
-function spawnWorker(taskQueue: string): ChildProcess {
+function spawnWorker(taskQueue: string, logPath: string): ChildProcess {
+  // Capture the worker's own diagnostics: when a sample dies, this is how we
+  // learn whether the worker crashed, was OOM-killed, or never restarted.
+  const fd = openSync(logPath, "a");
   return spawn(TSX, [GYM_WORKER], {
     detached: true,
-    stdio: ["ignore", "ignore", "ignore"],
+    stdio: ["ignore", fd, fd],
     env: { ...process.env, TEMPORAL_ADDRESS: ADDRESS, SYNTH_GYM_TASK_QUEUE: taskQueue },
   });
 }
@@ -172,7 +178,8 @@ async function runDurableOnce(args: Args, baseUrl: string, workDir: string, faul
   // Always a dedicated worker so the unique task queue has a listener; for a
   // process fault the same worker is the one killed mid-attempt. The finally
   // guarantees no orphaned worker if this run throws.
-  let worker: ChildProcess | undefined = spawnWorker(taskQueue);
+  const logPath = `/tmp/opencode/gym-worker-${taskQueue}.log`;
+  let worker: ChildProcess | undefined = spawnWorker(taskQueue, logPath);
   try {
     await sleep(5_000);
 
@@ -187,11 +194,29 @@ async function runDurableOnce(args: Args, baseUrl: string, workDir: string, faul
     if (processFault && worker) {
       await sleep(args.killAfterMs);
       killGroup(worker, processFault);
-      worker = spawnWorker(taskQueue); // restart
+      worker = spawnWorker(taskQueue, logPath); // restart
       await sleep(4_000);
     }
 
-    const output = (await handle.result()) as {
+    // Bound the wait: a hung workflow must yield a diagnosable result rather
+    // than killing the harness at the tool timeout with no output.
+    const raced = await Promise.race([
+      handle.result(),
+      sleep(args.resultTimeoutMs).then(() => ({ __harnessTimeout: true }) as const),
+    ]);
+    if (raced && typeof raced === "object" && "__harnessTimeout" in raced) {
+      return {
+        arm: "durable",
+        outcome: "harness-timeout",
+        callCount: 0,
+        turns: 0,
+        wallTimeMs: args.resultTimeoutMs,
+        patchBytes: 0,
+        recovered: false,
+        detail: `handle.result() exceeded ${args.resultTimeoutMs}ms; worker log: ${logPath}`,
+      };
+    }
+    const output = raced as {
       outcome: string;
       callCount: number;
       turns: number;
@@ -213,9 +238,9 @@ async function runDurableOnce(args: Args, baseUrl: string, workDir: string, faul
       patchBytes: output.patchBytes ?? 0,
       requestedModel: output.requestedModel,
       servedModel: output.servedModel,
-    recovered: faultInjected && output.outcome === "passed",
-    ...(output.resumedFromTurn !== undefined ? { resumedFromTurn: output.resumedFromTurn } : {}),
-    ...(output.trace ? { trace: output.trace } : {}),
+      recovered: faultInjected && output.outcome === "passed",
+      ...(output.resumedFromTurn !== undefined ? { resumedFromTurn: output.resumedFromTurn } : {}),
+      ...(output.trace ? { trace: output.trace } : {}),
       ...(output.detail ? { detail: output.detail } : {}),
       ...(output.error ? { error: output.error } : {}),
     };

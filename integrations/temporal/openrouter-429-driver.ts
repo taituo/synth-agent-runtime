@@ -17,6 +17,7 @@ import { pathToFileURL } from "node:url";
 import { cancelAgent, durableAgentWorkflow, getAgentState, sendMessage } from "./src/workflows.js";
 import { createGatewayRunTurn, type GatewayTurnRecord } from "./src/gateway-run-turn.js";
 import { parseRetryHintMs } from "./src/retry-hints.js";
+import { honoursRetryHint } from "./src/park-tracking.js";
 import { startEventRunner } from "./event-runner.js";
 import { INFERENCE_SWARM_SCRIPTS, logCorrelationViolations, scoreAgainstScript, swarmIsolationViolations } from "./event-script.js";
 
@@ -82,12 +83,27 @@ export async function main(): Promise<void> {
   const classified = () => records.filter((record) => record.agentId === agentId).reduce((sum, record) => sum + record.classifications.length, 0);
   let parked = false;
   let state = await handle.query(getAgentState).catch(() => undefined);
+  // Measure how long the workflow actually spent parked, so the assertion is
+  // about TIMING (does the wait track the server's hint?) and not just status.
+  let waitingSince: number | undefined;
+  let longestWaitMs = 0;
+  const observeWaiting = (): void => {
+    if (state?.status === "waiting") {
+      parked = true;
+      if (waitingSince === undefined) waitingSince = Date.now();
+    } else if (waitingSince !== undefined) {
+      longestWaitMs = Math.max(longestWaitMs, Date.now() - waitingSince);
+      waitingSince = undefined;
+    }
+  };
+  observeWaiting();
   const deadline = Date.now() + 20 * 60_000;
   while (classified() < script.length && Date.now() < deadline) {
     state = await handle.query(getAgentState).catch(() => undefined);
-    if (state?.status === "waiting") parked = true;
+    observeWaiting();
     await sleep(250);
   }
+  if (waitingSince !== undefined) longestWaitMs = Math.max(longestWaitMs, Date.now() - waitingSince);
   await sleep(300);
   state = await handle.query(getAgentState).catch(() => undefined);
   await handle.signal(cancelAgent).catch(() => undefined);
@@ -96,13 +112,19 @@ export async function main(): Promise<void> {
   const turns = records.filter((record) => record.agentId === agentId);
   const score = scoreAgainstScript(script, turns);
   const rateLimited = observed.filter((entry) => entry.status === 429);
-  // The park gap after the failures should track the server's own hint.
+  // The park after the failures must track the server's own hint, not a blind
+  // backoff. `parked` alone would pass on a fixed-backoff implementation, so
+  // the assertion is that the observed wait is at least the parsed hint.
   const lastHint = rateLimited.length > 0 ? parseRetryHintMs(new Headers(rateLimited[rateLimited.length - 1]!.headers)) : undefined;
+  const parkToleranceMs = Number(process.env.PARK_TOLERANCE_MS ?? 1_500);
+  const expectedParkMs = lastHint !== undefined && lastHint > 0 ? lastHint : undefined;
+  const honoursHint = honoursRetryHint({ longestWaitMs, hintMs: lastHint, toleranceMs: parkToleranceMs });
   const ids = [agentId];
   const isolationOk = swarmIsolationViolations(runner.trace, ids).length === 0 && logCorrelationViolations(runner.logs, ids).length === 0;
   const ok =
     rateLimited.length > 0 &&
     parked &&
+    honoursHint &&
     state?.status === "idle" &&
     (state?.lastError ?? null) === null &&
     score.orderOk &&
@@ -118,6 +140,10 @@ export async function main(): Promise<void> {
         observedHeadersVerbatim: observed.map((entry) => ({ status: entry.status, headers: entry.headers })),
         parsedLastHintMs: lastHint ?? null,
         parked,
+        longestWaitMs,
+        expectedParkMs: expectedParkMs ?? null,
+        parkToleranceMs,
+        honoursHint,
         finalStatus: state?.status ?? "unknown",
         lastError: state?.lastError ?? null,
         classified: score.classified,
