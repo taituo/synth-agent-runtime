@@ -16,6 +16,7 @@
     "live:replay": "tsx replay-determinism.ts",
     "live:phases": "tsx phase-signals-driver.ts",
     "live:restart": "tsx restart-worker.ts",
+    "live:waiting-spin": "tsx waiting-spin-live.ts",
     "live:flaky-gateway": "tsx flaky-gateway.ts"
   },
   "dependencies": {

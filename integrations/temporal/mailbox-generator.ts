@@ -95,6 +95,52 @@ export function generateStream(seed: number, options: GenerateOptions): Generate
   return events;
 }
 
+/** A turn's returned state; only these are legal for the stub to return. */
+export type ReturnState = "idle" | "waiting";
+
+/**
+ * Seeded sequence of states the activity returns, one per turn. Mostly `idle`
+ * with guaranteed `waiting` deferrals. Fuzzing the RETURN VALUE (not just the
+ * messages) is what makes the "waiting spin" class of bug reachable: an
+ * activity that returns `waiting` must be parked, not re-run at zero delay.
+ */
+export function generateReturnStates(seed: number, count: number, waitingEvery = 4): ReturnState[] {
+  const random = mulberry32(seed ^ 0x51ed270b);
+  const states: ReturnState[] = [];
+  const waitingCount = Math.max(1, Math.floor(count / waitingEvery));
+  for (let i = 0; i < count; i++) states.push(i < waitingCount ? "waiting" : "idle");
+  // Seeded Fisher-Yates so deferrals land at varying turn positions.
+  for (let i = states.length - 1; i > 0; i--) {
+    const j = Math.floor(random() * (i + 1));
+    const tmp = states[i]!;
+    states[i] = states[j]!;
+    states[j] = tmp;
+  }
+  return states;
+}
+
+/**
+ * First occurrence of each message id across all turns, in order. A deferred
+ * (`waiting`) turn re-runs the same prefix, so the raw concatenation repeats;
+ * collapsing to first occurrences must still equal the input stream exactly.
+ */
+export function firstConsumptionOrder(batches: readonly (readonly string[])[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const id of batches.flat()) {
+    if (!seen.has(id)) {
+      seen.add(id);
+      out.push(id);
+    }
+  }
+  return out;
+}
+
+/** A run must not spin: turns are bounded by inputs plus deferrals (plus slack). */
+export function boundedTurns(batches: readonly (readonly string[])[], inputSize: number, waitingCount: number): boolean {
+  return batches.length <= inputSize + waitingCount + 3;
+}
+
 export interface BatchPropertyResult {
   ok: boolean;
   reason?: string;

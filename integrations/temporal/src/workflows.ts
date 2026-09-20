@@ -65,11 +65,27 @@ export async function durableAgentWorkflow(initial: DurableAgentState): Promise<
     try {
       const result = await runTurn({ agentId: state.agentId, messages: clone(state.mailbox) });
       state.lastResult = result.result;
-      state.status = result.state ?? "idle";
-      state.lastError = undefined;
+      const returned = result.state ?? "idle";
       state.updatedAt = Date.now();
+      if (returned === "waiting") {
+        // The activity deferred this turn without consuming the mailbox. Treat
+        // it exactly like a transient park: keep the mailbox intact, back off,
+        // then retry. Reusing the park path means a deferring activity can
+        // never busy-loop the workflow (a zero-delay re-run with a non-empty
+        // mailbox would otherwise spin at ~12 activity calls/second).
+        parkAttempt += 1;
+        const backoffMs = nextParkBackoffMs(parkAttempt, state.parkBackoff);
+        state.status = "waiting";
+        state.lastError = undefined;
+        log.warn("synth.workflow.parked", { attempt: parkAttempt, backoffMs, reason: "activity-returned-waiting" });
+        await condition(() => cancelled, backoffMs);
+        if (cancelled) break;
+        continue;
+      }
+      state.status = returned;
+      state.lastError = undefined;
       parkAttempt = 0;
-      if (state.status === "idle") {
+      if (returned === "idle") {
         // Remove exactly the messages this turn consumed. Anything appended
         // by a signal that arrived while the activity was running (i.e.
         // beyond consumedCount) must survive to be processed by the next

@@ -2,6 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   batchProperty,
+  boundedTurns,
+  firstConsumptionOrder,
+  generateReturnStates,
   generateStream,
   mulberry32,
   shrinkPrefix,
@@ -67,6 +70,30 @@ test("regression: the shrinker's minimal lossy repros stay detected", () => {
     assert.equal(result.ok, false, `${pattern}/${size}: loss must be detected`);
     assert.match(result.reason ?? "", /batched 1 of/);
   }
+});
+
+test("generateReturnStates is deterministic, seeded, and includes deferrals", () => {
+  const a = generateReturnStates(7, 16, 4);
+  const b = generateReturnStates(7, 16, 4);
+  assert.deepEqual(a, b, "same seed => same return states");
+  assert.equal(a.length, 16);
+  assert.ok(a.includes("waiting"), "at least one deferral");
+  assert.ok(a.includes("idle"));
+  assert.notDeepEqual(generateReturnStates(8, 16, 4), a, "different seed => different positions");
+});
+
+test("firstConsumptionOrder collapses a deferred turn's repeated prefix", () => {
+  // Turn 1 returns "waiting" (messages not consumed); turn 2 re-runs them.
+  const batches = [["a", "b"], ["a", "b"], ["a", "b", "c"], ["d"]];
+  assert.deepEqual(firstConsumptionOrder(batches), ["a", "b", "c", "d"]);
+});
+
+test("boundedTurns rejects a spinning run and accepts a deferred one", () => {
+  const normal = [["a"], ["a"], ["a", "b"], ["a", "b", "c"]];
+  assert.equal(boundedTurns(normal, 3, 1), true);
+  // 500 turns for 3 inputs is a spin, not legitimate deferral.
+  const spin = Array.from({ length: 500 }, () => ["a"]);
+  assert.equal(boundedTurns(spin, 3, 1), false);
 });
 
 test("shrinkPrefix reduces a failing stream to a minimal prefix", async () => {
