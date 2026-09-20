@@ -31,6 +31,11 @@ const CASES: Array<{ name: string; headers: Record<string, string>; expected: nu
   { name: "x-rate-limit-reset spelling", headers: { "x-rate-limit-reset": "45" }, expected: 45_000 },
   { name: "ratelimit-reset spelling", headers: { "ratelimit-reset": "45" }, expected: 45_000 },
   { name: "retry-after wins over ratelimit-reset", headers: { "retry-after": "3", "x-ratelimit-reset": "60" }, expected: 3_000 },
+  { name: "retry-after http date with an invalid Date header falls back to now", headers: { "retry-after": new Date(NOW + 3_000).toUTCString(), date: "not a date" }, expected: 3_000 },
+  { name: "ratelimit-reset epoch seconds with an invalid Date header", headers: { "x-ratelimit-reset": String(Math.floor((NOW + 30_000) / 1000)), date: "nope" }, expected: 30_000 },
+  { name: "retry-after with surrounding whitespace", headers: { "retry-after": " 2 " }, expected: 2_000 },
+  { name: "ratelimit-reset zero", headers: { "ratelimit-reset": "0" }, expected: 0 },
+  { name: "ratelimit-reset huge epoch ms", headers: { "x-ratelimit-reset": String(NOW + 30_000) }, expected: 30_000 },
   { name: "no headers", headers: {}, expected: undefined },
 ];
 
