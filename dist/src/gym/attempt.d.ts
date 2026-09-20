@@ -38,6 +38,8 @@ export interface GymTurnResult {
     modelSubstituted?: boolean;
     latencyMs?: number;
     usage?: unknown;
+    /** HTTP attempts the turn made (1 unless the turn retried transient failures). */
+    attempts?: number;
 }
 /** Injected model boundary: a direct gateway call, a Temporal activity, or a script. */
 export type GymTurn = (input: GymTurnInput) => Promise<GymTurnResult>;
@@ -120,6 +122,12 @@ export interface GymAttemptRecord {
     wallTimeMs: number;
     /** Number of model turn invocations (including ones that threw). */
     callCount: number;
+    /**
+     * HTTP attempts summed across turns. Equals `callCount` when no turn retried;
+     * higher when a turn absorbed transient failures in-turn. Reported separately
+     * so a fair-retry plain arm is not confused with one that made more model turns.
+     */
+    httpAttempts: number;
     /** Turns that returned normally. */
     turns: number;
     /** Malformed-reply re-asks consumed (bounded by `maxReasks`). */

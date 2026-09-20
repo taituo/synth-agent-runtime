@@ -100,6 +100,44 @@ test("a fix scores passed and records model attribution and call count", async (
   }
 });
 
+test("httpAttempts counts in-turn retries, not just model turns", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "gym-attempt-"));
+  try {
+    const task = await makeMaterialized(parent);
+    const runner = localEffectRunner(task.repoDir);
+    const turn: GymTurn = async () => ({
+      toolCalls: [
+        { name: "write_file", arguments: { path: "lib.mjs", content: FIXED } },
+        { name: "run_visible_test" },
+        { name: "finish" },
+      ],
+      attempts: 3,
+    });
+    const record = await runGymAttempt({ task, runner, turn, nodeBin: process.execPath });
+    assert.equal(record.callCount, 1, "one model turn");
+    assert.equal(record.httpAttempts, 3, "the turn retried twice in-turn");
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("a failed turn's in-turn attempts are still counted", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "gym-attempt-"));
+  try {
+    const task = await makeMaterialized(parent);
+    const runner = localEffectRunner(task.repoDir);
+    const turn: GymTurn = async () => {
+      throw Object.assign(new Error("gateway returned HTTP 502: boom"), { attempts: 3 });
+    };
+    const record = await runGymAttempt({ task, runner, turn, nodeBin: process.execPath });
+    assert.equal(record.outcome, "errored");
+    assert.equal(record.callCount, 1);
+    assert.equal(record.httpAttempts, 3);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
 test("editing the visible test scores tampered, with the path recorded", async () => {
   const parent = await mkdtemp(join(tmpdir(), "gym-attempt-"));
   try {

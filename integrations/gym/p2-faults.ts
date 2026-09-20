@@ -20,6 +20,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
+  DEFAULT_GATEWAY_RETRY,
   createGatewayGymTurn,
   loadGymTask,
   localEffectRunner,
@@ -39,6 +40,8 @@ interface ArmResult {
   outcome: string;
   callCount: number;
   turns: number;
+  /** HTTP attempts summed across turns; > callCount only when a turn retried. */
+  httpAttempts?: number;
   wallTimeMs: number;
   patchBytes: number;
   requestedModel?: string | null;
@@ -62,6 +65,13 @@ interface Args {
   flakyPort: number;
   childPlain: boolean;
   resultTimeoutMs: number;
+  /**
+   * Transient retry attempts per turn for BOTH arms. 0 (default) preserves the
+   * historical single-shot plain arm, so the committed rows stay reproducible.
+   * >0 gives the plain arm the same bounded retry the durable arm's activity
+   * has, which is the fair-control configuration.
+   */
+  retry: number;
 }
 
 function parse(argv: string[]): Args {
@@ -90,6 +100,7 @@ function parse(argv: string[]): Args {
     flakyPort: num("flaky-port", 8890),
     childPlain: map.has("child-plain"),
     resultTimeoutMs: num("result-timeout-ms", 600_000),
+    retry: num("retry", 0),
   };
 }
 
@@ -117,6 +128,7 @@ function workflowInput(args: Args, taskDir: string, workDir: string, baseUrl: st
     gatewayTimeoutMs: args.gatewayTimeoutMs,
     checkpointKey,
     image: "",
+    ...(args.retry > 0 ? { retryMaxAttempts: args.retry } : {}),
     ...(process.env.SYNTH_FIXTURE_REPOS ? { fixtureCacheDir: process.env.SYNTH_FIXTURE_REPOS } : {}),
   };
 }
@@ -125,13 +137,19 @@ async function runPlainOnce(args: Args, baseUrl: string, workDir: string): Promi
   const task = await loadGymTask(TASK_DIR);
   const materialized = await materializeGymTask({ task, workDir, repoDirName: `plain-${Date.now().toString(36)}` });
   const runner = localEffectRunner(materialized.repoDir);
-  const turn = createGatewayGymTurn({ baseUrl, model: args.model, timeoutMs: args.gatewayTimeoutMs });
+  const turn = createGatewayGymTurn({
+    baseUrl,
+    model: args.model,
+    timeoutMs: args.gatewayTimeoutMs,
+    ...(args.retry > 0 ? { retry: { ...DEFAULT_GATEWAY_RETRY, maxAttempts: args.retry } } : {}),
+  });
   const record = await runGymAttempt({ task: materialized, runner, turn, maxTurns: args.turns, deadlineMs: args.deadlineMs });
   return {
     arm: "plain",
     outcome: record.outcome,
     callCount: record.callCount,
     turns: record.turns,
+    httpAttempts: record.httpAttempts,
     wallTimeMs: record.wallTimeMs,
     patchBytes: record.patch.length,
     requestedModel: record.requestedModel,
@@ -220,6 +238,7 @@ async function runDurableOnce(args: Args, baseUrl: string, workDir: string, faul
       outcome: string;
       callCount: number;
       turns: number;
+      httpAttempts?: number;
       wallTimeMs: number;
       patchBytes?: number;
       resumedFromTurn?: number;
@@ -234,6 +253,7 @@ async function runDurableOnce(args: Args, baseUrl: string, workDir: string, faul
       outcome: output.outcome,
       callCount: output.callCount,
       turns: output.turns,
+      httpAttempts: output.httpAttempts,
       wallTimeMs: output.wallTimeMs,
       patchBytes: output.patchBytes ?? 0,
       requestedModel: output.requestedModel,
@@ -252,7 +272,7 @@ async function runDurableOnce(args: Args, baseUrl: string, workDir: string, faul
 
 /** Kill a plain attempt child mid-turn: the no-durability arm loses the run. */
 async function runPlainKilled(args: Args, baseUrl: string, workDir: string, signal: NodeJS.Signals): Promise<ArmResult> {
-  const child = spawn(TSX, [SELF, "--child-plain", "--gateway", baseUrl, "--model", args.model, "--turns", String(args.turns), "--deadline-ms", String(args.deadlineMs), "--gateway-timeout-ms", String(args.gatewayTimeoutMs)], {
+  const child = spawn(TSX, [SELF, "--child-plain", "--gateway", baseUrl, "--model", args.model, "--turns", String(args.turns), "--deadline-ms", String(args.deadlineMs), "--gateway-timeout-ms", String(args.gatewayTimeoutMs), ...(args.retry > 0 ? ["--retry", String(args.retry)] : [])], {
     detached: true,
     stdio: ["ignore", "ignore", "ignore"],
     env: process.env,

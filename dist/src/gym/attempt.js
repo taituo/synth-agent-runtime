@@ -33,6 +33,7 @@ export async function runGymAttempt(options) {
     });
     const transcript = [];
     let callCount = 0;
+    let httpAttempts = 0;
     let turns = 0;
     let finished = false;
     let timedOut = false;
@@ -80,6 +81,10 @@ export async function runGymAttempt(options) {
             }
             catch (error) {
                 const message = error instanceof Error ? error.message : String(error);
+                const attempts = typeof error?.attempts === "number"
+                    ? error.attempts
+                    : 1;
+                httpAttempts += attempts;
                 const classified = classifyFailure(error, message);
                 if (classified.kind === "malformed" && attemptNo < maxReasks) {
                     reasks++;
@@ -97,6 +102,7 @@ export async function runGymAttempt(options) {
             break;
         const turnResult = result;
         turns++;
+        httpAttempts += turnResult.attempts ?? 1;
         if (turnResult.requestedModel)
             requestedModel = turnResult.requestedModel;
         if (turnResult.servedModel !== undefined)
@@ -194,6 +200,7 @@ export async function runGymAttempt(options) {
         modelSubstituted,
         wallTimeMs: now() - startedAt,
         callCount,
+        httpAttempts,
         turns,
         reasks,
         ...(resumedFromTurn !== undefined ? { resumedFromTurn } : {}),

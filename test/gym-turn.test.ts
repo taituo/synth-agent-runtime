@@ -95,6 +95,75 @@ test("a 429 carries the Retry-After hint across the error boundary", async () =>
   );
 });
 
+test("the turn retries transient HTTP failures up to maxAttempts, then succeeds", async () => {
+  let calls = 0;
+  const sleeps: number[] = [];
+  const turn = createGatewayGymTurn({
+    baseUrl: "http://gateway.test",
+    model: "wanted",
+    retry: { maxAttempts: 3, baseDelayMs: 1, sleepImpl: async (ms) => { sleeps.push(ms); } },
+    fetchImpl: (async () => {
+      calls++;
+      if (calls < 3) return new Response("upstream boom", { status: 502 });
+      return new Response(
+        JSON.stringify({ model: "wanted", choices: [{ message: { content: JSON.stringify({ tool_calls: [{ name: "finish" }] }) } }] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as unknown as typeof fetch,
+  });
+  const result = await turn(INPUT);
+  assert.equal(result.attempts, 3, "three HTTP attempts reported");
+  assert.equal(calls, 3);
+  assert.equal(sleeps.length, 2, "backoff slept between attempts");
+});
+
+test("the turn does not retry a permanent 4xx", async () => {
+  let calls = 0;
+  const turn = createGatewayGymTurn({
+    baseUrl: "http://gateway.test",
+    model: "wanted",
+    retry: { maxAttempts: 3, baseDelayMs: 1, sleepImpl: async () => {} },
+    fetchImpl: (async () => {
+      calls++;
+      return new Response("bad request", { status: 400 });
+    }) as unknown as typeof fetch,
+  });
+  await assert.rejects(() => turn(INPUT), /HTTP 400/);
+  assert.equal(calls, 1, "a 400 is not retried");
+});
+
+test("a retried 429 honours the Retry-After hint", async () => {
+  let calls = 0;
+  const sleeps: number[] = [];
+  const turn = createGatewayGymTurn({
+    baseUrl: "http://gateway.test",
+    model: "wanted",
+    retry: { maxAttempts: 3, baseDelayMs: 1, maxDelayMs: 10_000, sleepImpl: async (ms) => { sleeps.push(ms); } },
+    fetchImpl: (async () => {
+      calls++;
+      if (calls === 1) return new Response("rate limited", { status: 429, headers: { "retry-after": "2" } });
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content: JSON.stringify({ tool_calls: [{ name: "finish" }] }) } }] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as unknown as typeof fetch,
+  });
+  await turn(INPUT);
+  assert.deepEqual(sleeps, [2000], "the server's window, not exponential backoff");
+});
+
+test("the turn does not retry a malformed reply; the attempt loop owns that", async () => {
+  let calls = 0;
+  const turn = createGatewayGymTurn({
+    baseUrl: "http://gateway.test",
+    model: "wanted",
+    retry: { maxAttempts: 3, baseDelayMs: 1, sleepImpl: async () => {} },
+    fetchImpl: fakeFetch({ body: { choices: [{ message: { content: "not json" } }] } }, () => { calls++; }),
+  });
+  await assert.rejects(() => turn(INPUT), /not JSON/);
+  assert.equal(calls, 1, "malformed is re-asked by the loop, not retried as transient");
+});
+
 test("parseRetryAfterMs handles delta-seconds and rejects garbage", () => {
   assert.equal(parseRetryAfterMs(new Headers({ "retry-after": "3" })), 3000);
   assert.equal(parseRetryAfterMs(new Headers({ "retry-after": "nonsense" })), undefined);

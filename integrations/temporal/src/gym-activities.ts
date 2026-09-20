@@ -6,7 +6,7 @@
  */
 import { join } from "node:path";
 import { ApplicationFailure, Context as ActivityContext } from "@temporalio/activity";
-import { BlobGymCheckpointStore, createGatewayGymTurn, FileSystemBlobStore, loadGymTask, localEffectRunner, materializeGymTask, runGymAttempt, type EffectRunner } from "../../../src/index.js";
+import { BlobGymCheckpointStore, DEFAULT_GATEWAY_RETRY, createGatewayGymTurn, FileSystemBlobStore, loadGymTask, localEffectRunner, materializeGymTask, runGymAttempt, type EffectRunner } from "../../../src/index.js";
 import { buildSandboxRunner } from "../../gym/sandbox.js";
 import type { GymAttemptActivities, GymAttemptActivityInput, GymAttemptActivityOutput } from "./gym-contracts.js";
 
@@ -45,6 +45,9 @@ export function createGymActivities(): GymAttemptActivities {
             model: input.model,
             ...(input.apiKey ? { apiKey: input.apiKey } : {}),
             ...(input.gatewayTimeoutMs ? { timeoutMs: input.gatewayTimeoutMs } : {}),
+            ...(input.retryMaxAttempts && input.retryMaxAttempts > 1
+              ? { retry: { ...DEFAULT_GATEWAY_RETRY, maxAttempts: input.retryMaxAttempts } }
+              : {}),
           });
           // Capture the trace so a worker-death run can be diagnosed: the first
           // read_file shows which workspace state the (re)started activity saw.
@@ -101,6 +104,7 @@ export function createGymActivities(): GymAttemptActivities {
             wallTimeMs: record.wallTimeMs,
             callCount: record.callCount,
             turns: record.turns,
+            httpAttempts: record.httpAttempts,
             protectedPathsTouched: record.protectedPathsTouched,
             patchBytes: record.patch.length,
             ...(record.resumedFromTurn !== undefined ? { resumedFromTurn: record.resumedFromTurn } : {}),

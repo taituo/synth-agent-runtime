@@ -43,6 +43,8 @@ export interface GymTurnResult {
   modelSubstituted?: boolean;
   latencyMs?: number;
   usage?: unknown;
+  /** HTTP attempts the turn made (1 unless the turn retried transient failures). */
+  attempts?: number;
 }
 
 /** Injected model boundary: a direct gateway call, a Temporal activity, or a script. */
@@ -126,6 +128,12 @@ export interface GymAttemptRecord {
   wallTimeMs: number;
   /** Number of model turn invocations (including ones that threw). */
   callCount: number;
+  /**
+   * HTTP attempts summed across turns. Equals `callCount` when no turn retried;
+   * higher when a turn absorbed transient failures in-turn. Reported separately
+   * so a fair-retry plain arm is not confused with one that made more model turns.
+   */
+  httpAttempts: number;
   /** Turns that returned normally. */
   turns: number;
   /** Malformed-reply re-asks consumed (bounded by `maxReasks`). */
@@ -174,6 +182,7 @@ export async function runGymAttempt(options: RunGymAttemptOptions): Promise<GymA
 
   const transcript: GymTranscriptEntry[] = [];
   let callCount = 0;
+  let httpAttempts = 0;
   let turns = 0;
   let finished = false;
   let timedOut = false;
@@ -219,6 +228,10 @@ export async function runGymAttempt(options: RunGymAttemptOptions): Promise<GymA
         break;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        const attempts = typeof (error as { attempts?: unknown })?.attempts === "number"
+          ? (error as { attempts: number }).attempts
+          : 1;
+        httpAttempts += attempts;
         const classified = classifyFailure(error, message);
         if (classified.kind === "malformed" && attemptNo < maxReasks) {
           reasks++;
@@ -235,6 +248,7 @@ export async function runGymAttempt(options: RunGymAttemptOptions): Promise<GymA
     if (errored !== undefined) break;
     const turnResult = result as GymTurnResult;
     turns++;
+    httpAttempts += turnResult.attempts ?? 1;
     if (turnResult.requestedModel) requestedModel = turnResult.requestedModel;
     if (turnResult.servedModel !== undefined) servedModel = turnResult.servedModel;
     if (turnResult.modelSubstituted) modelSubstituted = true;
@@ -328,6 +342,7 @@ export async function runGymAttempt(options: RunGymAttemptOptions): Promise<GymA
     modelSubstituted,
     wallTimeMs: now() - startedAt,
     callCount,
+    httpAttempts,
     turns,
     reasks,
     ...(resumedFromTurn !== undefined ? { resumedFromTurn } : {}),

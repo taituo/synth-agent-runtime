@@ -27,15 +27,26 @@ Run one fault at a time; each row is committed as it completes.
 | 2 | 429 + `Retry-After` x3 | errored, 1 call, 31 ms | passed, 8 calls, 65.7 s, 358 B | **yes** |
 
 **Interpretation — rows 1–2 are retry-policy rows, not durability evidence.**
-The plain arm is a no-retry single shot (`createGatewayGymTurn` throws on the
-first non-2xx and `runPlainOnce` calls the loop once); the durable arm gets
-Temporal's activity retry plus the workflow's park/backoff. So these rows measure
-"has any retry at all", which a plain HTTP client can have without Temporal,
-leases or receipts. The durability evidence is the process-fault rows (worker
-restart, SIGKILL), where the plain child vanishes and the durable workflow
-survives — a difference in kind, not degree. Making the plain arm a fair control
-means giving it the same bounded transient retry/backoff; that change is not in
-this run, so the retry-policy label stands.
+The plain arm in these runs was a no-retry single shot (`createGatewayGymTurn`
+threw on the first non-2xx and `runPlainOnce` called the loop once); the durable
+arm got Temporal's activity retry plus the workflow's park/backoff. So these rows
+measure "has any retry at all", which a plain HTTP client can have without
+Temporal, leases or receipts. The durability evidence is the process-fault rows
+(worker restart, SIGKILL), where the plain child vanishes and the durable
+workflow survives — a difference in kind, not degree.
+
+**The fair control is now implemented, and these rows are not yet re-measured
+with it.** `createGatewayGymTurn` takes a bounded transient retry
+(`DEFAULT_GATEWAY_RETRY`: 3 attempts, exponential backoff, `Retry-After`
+honoured and capped), and both drivers take `--retry <n>` so the plain arm and
+the durable arm's activity run the *same* retry configuration — the arms then
+differ only in durability. `p2-faults.ts --fault 502 --retry 3` and
+`--fault 429 --retry 3` are the fair-control re-runs; until they are executed
+the numbers above describe the single-shot plain arm and the retry-policy label
+stands. The turn-level behaviour is pinned by
+`test/gym-turn.test.ts` (retries 502/429/network, honours `Retry-After`, does not
+retry 4xx or malformed replies) and the accounting by `test/gym-attempt.test.ts`
+(`httpAttempts` separates in-turn retries from model turns).
 
 ### Rows 3–4 as first run (confounded — superseded by the re-run below)
 

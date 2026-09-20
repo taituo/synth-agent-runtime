@@ -85,16 +85,45 @@ export function parseRetryAfterMs(headers) {
     return undefined;
 }
 /**
- * The plain arm: a direct call to an OpenAI-compatible gateway. No Temporal, no
- * retry, no receipts. The prompt is the shared gym prompt, so this arm and the
- * durable arm differ only in durability.
+ * The fair-control retry config. Both arms pass this so the comparison isolates
+ * durability rather than the presence of retry. Three attempts with exponential
+ * backoff is what a normal HTTP client ships.
+ */
+export const DEFAULT_GATEWAY_RETRY = {
+    maxAttempts: 3,
+    baseDelayMs: 250,
+    maxDelayMs: 5_000,
+};
+const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
+const RETRYABLE_NETWORK_RE = /fetch failed|ECONN|socket hang up|network|timed? ?out/i;
+function isRetryableNetworkError(error) {
+    if (!(error instanceof Error))
+        return false;
+    if (error.name === "AbortError" || error.name === "TimeoutError")
+        return true;
+    return RETRYABLE_NETWORK_RE.test(error.message);
+}
+function isRetryableTurnError(error) {
+    const status = error?.status;
+    if (typeof status === "number")
+        return RETRYABLE_STATUS.has(status);
+    return isRetryableNetworkError(error);
+}
+/**
+ * The plain arm: a direct call to an OpenAI-compatible gateway. With `retry`
+ * omitted it is a single shot; with the shared `DEFAULT_GATEWAY_RETRY` it does
+ * the bounded transient retry a normal HTTP client does, so it is a fair control
+ * against the durable arm. The prompt is the shared gym prompt either way.
  */
 export function createGatewayGymTurn(options) {
     const doFetch = options.fetchImpl ?? fetch;
     const url = `${options.baseUrl.replace(/\/$/, "")}/v1/chat/completions`;
     const timeoutMs = options.timeoutMs ?? 120_000;
-    return async function gatewayGymTurn(input) {
-        const startedAt = Date.now();
+    const maxAttempts = Math.max(1, options.retry?.maxAttempts ?? 1);
+    const baseDelayMs = options.retry?.baseDelayMs ?? 250;
+    const maxDelayMs = options.retry?.maxDelayMs ?? 5_000;
+    const sleepImpl = options.retry?.sleepImpl ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    async function callOnce(input, startedAt, attempts) {
         const headers = { "content-type": "application/json", ...(options.headers ?? {}) };
         if (options.apiKey)
             headers.authorization = `Bearer ${options.apiKey}`;
@@ -115,12 +144,13 @@ export function createGatewayGymTurn(options) {
         if (!response.ok) {
             const message = `gateway returned HTTP ${response.status}: ${text.slice(0, 300)}`;
             const retryAfterMs = parseRetryAfterMs(response.headers);
+            const error = Object.assign(new Error(message), { status: response.status });
             // Carry a server reset hint across the error boundary (429/503), so a
             // durable supervisor parks for the real window instead of guessing.
             if (retryAfterMs !== undefined && (response.status === 429 || response.status === 503)) {
-                throw Object.assign(new Error(message), { retryAfterMs });
+                error.retryAfterMs = retryAfterMs;
             }
-            throw new Error(message);
+            throw error;
         }
         const body = JSON.parse(text);
         const message = body.choices?.[0]?.message;
@@ -142,7 +172,25 @@ export function createGatewayGymTurn(options) {
             servedModel,
             modelSubstituted: servedModel !== null && servedModel !== options.model,
             latencyMs: Date.now() - startedAt,
+            attempts,
             ...(body.usage !== undefined ? { usage: body.usage } : {}),
         };
+    }
+    return async function gatewayGymTurn(input) {
+        const startedAt = Date.now();
+        for (let attempt = 1;; attempt++) {
+            try {
+                return await callOnce(input, startedAt, attempt);
+            }
+            catch (error) {
+                const tagged = error instanceof Error ? error : new Error(String(error));
+                if (attempt >= maxAttempts || !isRetryableTurnError(tagged)) {
+                    throw Object.assign(tagged, { attempts: attempt });
+                }
+                const hint = tagged.retryAfterMs;
+                const backoff = hint ?? Math.min(maxDelayMs, baseDelayMs * 2 ** (attempt - 1));
+                await sleepImpl(Math.min(backoff, maxDelayMs));
+            }
+        }
     };
 }

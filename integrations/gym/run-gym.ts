@@ -20,6 +20,7 @@ import { join, resolve } from "node:path";
 import {
   createGatewayGymTurn,
   createScriptedGymTurn,
+  DEFAULT_GATEWAY_RETRY,
   DEFAULT_GYM_FIXTURE_CACHE_DIR,
   goldenReversePatch,
   loadGymTask,
@@ -184,6 +185,7 @@ async function runLivePlain(
   deadlineMs: number,
   runnerKind: "local" | "sandbox",
   gatewayTimeoutMs?: number,
+  retry?: number,
 ): Promise<ArmResult> {
   const sandbox = runnerKind === "sandbox"
     ? await buildSandboxRunner({
@@ -201,6 +203,7 @@ async function runLivePlain(
       model,
       ...(process.env.SYNTH_GATEWAY_API_KEY ? { apiKey: process.env.SYNTH_GATEWAY_API_KEY } : {}),
       ...(gatewayTimeoutMs ? { timeoutMs: gatewayTimeoutMs } : {}),
+      ...(retry && retry > 1 ? { retry: { ...DEFAULT_GATEWAY_RETRY, maxAttempts: retry } } : {}),
     });
     const trace: string[] = [];
     const tracedTurn: GymTurn = async (input) => {
@@ -261,6 +264,7 @@ async function runDurableWorkflow(
   deadlineMs: number,
   runnerKind: "local" | "sandbox",
   gatewayTimeoutMs?: number,
+  retry?: number,
 ): Promise<ArmResult> {
   const temporal = await loadTemporalClient();
   const connection = await temporal.Connection.connect(process.env.SYNTH_TEMPORAL_ADDRESS ? { address: process.env.SYNTH_TEMPORAL_ADDRESS } : undefined);
@@ -279,6 +283,7 @@ async function runDurableWorkflow(
     deadlineMs,
     runner: runnerKind,
     ...(gatewayTimeoutMs ? { gatewayTimeoutMs } : {}),
+    ...(retry && retry > 1 ? { retryMaxAttempts: retry } : {}),
     image,
     ...(process.env.SYNTH_KUBERNETES_NAMESPACE ? { namespace: process.env.SYNTH_KUBERNETES_NAMESPACE } : {}),
     ...(process.env.SYNTH_KUBECTL_CONTEXT ? { kubectlContext: process.env.SYNTH_KUBECTL_CONTEXT } : {}),
@@ -321,6 +326,7 @@ async function main(): Promise<number> {
   const fixtureCacheDir = process.env.SYNTH_FIXTURE_REPOS ?? DEFAULT_GYM_FIXTURE_CACHE_DIR;
   const runnerKind = (arg(args, "runner") ?? "sandbox") as "local" | "sandbox";
   const gatewayTimeoutMs = arg(args, "gateway-timeout-ms") ? Number(arg(args, "gateway-timeout-ms")) : undefined;
+  const retry = arg(args, "retry") ? Number(arg(args, "retry")) : 0;
 
   const task = await loadGymTask(taskDir);
   const work = await mkdtemp(join(tmpdir(), "gym-run-"));
@@ -335,8 +341,8 @@ async function main(): Promise<number> {
     for (const arm of arms === "both" ? (["plain", "durable"] as const) : ([arms] as const)) {
       const materialized = await materializeGymTask({ task, workDir: work, repoDirName: `${arm}-${Date.now().toString(36)}`, fixtureCacheDir });
       if (dryRun) results.push(await runDryArm(arm, materialized, maxTurns, deadlineMs, attempts));
-      else if (arm === "plain") results.push(await runLivePlain(materialized, gatewayBaseUrl, model, image, maxTurns, deadlineMs, runnerKind, gatewayTimeoutMs));
-      else results.push(await runDurableWorkflow(materialized, gatewayBaseUrl, model, image, maxTurns, deadlineMs, runnerKind, gatewayTimeoutMs));
+      else if (arm === "plain") results.push(await runLivePlain(materialized, gatewayBaseUrl, model, image, maxTurns, deadlineMs, runnerKind, gatewayTimeoutMs, retry));
+      else results.push(await runDurableWorkflow(materialized, gatewayBaseUrl, model, image, maxTurns, deadlineMs, runnerKind, gatewayTimeoutMs, retry));
     }
 
     const ok = results.every((result) => result.outcome === "passed");

@@ -22,6 +22,11 @@ export interface GymAttemptActivityInput {
   /** Per-model-request timeout. */
   gatewayTimeoutMs?: number;
   /**
+   * Bounded transient retry per turn. Omitted (or 1) is the single-shot turn;
+   * both arms must pass the same value for the comparison to isolate durability.
+   */
+  retryMaxAttempts?: number;
+  /**
    * Stable key for work-product checkpoints. The same value on the retried
    * activity makes it resume from the last checkpoint instead of the base.
    */
@@ -36,13 +41,15 @@ export interface GymAttemptActivityInput {
 
 export interface GymAttemptActivityOutput {
   arm: "durable";
-  outcome: "passed" | "failed" | "tampered" | "timed-out" | "errored";
+  outcome: "passed" | "failed" | "tampered" | "timed-out" | "errored" | "skipped";
   requestedModel: string | null;
   servedModel: string | null;
   modelSubstituted: boolean;
   wallTimeMs: number;
   callCount: number;
   turns: number;
+  /** HTTP attempts summed across turns; > callCount only when a turn retried. */
+  httpAttempts?: number;
   protectedPathsTouched: string[];
   /** Byte length of the harvested patch, so arms can be compared. */
   patchBytes?: number;
