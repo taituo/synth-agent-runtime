@@ -4,6 +4,21 @@ Deliberately unfinished work, recorded so it is not silently dropped. Each item
 says what is open, why it is still open, and what closing it needs. Items are
 removed only when the closing work lands.
 
+## Runtime and deploy
+
+- **The Temporal worker deploy shape is documented, not enforced.** Temporal is
+  now the single durable engine and the homegrown control plane is deleted
+  (`CHANGELOG.md`, Unreleased). `deploy/kubernetes/worker-deployment.yaml` and
+  `deploy/worker-image/Dockerfile` describe the one worker workload, but no CI
+  job applies them: the cluster has no per-push coverage, so the manifest can
+  rot. Closing: a self-hosted runner job that applies the manifest against a
+  throwaway cluster (the same gap as the gVisor/Pi proofs below).
+- **The worker entry point is triage-only.** `integrations/temporal/src/worker-entry.ts`
+  wires the `runTurn` activity to the event-triage engine. The gym's coding
+  activity and its sandbox runner live on the `gym-runner` branch and are not on
+  `main`; the shared `GatewayAgentEngine` already supports tool execution through
+  the execution rung, but no `main` activity registers those tools yet.
+
 ## Egress and artifacts
 
 - **Workspace sync still flattens symlinks.** The git transport preserves mode

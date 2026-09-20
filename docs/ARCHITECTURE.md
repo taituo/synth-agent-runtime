@@ -1,5 +1,12 @@
 # Architecture
 
+> **Historical design doc (2026-09-20).** This describes the pre-consolidation
+> architecture. The homegrown "Agent Runtime" / "Distributed CP" boxes below were
+> deleted: Temporal's `durableAgentWorkflow` owns the durable loop and the
+> `runTurn` activity runs the shared `GatewayAgentEngine`. See the root
+> `README.md` and `docs/TEMPORAL.md` for the current shape. The Postgres
+> durability layer below still exists.
+
 ```text
 ┌─────────────────────────────────────────────────────────────┐
 │ Presentation                                                │

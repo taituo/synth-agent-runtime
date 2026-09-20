@@ -2,13 +2,17 @@
 
 **Infrastructure for running AI agents as durable, distributed workloads.**
 
-Synth Agent Runtime is a runtime and control plane for long-running AI agents. It turns an agent from a process-bound chat session into a durable entity with its own state, lifecycle, mailbox, execution environment, recovery semantics, and ownership rules.
+> **Node >= 22 is required.** Node 18 silently breaks the gym scorer's
+> permission model and turns the held-out-vector tests into false failures.
+> Run `node --version` and confirm `v22.x` before trusting any red.
+
+Synth Agent Runtime is a runtime for long-running AI agents. It turns an agent from a process-bound chat session into a durable entity with its own state, lifecycle, mailbox, execution environment, recovery semantics, and ownership rules.
 
 The runtime is designed for agents that may run unattended for minutes, hours, or longer; move between workers; survive process and machine failures; receive steering while they are already running; spawn or coordinate other agents; and eventually act on external systems. The agent itself can remain relatively simple. The runtime is responsible for making its execution reliable.
 
 At the center of the design is a separation between **agent reasoning, durable state, and physical execution**. An agent can work against a fast in-memory workspace, a persistent project environment, or an isolated Kubernetes/gVisor sandbox without changing the higher-level agent model. Expensive or consequential operations can be pushed behind explicit execution and effect boundaries rather than being implicit side effects of an LLM conversation.
 
-For distributed deployments, Synth provides durable agent state, mailboxes, revisions, leases, fencing tokens, command and effect coordination, crash recovery, and continuation state. Multiple control-plane replicas can operate against the same durable backend while stale workers are prevented from publishing state after ownership has moved elsewhere. PostgreSQL is the primary distributed persistence implementation, with in-memory, JSON-file, and Temporal-oriented adapters also included.
+Durability is **Temporal's job**: `durableAgentWorkflow` owns the agent loop and mailbox, and every turn executes as the `runTurn` activity through the shared `GatewayAgentEngine` turn body (`src/runtime/gateway-engine.ts`). There is no homegrown durable-turn or control-plane stack — the earlier `AgentRuntime`/`DurableTurn`/`CommandCoordinator`/`Supervisor` modules were deleted, because they duplicated what Temporal provides. Postgres remains the store for what is genuinely store-shaped: leases and fencing tokens, effect receipts, mailbox cursors, world revisions, and rate limits. Its 32-worker concurrency + hard-fencing proof runs in CI (`integrations/postgres/concurrency.ts`, `postgres-live.yml`).
 
 The runtime also includes an inference layer with OpenAI-compatible Chat Completions and Responses endpoints, streaming and tool-call support, continuation handling, routing, and provider abstraction. This allows agent execution to remain independent of a particular model provider or client surface.
 
@@ -28,36 +32,38 @@ The broader goal is to make agents behave more like normal distributed workloads
 > the known issues carried into this RC.
 
 
-The central invariant:
+The central invariant — one turn implementation, sandboxed code:
 
 ```text
-agent lease generation N
-        │
+durableAgentWorkflow (Temporal owns lifecycle + mailbox)
+        │  runTurn activity
         ▼
-AgentRuntime.run(..., fence=N)
+GatewayAgentEngine.run(messages, context)   ← the single turn body
         │
-        ▼
-all durable agent-state transitions
-        │
-        ▼
-PostgresPersistence.putAgentFenced()
-        │
-        ├─ owner matches lease row
-        ├─ fencing token matches lease row
-        ├─ lease is unexpired by PostgreSQL clock
-        └─ stored generation never moves backwards
+        ├─ calls the OpenAI-compatible gateway
+        └─ executes the model's tool calls via context.executeEffect
                 │
-                ├─ yes → COMMIT
-                └─ no  → AGENT_FENCE_REJECTED
+                ▼
+        ExecutionBroker (execution rung)
+                │
+                ├─ synthetic / in-memory workspace (cheap, fidelity 0)
+                └─ Kubernetes + gVisor executor Pod (process.exec)
 ```
 
-A stale worker can still exist as a process, but it cannot publish a later terminal `AgentSnapshot` after a newer lease generation has taken ownership.
+Model-authored code only ever runs through the execution rung, never in the
+worker process. The `runTurn` activity is a thin Temporal adapter over the
+engine; it makes no model HTTP call of its own.
+
+A separate store-level invariant still holds for fenced writes: a stale worker
+cannot publish a later terminal `AgentSnapshot` after a newer lease generation
+has taken ownership, enforced atomically by `PostgresPersistence.putAgentFenced()`
+against `synth_leases` (owner, fencing token, and PostgreSQL-clock expiry).
 
 ## Agent-state fencing
 
 ### Hard agent-state fencing
 
-`DurabilityProvider` now has an optional `putAgentFenced(snapshot, fence)` primitive. `LeasedAgentRunner` passes its active lease generation into `AgentRuntime.run()`, and state transitions use that proof on every durable agent-state write.
+`DurabilityProvider` has an optional `putAgentFenced(snapshot, fence)` primitive. The `LeasedAgentRunner`/`CommandCoordinator` helpers that used to pass a lease generation through the deleted `AgentRuntime` are gone with it; the primitive and its atomic Postgres validation remain, because the fenced-write invariant is a store property and is exercised directly by `test/postgres-control.test.ts` and the 32-worker live proof.
 
 PostgreSQL validates the proof atomically against `synth_leases`. An unfenced update is allowed only while the agent row is still at fencing generation `0`; once fenced ownership has begun, legacy/unfenced updates are rejected with `AGENT_FENCE_REQUIRED`.
 
@@ -67,7 +73,7 @@ Local in-memory and JSON-file providers retain monotonic fenced generations for 
 
 PostgreSQL acquire, renew, release, and validity checks now derive time from `clock_timestamp()` inside PostgreSQL. The optional `now` parameter remains in the `LeaseStore` interface for deterministic in-memory tests, but the PostgreSQL implementation deliberately ignores worker-local time.
 
-`LeaseStore.validateLease()` was added so higher-level commit logic does not compare PostgreSQL lease timestamps against `Date.now()` from another machine. `CommandCoordinator` now uses this authoritative validation before committing a command result.
+`LeaseStore.validateLease()` exists so commit logic does not compare PostgreSQL lease timestamps against `Date.now()` from another machine. The store is covered by `test/postgres-control.test.ts`.
 
 ### Live PostgreSQL proof extended
 
@@ -92,23 +98,26 @@ It also exercises generation-1 → generation-2 agent takeover and verifies that
 ## Runtime layers
 
 ```text
-Clients / OpenCode / Pi / Temporal / Supervisor
+Clients / OpenCode / Pi / Temporal client
                     │
-              Agent Runtime API
+        durableAgentWorkflow (Temporal)
+                    │  runTurn activity
+                    ▼
+        GatewayAgentEngine  ← the one turn body
                     │
        ┌────────────┼───────────────┐
        │            │               │
  durable world   mailbox        inference
  CAS/revisions  seq + ACK   continuation/router
        │            │               │
-       └────── distributed state ───┘
+       └────── Postgres stores ─────┘
                     │
           lease + fencing token
                     │
         ┌───────────┴───────────┐
         │                       │
- AgentSnapshot writes      command commit
- hard-fenced in DB        authoritative lease
+ AgentSnapshot writes      effect receipts
+ hard-fenced in DB        claimed in DB
         │                       │
         └───────────┬───────────┘
                     │
@@ -131,35 +140,40 @@ Provider credentials are not bundled with Synth. Deployments supply and manage t
 
 ## Tests executed for this artifact
 
+Measured under Node v22.20.0 (`node --version`), on commit `HEAD`:
+
 ```text
-npm test  (root suite, Node >=22 required)
-73 passed / 0 failed
+npm test  (root suite)
+200 passed / 0 failed
+
+npm test --prefix integrations/temporal  (durable workflow + turn body)
+80 passed / 0 failed
 
 npm run integrations:syntax
-26 TypeScript integration files / 0 syntax diagnostics
+81 TypeScript integration files / 0 syntax diagnostics
 4 shell files / syntax OK
 
 integrations/opencode-http-gateway: npm test
-1 passed / 0 failed  (abort-safety contract)
+3 passed / 0 failed  (abort-safety contract)
 ```
 
 Also independently verified live, outside this repeatable suite (not
 re-runnable without external infrastructure/credentials): real PostgreSQL
-concurrency and fencing under 16 concurrent workers, a real pinned Pi
+concurrency and fencing under **32** concurrent workers, a real pinned Pi
 checkout E2E, a real Kubernetes + gVisor pod-kill, and a full
 external-provider matrix (unknown-model/malformed/missing-model errors,
 abort-survival, `previous_response_id` continuation, tool calls, 3-way
 concurrency) against a live subscription-backed gateway. `npm run
-live:proof` runs the same checks and reports **SKIP** (not PASS) for
-whichever of these require infrastructure/credentials this environment
-doesn't have.
+live:proof` / `node scripts/live-proofs.mjs` run the same checks and report
+**SKIP** (not PASS) for whichever of these require infrastructure/credentials
+this environment doesn't have.
 
 ## Start here
 
 ```bash
 npm install
 npm test
-npm run release-hardening:contract
+npm test --prefix integrations/temporal
 npm run live:proof
 ```
 
@@ -177,19 +191,23 @@ For the design and failure rules, read:
 
 `docs/` holds every other design/subsystem doc (see `docs/README.md` for the
 full index). All prior release documentation (the v0.1–v0.8 root Markdown
-sets) is retained under `docs/history/` for archival reference.
+sets) and the retired versioned tests/examples are retained under
+`docs/history/` for archival reference; nothing there is compiled or run.
 
 ## Release status
 
-`1.0.0-rc.1` has closed every correctness/security issue found across two
-independent audit passes, verified live: real PostgreSQL concurrency and
-fencing, a real pinned Pi checkout E2E, a real Kubernetes + gVisor pod-kill,
-and a full external-provider matrix (abort-survival, continuations, tool
-calls, concurrency) against a live subscription-backed gateway — see
-`docs/RELEASE-GATE.md` for the checklist and `CHANGELOG.md` for what was fixed
-and what remains as a known, non-blocking gap (per-process-only rate
-limiting, a chaos-testing coverage gap, and a few defense-in-depth items).
-Remaining work before a GA `1.0.0` tag is operational hardening for a
-fully-loaded production deployment: sustained soak/load testing, rolling
-upgrade testing, distributed rate limiting, per-record task/artifact CAS,
-and continuation retention/encryption policy.
+`1.0.0-rc.1` is the current tag, but the tree no longer matches its original
+release note: the homegrown durable-control-plane stack was deleted and
+Temporal is now the single durable engine (`CHANGELOG.md`, Unreleased). The
+claims that remain measured are the Postgres concurrency/fencing proof (32
+workers, CI on every push), the Temporal suite, and the unit suites above.
+The claims that are still **not** enforced per push are the same ones
+`docs/KNOWN-OPEN.md` lists: the scoring worker is not isolated from the host,
+the gym agent's tool path has no permission model, the corpus is an 8-item
+smoke test, and OpenRouter limits are unmeasured. The Temporal worker deploy
+manifest (`deploy/kubernetes/worker-deployment.yaml`) is a documented shape,
+not applied in CI. Remaining work before a GA `1.0.0` tag is operational
+hardening: a single enforced boundary for all agent-controlled execution,
+sustained soak/load testing, rolling-upgrade testing, distributed rate
+limiting, per-record task/artifact CAS, and continuation
+retention/encryption policy.

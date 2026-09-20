@@ -1,5 +1,44 @@
 # Changelog
 
+## Unreleased — Temporal is the runtime; the homegrown control plane is deleted
+
+### BREAKING: deleted `AgentRuntime` and the durable-control-plane stack
+
+- Durability is Temporal's job. The duplicate homegrown stack is removed:
+  `AgentRuntime` (`src/runtime/agent-runtime.ts`), `DurableTurn` /
+  `runDurableTransactionalTurn` (`src/runtime/durable-turn.ts`),
+  `transactional-turn`, `TemporalDurabilityProvider` (the dead adapter),
+  `EffectReconciler`, `AgentRunner`, `CommandCoordinator`, `EffectPolicy`, and
+  `Supervisor`, plus the `chaos/scenario` crash-recovery scenario that only
+  existed to exercise them. `src/index.ts` no longer exports any of them.
+- Every live turn now goes through the Temporal workflow and the shared
+  `GatewayAgentEngine` turn body (introduced in the previous change). The
+  `runTurn` activity is a thin adapter and makes no model HTTP call of its own.
+- The local runner is not a runtime here; it survives only as the gym's
+  labelled unisolated comparison arm (that work is on the `gym-runner` branch).
+- `examples/demo.ts` now drives one turn through `GatewayAgentEngine` and the
+  execution rung; `examples/kubernetes-demo.ts` drives the broker directly.
+  The `AgentRuntime`-only examples and tests are archived under
+  `docs/history/museum/` (not compiled by `tsconfig`).
+- Postgres durability coverage is preserved and strengthened, not deleted: the
+  32-worker concurrency + fencing live proof (`integrations/postgres/concurrency.ts`,
+  CI `postgres-live.yml`), `test/postgres.test.ts`, and the DB-clock lease and
+  hard-fenced agent-write contracts ported out of the versioned `v09` test into
+  `test/postgres-control.test.ts`. Other live coverage from the versioned tests
+  moved to `test/durable-stores.test.ts` and `test/inference-routing.test.ts`.
+- Added `deploy/kubernetes/worker-deployment.yaml` and
+  `deploy/worker-image/Dockerfile`: the Temporal worker is the only runtime
+  workload; there is no homegrown control-plane Deployment. Not applied in CI.
+
+### Tests
+
+- Root suite: 200 passed / 0 failed (Node v22.20.0). Temporal integration
+  suite: 80 passed / 0 failed. The count dropped because the versioned museum
+  tests (`v03`/`v04`/`v08`/`v09`), `runtime.test.ts`, and `process-crash.test.ts`
+  exercised deleted modules; their live-module coverage was salvaged first.
+- Node >= 22 is required: Node 18 breaks the gym scorer's permission model and
+  produces false failures in the held-out-vector tests.
+
 ## Unreleased — gym scorer: the in-process signing oracle is removed
 
 ### BREAKING: `scoreGymPatch` takes held-out `cases`, not a `hiddenTestPath`

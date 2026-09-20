@@ -1,5 +1,17 @@
 # Documentation index
 
+> **Runtime consolidation (2026-09-20).** Temporal is the single durable engine
+> and the shared `GatewayAgentEngine` is the one turn body. The homegrown
+> durable-control-plane stack was deleted (`CHANGELOG.md`, Unreleased): the
+> `AgentRuntime`, `DurableTurn`/`transactional-turn`, `TemporalDurabilityProvider`,
+> `EffectReconciler`, `AgentRunner`, `CommandCoordinator`, `EffectPolicy` and
+> orchestration `Supervisor` modules no longer exist. Docs that describe those
+> subsystems (`DISTRIBUTED.md`, `TRANSACTIONS.md`, `SUPER.md`, parts of
+> `ARCHITECTURE.md`/`HARDENING.md`/`RECOVERY.md`) are retained as design history;
+> the current runtime is described in the root `README.md`, `docs/TEMPORAL.md`,
+> and `docs/KNOWN-OPEN.md`. The Postgres stores (leases/fencing, effect
+> receipts, mailbox cursors, world revisions) are the durability that remains.
+
 Start with the root [`README.md`](../README.md) and [`CHANGELOG.md`](../CHANGELOG.md).
 Everything below is design/subsystem detail, in rough reading order.
 
