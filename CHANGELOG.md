@@ -133,7 +133,13 @@
   provenance), and `runGymAttempt` restores the latest checkpoint and resumes
   from the next turn. A patch is O(delta) per turn rather than a full-repo
   bundle, which is the right unit for in-progress state; the git transport's
-  mode/symlink fidelity remains for final egress.
+  mode/symlink fidelity remains for final egress. The SIGKILL measurement shows
+  **re-application, not re-derivation**: a checkpoint can already contain the
+  finished fix, so a resumed attempt that only calls `finish` scores `passed`.
+  The stronger claim — the resumed attempt makes new edits rather than replaying
+  — is measured by `stronger claim: with a non-fixing checkpoint the resumed
+  attempt must make the edit` in `test/gym-checkpoint.test.ts`, not by the
+  headline 4/4.
 - **The gym pass decision is now unforgeable: it is made where the agent's code
   cannot run, reach or observe it.** `src/gym/isolated-score.ts` runs the agent
   module in a separate worker that is given one input per request and never sees

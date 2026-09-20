@@ -140,7 +140,9 @@ sigkill fault — the harness process was killed by the 700 s tool timeout while
 `handle.result()` blocked; no durable outcome was produced, and its worker was
 cleaned up. So the "4/4" question is not fully answered: 3 of 3 completed
 samples passed and the 0 B case did not recur, but the fourth sample is a box
-death, not a durable result.
+death, not a durable result. These passes carry the same narrower interpretation
+as below: they show pre-kill work is re-applied, not that the fix was
+re-derived after resume.
 
 Caveat on certification: samples 1–3 were scored before the fifth-round scorer
 fix, i.e. their `passed` came from the legacy in-process scorer. The traces show
@@ -185,8 +187,19 @@ repeated with the hardened scorer and the bounded-wait/logging harness.
 | 3 | lost | **passed** | 3 | 2 | 358 B |
 | 4 | lost | **passed** | 7 | 1 | 358 B |
 
-All four samples passed under the isolated scorer, resumed from turns 1-2, and the
-0-byte case did not recur (the pre-fix baseline was 3 passes in 4 with one 0 B).
+All four samples passed under the isolated scorer and the 0-byte case did not
+recur (the pre-fix baseline was 3 passes in 4 with one 0 B). **Interpretation,
+narrower than the headline:** a checkpoint can already contain the finished fix
+at the kill point, so these passes demonstrate that work produced before the kill
+is not lost and is re-applied on resume — not that the resumed agent re-derived
+the fix. A resumed attempt that merely calls `finish` can score `passed`, and the
+`resumedFromTurn 1-2` column is consistent with exactly that. The stronger
+property — that the resumed attempt makes new edits rather than only replaying —
+is measured deterministically at zero model cost by `stronger claim: with a
+non-fixing checkpoint the resumed attempt must make the edit` in
+`test/gym-checkpoint.test.ts`: it checkpoints a partial, non-fixing edit, asserts
+the fix is absent before the resumed turn, and requires that turn to produce the
+final patch. It passes.
 
 ### What killed the earlier sample 4
 

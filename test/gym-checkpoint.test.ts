@@ -93,7 +93,7 @@ test("checkpoints round-trip through the blob store with a provenance chain", as
   }
 });
 
-test("a resumed attempt continues from the checkpointed edits, not the bugged base", async () => {
+test("replay case: a resumed attempt re-applies a checkpoint that already holds the fix", async () => {
   const parent = await mkdtemp(join(tmpdir(), "gym-cp-"));
   try {
     const task = await makeMaterialized(parent);
@@ -125,6 +125,55 @@ test("a resumed attempt continues from the checkpointed edits, not the bugged ba
     assert.equal(seenTurnIndex, 1, "the resumed loop starts after the completed turn");
     assert.equal(second.resumedFromTurn, 1);
     assert.equal(second.outcome, "passed", second.error);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("stronger claim: with a non-fixing checkpoint the resumed attempt must make the edit", async () => {
+  // The SIGKILL 4/4 result only shows pre-kill work is re-applied: a checkpoint
+  // can already contain the finished fix, so a resumed attempt that only calls
+  // finish scores passed. This variant removes that ambiguity: the checkpoint
+  // holds a PARTIAL, non-fixing edit, so a pass requires the resumed attempt to
+  // produce the fix itself, after resume.
+  const parent = await mkdtemp(join(tmpdir(), "gym-cp-"));
+  try {
+    const task = await makeMaterialized(parent);
+    const store = makeStore(parent);
+    const key = "resume-new-edit";
+    const lib = join(task.repoDir, "lib.mjs");
+    const PARTIAL = `${BUGGY}// partial progress, still buggy\n`;
+
+    const dyingTurn: GymTurn = async (input) => {
+      if (input.turnIndex === 0) return { toolCalls: [{ name: "write_file", arguments: { path: "lib.mjs", content: PARTIAL } }] };
+      throw Object.assign(new Error("gateway returned HTTP 502: killed"), { retryAfterMs: 10 });
+    };
+    const first = await runGymAttempt({ task, runner: localEffectRunner(task.repoDir), turn: dyingTurn, maxTurns: 8, checkpoint: store, checkpointKey: key, nodeBin: process.execPath });
+    assert.equal(first.outcome, "errored");
+
+    const saved = await store.load(key);
+    assert.ok(saved, "a checkpoint must exist");
+    assert.ok(saved.patchText.includes("partial progress"), "the checkpoint holds the partial edit");
+    assert.ok(!saved.patchText.includes("toLowerCase"), "the checkpoint must NOT already contain the fix");
+
+    // Simulate the retried activity re-materializing the pinned bugged checkout.
+    await git(task.repoDir, "reset", "--hard", "-q", "HEAD");
+
+    let ranAt = -1;
+    let sawFixBeforeEdit = true;
+    const fixTurn: GymTurn = async (input) => {
+      ranAt = input.turnIndex;
+      const current = await readFile(lib, "utf8");
+      assert.match(current, /partial progress/, "resume must restore the pre-kill partial work");
+      sawFixBeforeEdit = current.includes("toLowerCase");
+      return { toolCalls: [{ name: "write_file", arguments: { path: "lib.mjs", content: FIXED } }, { name: "finish" }] };
+    };
+    const second = await runGymAttempt({ task, runner: localEffectRunner(task.repoDir), turn: fixTurn, maxTurns: 8, checkpoint: store, checkpointKey: key, nodeBin: process.execPath });
+    assert.equal(ranAt, 1, "the resumed loop continues after the checkpointed turn");
+    assert.equal(sawFixBeforeEdit, false, "the fix was absent before the resumed edit");
+    assert.equal(second.resumedFromTurn, 1);
+    assert.equal(second.outcome, "passed", second.error);
+    assert.ok(second.patch.includes("toLowerCase"), "the final patch was produced by the resumed attempt");
   } finally {
     await rm(parent, { recursive: true, force: true });
   }
