@@ -1,5 +1,14 @@
 # Recovery and reconciliation
 
+> **Runtime consolidation (2026-09-20).** Temporal is the single durable engine
+> and the shared `GatewayAgentEngine` is the one turn body. The homegrown
+> `AgentRuntime`, `DurableTurn`/`transactional-turn`, `TemporalDurabilityProvider`,
+> `EffectReconciler`, `AgentRunner`/`LeasedAgentRunner`, `CommandCoordinator`,
+> `EffectPolicy` and orchestration `Supervisor` were deleted (`CHANGELOG.md`,
+> Unreleased). References below to those APIs are historical. The Postgres stores
+> (leases/fencing, effect receipts, mailbox cursors, world revisions) remain; see
+> the root `README.md` and `docs/KNOWN-OPEN.md` for the current shape.
+
 ## Recovery ownership
 
 Recovery of a durable agent state in a distributed PostgreSQL deployment must occur under a current agent lease when it needs to mutate an already-fenced `AgentSnapshot`. `AgentRecoveryOptions.fence` can supply that ownership proof. Unfenced local/JSON recovery remains available for explicitly single-writer deployments.

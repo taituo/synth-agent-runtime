@@ -50,9 +50,12 @@ GatewayAgentEngine.run(messages, context)   ← the single turn body
                 └─ Kubernetes + gVisor executor Pod (process.exec)
 ```
 
-Model-authored code only ever runs through the execution rung, never in the
-worker process. The `runTurn` activity is a thin Temporal adapter over the
-engine; it makes no model HTTP call of its own.
+The workflow's per-agent `turnConfig` (system prompt, tool surface, rung
+selection) is carried into the activity, which resolves the rung and sets
+`executeEffect`; a tool call then runs instead of being refused. Model-authored
+code only ever runs through the execution rung, never in the worker process.
+The `runTurn` activity is a thin Temporal adapter over the engine; it makes no
+model HTTP call of its own.
 
 A separate store-level invariant still holds for fenced writes: a stale worker
 cannot publish a later terminal `AgentSnapshot` after a newer lease generation
@@ -147,10 +150,10 @@ npm test  (root suite)
 200 passed / 0 failed
 
 npm test --prefix integrations/temporal  (durable workflow + turn body)
-80 passed / 0 failed
+82 passed / 0 failed
 
 npm run integrations:syntax
-81 TypeScript integration files / 0 syntax diagnostics
+83 TypeScript integration files / 0 syntax diagnostics
 4 shell files / syntax OK
 
 integrations/opencode-http-gateway: npm test

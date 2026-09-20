@@ -1,5 +1,14 @@
 # Transactional turns
 
+> **Runtime consolidation (2026-09-20).** Temporal is the single durable engine
+> and the shared `GatewayAgentEngine` is the one turn body. The homegrown
+> `AgentRuntime`, `DurableTurn`/`transactional-turn`, `TemporalDurabilityProvider`,
+> `EffectReconciler`, `AgentRunner`/`LeasedAgentRunner`, `CommandCoordinator`,
+> `EffectPolicy` and orchestration `Supervisor` were deleted (`CHANGELOG.md`,
+> Unreleased). References below to those APIs are historical. The Postgres stores
+> (leases/fencing, effect receipts, mailbox cursors, world revisions) remain; see
+> the root `README.md` and `docs/KNOWN-OPEN.md` for the current shape.
+
 v0.4 introduces a stronger transaction boundary than the earlier workspace-only rollback.
 
 ## DurableTurn

@@ -41,12 +41,15 @@ kubectl get runtimeclass gvisor
 ## 2. Build the executor image
 
 ```bash
-docker build -t registry.example/synth-executor:0.4.0 deploy/executor-image
-docker push registry.example/synth-executor:0.4.0
+docker build -t ghcr.io/taituo/synth-executor:0.1.0 deploy/executor-image
+docker push ghcr.io/taituo/synth-executor:0.1.0
 ```
 
-Pin the production image by digest and replace the placeholder image in the
-resource classes (or construct your own classes in code).
+The base image is pinned by digest in `deploy/executor-image/Dockerfile`; the
+built executor image is pinned by manifest digest in
+`src/execution/executor-image.ts` (`EXECUTOR_IMAGE`), which the default resource
+classes use. Publishing a new executor means replacing that whole reference, not
+the tag on it. `SYNTH_EXECUTOR_IMAGE` overrides it at runtime.
 
 The executor image needs: `sh`, `git`, `base64`, `find`, and whatever build tools
 your project tasks require. It deliberately contains no Kubernetes credentials.

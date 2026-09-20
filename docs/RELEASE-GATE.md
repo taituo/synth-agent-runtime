@@ -1,5 +1,14 @@
 # Release Gate
 
+> **Runtime consolidation (2026-09-20).** Temporal is the single durable engine
+> and the shared `GatewayAgentEngine` is the one turn body. The homegrown
+> `AgentRuntime`, `DurableTurn`/`transactional-turn`, `TemporalDurabilityProvider`,
+> `EffectReconciler`, `AgentRunner`/`LeasedAgentRunner`, `CommandCoordinator`,
+> `EffectPolicy` and orchestration `Supervisor` were deleted (`CHANGELOG.md`,
+> Unreleased). References below to those APIs are historical. The Postgres stores
+> (leases/fencing, effect receipts, mailbox cursors, world revisions) remain; see
+> the root `README.md` and `docs/KNOWN-OPEN.md` for the current shape.
+
 The release question is no longer "can a stale replica overwrite the current agent?" (closed — see `HARDENING.md`) but "have we proven the whole stack under real infrastructure and operational load?"
 
 ## Closed correctness gates

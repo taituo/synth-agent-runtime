@@ -73,3 +73,6 @@ else skip("live gateway probe", "SYNTH_GATEWAY_URL not set");
 console.log("\n=== LIVE PROOF SUMMARY ===");
 for (const item of results) console.log(`${item.status.padEnd(4)} ${item.name}${item.reason ? ` — ${item.reason}` : ""}${item.ms ? ` (${item.ms}ms)` : ""}`);
 if (results.some((item) => item.status === "FAIL")) process.exit(1);
+// A skip is never a pass: a run where some checks never ran is exit 2, distinct
+// from both success (0) and failure (1).
+if (results.some((item) => item.status === "SKIP")) process.exit(2);

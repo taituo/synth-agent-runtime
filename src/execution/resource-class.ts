@@ -1,3 +1,5 @@
+import { EXECUTOR_IMAGE } from "./executor-image.js";
+
 export type WorkspaceMedium = "Memory" | "Node";
 export type NetworkMode = "none" | "egress-proxy" | "cluster";
 
@@ -89,12 +91,12 @@ function restrictedNetwork(mode: NetworkMode): NetworkPolicyProfile {
   };
 }
 
-/** Opinionated defaults. Images are placeholders and should be pinned by digest in production. */
+/** Opinionated defaults. The image is pinned by digest in `executor-image.ts`. */
 export const DEFAULT_KUBERNETES_RESOURCE_CLASSES: readonly KubernetesResourceClass[] = [
   {
     id: "sandbox-small",
     fidelity: 20,
-    image: "ghcr.io/example/synth-executor:latest",
+    image: EXECUTOR_IMAGE,
     runtimeClassName: "gvisor",
     resources: {
       cpuRequest: "250m",
@@ -118,7 +120,7 @@ export const DEFAULT_KUBERNETES_RESOURCE_CLASSES: readonly KubernetesResourceCla
   {
     id: "sandbox-medium",
     fidelity: 30,
-    image: "ghcr.io/example/synth-executor:latest",
+    image: EXECUTOR_IMAGE,
     runtimeClassName: "gvisor",
     resources: {
       cpuRequest: "1",
@@ -142,7 +144,7 @@ export const DEFAULT_KUBERNETES_RESOURCE_CLASSES: readonly KubernetesResourceCla
   {
     id: "sandbox-heavy",
     fidelity: 40,
-    image: "ghcr.io/example/synth-executor:latest",
+    image: EXECUTOR_IMAGE,
     runtimeClassName: "gvisor",
     resources: {
       cpuRequest: "2",
@@ -166,7 +168,7 @@ export const DEFAULT_KUBERNETES_RESOURCE_CLASSES: readonly KubernetesResourceCla
   {
     id: "project-cell",
     fidelity: 50,
-    image: "ghcr.io/example/synth-executor:latest",
+    image: EXECUTOR_IMAGE,
     runtimeClassName: "gvisor",
     resources: {
       cpuRequest: "1",

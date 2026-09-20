@@ -1,5 +1,14 @@
 # Distributed control plane
 
+> **Runtime consolidation (2026-09-20).** Temporal is the single durable engine
+> and the shared `GatewayAgentEngine` is the one turn body. The homegrown
+> `AgentRuntime`, `DurableTurn`/`transactional-turn`, `TemporalDurabilityProvider`,
+> `EffectReconciler`, `AgentRunner`/`LeasedAgentRunner`, `CommandCoordinator`,
+> `EffectPolicy` and orchestration `Supervisor` were deleted (`CHANGELOG.md`,
+> Unreleased). References below to those APIs are historical. The Postgres stores
+> (leases/fencing, effect receipts, mailbox cursors, world revisions) remain; see
+> the root `README.md` and `docs/KNOWN-OPEN.md` for the current shape.
+
 ## v0.9: hard agent fencing
 
 The cooperative v0.8 agent lease is now enforced at the durable write boundary. A control-plane replica may continue executing after it has become stale, but its durable agent-state write is rejected unless its lease resource, owner ID, fencing token, and DB-time expiry all still match.

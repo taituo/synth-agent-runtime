@@ -13,11 +13,16 @@ removed only when the closing work lands.
   job applies them: the cluster has no per-push coverage, so the manifest can
   rot. Closing: a self-hosted runner job that applies the manifest against a
   throwaway cluster (the same gap as the gVisor/Pi proofs below).
-- **The worker entry point is triage-only.** `integrations/temporal/src/worker-entry.ts`
-  wires the `runTurn` activity to the event-triage engine. The gym's coding
-  activity and its sandbox runner live on the `gym-runner` branch and are not on
-  `main`; the shared `GatewayAgentEngine` already supports tool execution through
-  the execution rung, but no `main` activity registers those tools yet.
+- **The worker entry point still defaults to triage; the gym task layer is on
+  `gym-runner`.** `integrations/temporal/src/worker-entry.ts` wires the `runTurn`
+  activity to the event-triage turn. The durable turn now executes tools through
+  the rung when an agent's `turnConfig` supplies a system prompt, tool surface
+  and rung (see `CHANGELOG.md`, Unreleased), but `main` has no task
+  materialization/checkpoint layer: the synthetic rung's workspace lives for the
+  worker process's lifetime and does not survive a worker restart. The gym's
+  coding activity, task materialization and checkpoint store live on the
+  `gym-runner` branch and are not on `main`. Closing: merge that layer, or port
+  the gym activity onto the shared `turnConfig`/rung path here.
 
 ## Egress and artifacts
 

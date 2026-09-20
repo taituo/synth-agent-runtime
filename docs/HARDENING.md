@@ -1,5 +1,14 @@
 # Hardening status
 
+> **Runtime consolidation (2026-09-20).** Temporal is the single durable engine
+> and the shared `GatewayAgentEngine` is the one turn body. The homegrown
+> `AgentRuntime`, `DurableTurn`/`transactional-turn`, `TemporalDurabilityProvider`,
+> `EffectReconciler`, `AgentRunner`/`LeasedAgentRunner`, `CommandCoordinator`,
+> `EffectPolicy` and orchestration `Supervisor` were deleted (`CHANGELOG.md`,
+> Unreleased). References below to those APIs are historical. The Postgres stores
+> (leases/fencing, effect receipts, mailbox cursors, world revisions) remain; see
+> the root `README.md` and `docs/KNOWN-OPEN.md` for the current shape.
+
 ## Current security/correctness model
 
 Durable agent state is hard-fenced by lease generation, and the fence check is atomic with the agent write in PostgreSQL: an unfenced write cannot update an agent row once its `fencing_token` is nonzero. `LeasedAgentRunner` passes the active lease generation into `AgentRuntime.run()`, every durable agent-state transition is persisted through `DurabilityProvider.putAgentFenced()`, and PostgreSQL validates owner, token, and lease expiry against `synth_leases` before committing. A stale writer fails with `AGENT_FENCE_REJECTED` instead of publishing a false terminal state.

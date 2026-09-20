@@ -1,5 +1,6 @@
 import {
   DEFAULT_KUBERNETES_RESOURCE_CLASSES,
+  EXECUTOR_IMAGE,
   ExecutionBroker,
   KubernetesExecutor,
   KubectlSandboxBackend,
@@ -16,7 +17,7 @@ import {
  * executor. There is no homegrown runtime in this path — the execution rung is
  * the only place model-authored code runs.
  */
-const image = process.env.SYNTH_EXECUTOR_IMAGE ?? "ghcr.io/example/synth-executor:latest";
+const image = process.env.SYNTH_EXECUTOR_IMAGE ?? EXECUTOR_IMAGE;
 const classes: KubernetesResourceClass[] = DEFAULT_KUBERNETES_RESOURCE_CLASSES
   .filter((entry) => entry.id !== "project-cell")
   .map((entry) => ({ ...entry, image }));

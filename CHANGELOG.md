@@ -1,5 +1,48 @@
 # Changelog
 
+## Unreleased — the durable turn runs tools; durable-resume proof; verify-3 leftovers
+
+### The `runTurn` activity can execute tool calls through the rung
+
+- The durable turn previously never set `executeEffect`, so `GatewayAgentEngine`
+  refused every tool call ("No effect executor configured"). The per-agent
+  `turnConfig` (system prompt, tool surface, rung selection) now travels through
+  the workflow (`DurableAgentState.turnConfig`) into the activity; the activity
+  resolves the rung and sets `executeEffect` on the shared engine's context.
+  There is still exactly one turn body (`GatewayAgentEngine`).
+- `DurableToolSpec` maps each model tool to one execution-rung effect
+  (`workspace.read/write/list/delete`, `process.exec`); `DurableRungConfig`
+  selects `synthetic` (in-memory workspace) or `sandbox` (Kubernetes/gVisor via
+  the existing `KubernetesExecutor`). No rung means tool calls are refused, not
+  dropped. A tool-configured turn returns tool observations; the triage turn is
+  unchanged and returns classifications.
+- Tests: a tool-configured turn reaches the rung (executor call count 2, read
+  bytes returned), the default synthetic rung round-trips a write-then-read, and
+  the same turn with no rung refuses. Red before the change, green after.
+
+### Durable-resume proof (SIGKILL `durableAgentWorkflow`)
+
+- `integrations/temporal/durable-restart-worker.ts` SIGKILLs a worker running
+  the real `durableAgentWorkflow` mid-turn and shows that committed turns are
+  not re-derived: per-message activity call counts are `committedCalls=1`,
+  `hangCalls=2` (attempts `[1,1,2]`), final state idle with an empty mailbox.
+  Wired into `scripts/live-proofs.mjs` as `durable-restart`.
+
+### verify-3 leftovers
+
+- Finished the docs consolidation: `UPGRADE.md`, `INTEGRATION.md`,
+  `CODE-REVIEW.md`, `RELEASE-GATE.md`, `HARDENING.md`, `RECOVERY.md`,
+  `DISTRIBUTED.md`, `TRANSACTIONS.md`, `TEMPORAL.md` now carry the runtime
+  consolidation banner; `TEMPORAL.md`'s redelivery rule describes Temporal's
+  actual retry semantics instead of the deleted `CommandCoordinator`.
+- `scripts/live-proof.mjs` now exits **2** when any check skipped (previously 0),
+  matching the standing rule that a skip is never a pass.
+- The executor image is pinned by digest on `main`: new
+  `src/execution/executor-image.ts` (`EXECUTOR_IMAGE`,
+  `ghcr.io/taituo/synth-executor@sha256:fc59ce…`) is used by the default
+  resource classes and the k8s demo, and `deploy/executor-image/Dockerfile`'s
+  base is pinned by digest.
+
 ## Unreleased — Temporal is the runtime; the homegrown control plane is deleted
 
 ### BREAKING: deleted `AgentRuntime` and the durable-control-plane stack

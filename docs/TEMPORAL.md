@@ -1,5 +1,14 @@
 # Temporal deployment
 
+> **Runtime consolidation (2026-09-20).** Temporal is the single durable engine
+> and the shared `GatewayAgentEngine` is the one turn body. The homegrown
+> `AgentRuntime`, `DurableTurn`/`transactional-turn`, `TemporalDurabilityProvider`,
+> `EffectReconciler`, `AgentRunner`/`LeasedAgentRunner`, `CommandCoordinator`,
+> `EffectPolicy` and orchestration `Supervisor` were deleted (`CHANGELOG.md`,
+> Unreleased). References below to those APIs are historical. The Postgres stores
+> (leases/fencing, effect receipts, mailbox cursors, world revisions) remain; see
+> the root `README.md` and `docs/KNOWN-OPEN.md` for the current shape.
+
 The root runtime intentionally does not depend on the Temporal SDK. The optional package in `integrations/temporal/` contains a real workflow, signals/query, client and worker bootstrap.
 
 The workflow owns durable logical state such as status and mailbox. Network/filesystem/model operations remain activities because Temporal workflows must stay deterministic.
@@ -33,6 +42,6 @@ An activity may also **defer** a turn by returning `state: "waiting"` without co
 
 `integrations/temporal/interceptors-live.ts` is a live proof against a real Temporal dev server (`temporal server start-dev`): it runs a happy-path and a flaky-then-succeeds workflow and asserts the trace sink and worker logs both carry the expected correlation fields, retry reason, and `willRetry`.
 
-## v0.8 activity/redelivery rule
+## Activity redelivery rule
 
-Temporal/RPC redelivery of commands should enter `CommandCoordinator` with a stable command ID. A `started` record from a dead worker requires reconciliation; timeout alone is not permission to replay an external action.
+Temporal retries an activity whose result was never recorded (worker death, heartbeat timeout). An activity must therefore be idempotent: give each external side effect a stable idempotency key and let the effect receipt decide. `ExecutionBroker` claims an effect by `effect.id`; a `started` receipt left by a dead worker is returned as `EFFECT_OUTCOME_UNCERTAIN`, not blindly replayed. Timeout alone is not permission to repeat an external action.
