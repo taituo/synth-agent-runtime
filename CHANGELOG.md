@@ -19,6 +19,18 @@
   persistence and two tests. Callers that constructed an `Artifact` with `data`
   must construct a `ref` (and optionally a bounded `inline`).
 
+### Blob store: an access model and a lifecycle primitive
+
+- The blob store had no stated access model, so any caller could resolve any
+  digest. Decided and implemented: within one trust domain the digest IS the
+  capability (256-bit, unguessable, and `get` re-hashes so integrity is verified
+  on every read) — that is why unrestricted read by digest is acceptable here.
+  Across tenants it is not, so `GuardedBlobStore` + `TenantBlobPolicy` enforce
+  isolation: a read requires the owning tenant, `stat` returns undefined rather
+  than leaking existence, and writes require a principal. `list`/`prune` add a
+  lifecycle primitive (reachability is the caller's job). Decision, rationale
+  and remaining gaps in `docs/BLOB-STORE.md`.
+
 ### Gym scoring: score the diff, against a test the agent never sees
 
 - **The gym's first half is the scoring pipeline** (`src/gym/scoring.ts`): apply

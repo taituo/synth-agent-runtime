@@ -35,9 +35,14 @@ removed only when the closing work lands.
   to fix. Closing: a breaking change to a `{digest,size,mediaType,mechanism}`
   reference, an audit of every writer/reader, a version bump and a CHANGELOG
   note.
-- **Blob store has no access control or lifecycle.** Any caller can resolve any
-  digest; there is no read authorization, retention, GC or write quota.
-  Closing: an authz model for digest resolution plus a retention/GC policy.
+- **Blob store: access model decided, lifecycle partly wired.** The decision is
+  in `docs/BLOB-STORE.md`: within one trust domain the digest is the capability
+  (unguessable, integrity-verified on read), and across tenants
+  `GuardedBlobStore` + `TenantBlobPolicy` enforce isolation (with `stat` not
+  leaking existence). `list`/`prune` exist and are tested. Still open:
+  automatic GC wired from the artifact index's reachable set, a per-tenant write
+  quota, and read auditing. Closing: a scheduled retention job, a `put` size
+  ceiling, and an audit event on `get`.
 - **Git-as-transport needs sandbox credentials.** Mechanism 2 requires the agent
   to push from inside the untrusted sandbox, which contradicts the existing
   "no repository credentials in the sandbox" posture. Closing: scoped/one-shot

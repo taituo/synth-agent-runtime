@@ -28,6 +28,7 @@ Everything below is design/subsystem detail, in rough reading order.
 - [`KUBERNETES-RUN.md`](KUBERNETES-RUN.md) — real, executed run guide: install gVisor, wire it into k3s, prove isolation, run the kill contract.
 - [`TEMPORAL.md`](TEMPORAL.md) — Temporal durability adapter.
 - [`SESSION-SUPERVISOR.md`](SESSION-SUPERVISOR.md) — durable supervisor for interactive agent sessions (separate Temporal deployment).
+- [`BLOB-STORE.md`](BLOB-STORE.md) — content-addressed store: access model (digest-as-capability, tenant isolation) and lifecycle.
 - [`OBSERVABILITY.md`](OBSERVABILITY.md) — tracing.
 - [`UPGRADE.md`](UPGRADE.md) — *historical*: a specific `v0.8 → v0.9` migration note, correct as-is for that transition.
 
