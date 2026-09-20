@@ -9,20 +9,28 @@ import { MESSY_EVENTS, type CorpusClass, type CorpusItem } from "./corpora/messy
 export const CORPUS_CLASSES = ["news", "social_post", "incident"] as const;
 
 /**
- * Accuracy gate for the messy corpus. MEASURED, not guessed.
+ * Accuracy gate for the messy corpus. MEASURED, not guessed — and honest about
+ * how little it measures.
  *
- * Baseline (2026-09-20, `muse-spark-1.3-contributor` via the local gateway):
- * 12/12 = 1.0. The four NVD CVE descriptions were reclassified from `incident`
- * to `news` on 2026-09-20: a CVE is factual institutional reporting, which the
- * triage prompt's own definition calls `news`, not "an operational alert about
- * a system failure or degradation that needs action". The earlier 0.6 gate
- * existed only to absorb that labelling error, so it was replaced. The gate is
- * 0.9 — below the measured 1.0 for natural model variance, but not so low that
- * it would excuse a mislabelled item. Update only with a fresh measurement and
- * a new date.
+ * Baseline (2026-09-20, three models via the local gateway:
+ * `deepseek-v4-flash`, `qwen3.7-plus`, `deepseek-v4-pro`): 8/8 = 1.0 each. The
+ * four `cve-*` items are now `ambiguous` and excluded, because a published
+ * vulnerability report is genuinely both factual reporting (`news`) and an
+ * operational alert (`incident`). They had earlier been reclassified to `news`
+ * to agree with one model — tuning the measure until the result looked good —
+ * so that 12/12 baseline was withdrawn.
+ *
+ * The gate is 0.9, but this is a SMOKE TEST, not a benchmark: with only 8
+ * scorable items, 7/8 = 0.875 already fails, so the gate effectively demands a
+ * perfect score and detects regressions rather than measuring capability. A
+ * corpus that could actually gate would need on the order of 100+ items,
+ * balanced across the classes, with labels agreed by more than one annotator
+ * (or an explicit ambiguity procedure) and the ambiguous set reported
+ * separately. Update only with a fresh measurement and a new date.
  */
 export const CORPUS_ACCURACY_GATE = 0.9;
-export const CORPUS_BASELINE = "2026-09-20: 12/12 = 1.0 (muse-spark-1.3-contributor), after CVE relabel to news";
+export const CORPUS_BASELINE =
+  "2026-09-20: 8/8 = 1.0 (deepseek-v4-flash, qwen3.7-plus, deepseek-v4-pro), after the four cve-* items moved to ambiguous; smoke test, not a benchmark";
 
 export interface CorpusTurn {
   plantedKinds: ReadonlyArray<string | null>;

@@ -45,6 +45,11 @@
   the agent parked. A lane-scheduler property test covers arrival streams. The
   blob-store "receipt digest" test, which proved only the store round-trip under
   a receipt name, is replaced by an explicit known-open canary.
+- The corpus baseline was withdrawn and re-measured. Four `cve-*` items had been
+  reclassified to `news` to agree with one model — tuning the measure — and a
+  second model disagreed; they are now `ambiguous` (excluded from accuracy,
+  kept for structural checks). The scorable set is 8, all three measured models
+  score 8/8 = 1.0, and the gate is documented as a smoke test, not a benchmark.
 
 ### Artifact handoff by reference, with provenance and a flat history
 

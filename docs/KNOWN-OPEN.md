@@ -54,14 +54,14 @@ removed only when the closing work lands.
 
 ## Measurement
 
-- **Corpus accuracy is definitional on the four `cve-*` items.** They were
-  reclassified to `news` to agree with one model, so the "12/12 = 1.0" baseline
-  is that model's number. deepseek-v4-pro scores 9/12 = 0.75 and every mismatch
-  is a CVE item it calls `incident` — a labelling disagreement on genuinely
-  ambiguous texts, not a capability difference or a bug (order/structural/
-  injection checks all pass). Closing: move the CVE items to `ambiguous` (the
-  class already exists) or report accuracy with and without them, and stop
-  quoting 12/12 as a capability baseline.
+- **The corpus is a smoke test, not a benchmark.** The four `cve-*` items were
+  moved to `ambiguous` (a vulnerability report is both `news` and `incident`),
+  so the scorable set is 8 items; all three measured models score 8/8 = 1.0
+  (`CORPUS_BASELINE`). Eight items is too few to gate on meaningfully — 7/8 =
+  0.875 already fails a 0.9 gate, so the gate detects regressions, not
+  capability. Closing: a corpus on the order of 100+ items, balanced across
+  classes, with labels agreed by more than one annotator and the ambiguous set
+  reported separately.
 
 ## Inference and scheduling
 
