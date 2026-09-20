@@ -4,7 +4,8 @@ export interface GymScore {
     /** Paths the patch touched (repo-relative). */
     touchedPaths: string[];
     detail?: string;
-    hiddenOutput?: string;
+    /** Per-case outcomes the verifier compared; the executed artifact behind `passed`. */
+    cases?: GymCaseResult[];
 }
 /** Paths an agent must not change: the visible test and the runner config. */
 export declare const PROTECTED_PATTERNS: readonly RegExp[];
@@ -26,33 +27,55 @@ export declare function parsePatchPaths(patchText: string): string[];
  */
 export declare function patchTargetPaths(patchText: string): Promise<string[]>;
 export declare function isTampering(paths: readonly string[]): boolean;
+/** One assertion the verifier holds: call `module[call](...args)` and expect `expect`. */
+export interface GymCase {
+    /** Repo-relative (or worker-cwd-relative) module path, e.g. "./he.js". */
+    module: string;
+    call: string;
+    args: unknown[];
+    expect: unknown;
+    label?: string;
+}
+export interface GymCaseResult {
+    label?: string;
+    ok: boolean;
+    error?: string;
+}
+export interface IsolatedScore {
+    outcome: GymOutcome;
+    touchedPaths: string[];
+    cases: GymCaseResult[];
+    detail?: string;
+}
+export interface IsolatedScoreOptions {
+    patchText: string;
+    /** A checkout of the pinned BUGGED commit. Scoring clones it, so it is untouched. */
+    baseRepoDir: string;
+    cases: readonly GymCase[];
+    timeoutMs?: number;
+    nodeBin?: string;
+}
+/**
+ * Apply the agent's patch to a fresh clone and decide `passed`/`failed`/
+ * `tampered`/`timed-out`/`errored` from the verifier's own comparison.
+ */
+export declare function isolatedScoreGymPatch(options: IsolatedScoreOptions): Promise<IsolatedScore>;
+/** The public scorer seam: same shape as before, but the verdict is isolated. */
 export interface ScoreGymPatchOptions {
     patchText: string;
     /** A checkout of the pinned base commit (scoring clones it, so it is untouched). */
     baseRepoDir: string;
-    /** Absolute path to the held-out test the agent never sees. */
-    hiddenTestPath: string;
-    /** Where to place the hidden test inside the clone (default `hidden.test.mjs`). */
-    hiddenTestDest?: string;
-    /**
-     * How many passing subtests the hidden test must report to score `passed`.
-     * A run with fewer (including zero) is not a pass. Default 1.
-     */
-    expectedHiddenTests?: number;
+    /** The held-out vectors the agent never sees; the verifier holds these. */
+    cases: readonly GymCase[];
     timeoutMs?: number;
     nodeBin?: string;
 }
-/** Where the harness is written inside the clone. */
-export declare const HIDDEN_HARNESS_DEST = "gym-hidden-harness.mjs";
-/**
- * The held-out test imports this harness. It reads the per-run key from a file
- * and DELETES the file and the env pointer BEFORE the agent's module is
- * imported, so the key is not observable to the agent (not in env — which
- * survives in /proc/self/environ — not in argv, and not on disk by the time the
- * agent runs). `complete()` prints an HMAC over the transcript of assertion
- * outcomes; the scorer, which holds the key, verifies it. A forged transcript
- * needs the key, which the agent cannot obtain, so the marker is no longer
- * forgeable by reading the process it runs in.
- */
-export declare const HIDDEN_HARNESS_SOURCE: string;
 export declare function scoreGymPatch(options: ScoreGymPatchOptions): Promise<GymScore>;
+/**
+ * Adapt an isolated-case score to a `GymScorer` seam. `baseRepoDir` must be the
+ * BUGGED checkout; the verifier clones it.
+ */
+export declare function isolatedScorerFor(cases: readonly GymCase[], nodeBin?: string): (request: {
+    patchText: string;
+    baseRepoDir: string;
+}) => Promise<IsolatedScore>;

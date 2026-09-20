@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased — gym scorer: the in-process signing oracle is removed
+
+### BREAKING: `scoreGymPatch` takes held-out `cases`, not a `hiddenTestPath`
+
+- The pass decision used to be an HMAC over an assertion transcript, signed by a
+  harness written into the clone. Agent code imported that harness and called
+  `check()`/`complete()` as a signing oracle, producing a genuine MAC over a
+  forged transcript and scoring `passed` with the bug unfixed (review round six,
+  ONE-a, reproduced). Any signer that runs in the agent's process is reachable
+  by agent code, so the signer is gone.
+- The verifier (the scorer) now holds the held-out vectors and never loads agent
+  code. A worker child evaluates one call per request and reports the raw return
+  value on a dedicated fd; the verdict is the verifier's comparison against the
+  expected value. The child's exit code is not consulted, so `process.exit(0)`
+  is `errored`. The worker runs under Node's permission model confined to the
+  scoring work dir, so it cannot read the held-out vectors off the filesystem;
+  if no permission model exists the scorer refuses to run rather than fail open.
+- `ScoreGymPatchOptions.hiddenTestPath`/`expectedHiddenTests` are replaced by
+  `cases: GymCase[]`. The `he/decimal-option` task fixture ships
+  `hidden.cases.json` in place of the in-clone TAP test. The `HIDDEN_HARNESS_*`
+  exports are removed.
+- Every demonstrated forgery is a permanent regression test in
+  `test/gym-vacuity.test.ts` (FORGE 1-5b, including the signing oracle and the
+  `/proc/<ppid>/cwd` vector read).
+
 ## 1.0.0-rc.1 — abort-safety fix folded in, git ref/remote argument-injection fixed
 
 ### BREAKING: `Artifact.data` is now `Artifact.ref` (+ bounded `inline`)
