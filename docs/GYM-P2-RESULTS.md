@@ -130,3 +130,4 @@ the retried activity continued from.
 | sample | plain | durable | calls | resumedFrom | patch |
 |---|---|---|---|---|---|
 | 1 | lost | **passed** | 2 | 2 | 358 B |
+| 2 | lost | **passed** | 6 | 1 | 358 B |
