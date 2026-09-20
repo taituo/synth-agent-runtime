@@ -1,6 +1,8 @@
 import { newArtifactId, newWorkspaceId, type WorkspaceId } from "../core/ids.js";
 import type { Artifact } from "../core/types.js";
+import type { BlobStore } from "../artifacts/blob-store.js";
 import { WORKSPACE_PATH_ESCAPES, escapesWorkspace } from "../execution/workspace-errors.js";
+import { MAX_INLINE_SNAPSHOT_BYTES } from "./snapshot-codec.js";
 import { normalizeRelative, type TreeSource, type WorkspaceRevision } from "./source.js";
 import { resolveLinkTarget, resolveSymlinkTarget } from "./symlink-target.js";
 
@@ -11,6 +13,38 @@ export interface WorkspaceChange {
   path: string;
   kind: "add" | "modify" | "delete";
   content?: Uint8Array;
+}
+
+/** The wire form of a workspace diff: file bytes are base64, never raw JSON. */
+export interface EncodedWorkspaceDiff {
+  revision?: WorkspaceRevision;
+  changes: Array<{ path: string; kind: WorkspaceChange["kind"]; contentBase64?: string }>;
+}
+
+export const WORKSPACE_DIFF_MEDIA_TYPE = "application/vnd.synth.workspace-diff+json";
+
+export function encodeWorkspaceDiff(diff: { revision?: WorkspaceRevision; changes: readonly WorkspaceChange[] }): Uint8Array {
+  const body: EncodedWorkspaceDiff = {
+    ...(diff.revision !== undefined ? { revision: diff.revision } : {}),
+    changes: diff.changes.map((change) => ({
+      path: change.path,
+      kind: change.kind,
+      ...(change.content ? { contentBase64: Buffer.from(change.content).toString("base64") } : {}),
+    })),
+  };
+  return encoder.encode(JSON.stringify(body));
+}
+
+export function decodeWorkspaceDiff(bytes: Uint8Array): { revision?: WorkspaceRevision; changes: WorkspaceChange[] } {
+  const parsed = JSON.parse(decoder.decode(bytes)) as EncodedWorkspaceDiff;
+  return {
+    ...(parsed.revision !== undefined ? { revision: parsed.revision } : {}),
+    changes: parsed.changes.map((change) => ({
+      path: change.path,
+      kind: change.kind,
+      ...(change.contentBase64 ? { content: new Uint8Array(Buffer.from(change.contentBase64, "base64")) } : {}),
+    })),
+  };
 }
 
 export interface WorkspaceSnapshot {
@@ -27,6 +61,11 @@ function equalBytes(a: Uint8Array | undefined, b: Uint8Array | undefined): boole
   if (a.byteLength !== b.byteLength) return false;
   for (let i = 0; i < a.byteLength; i++) if (a[i] !== b[i]) return false;
   return true;
+}
+
+export interface ExportArtifactOptions {
+  /** Include a bounded inline copy when the content is within the ceiling. */
+  inline?: boolean;
 }
 
 export class MemoryWorkspace {
@@ -257,16 +296,33 @@ export class MemoryWorkspace {
     return changes;
   }
 
-  async exportArtifact(): Promise<Artifact> {
-    return {
+  /**
+   * Export the workspace diff as an Artifact whose `ref` points at the content
+   * in `store`. The bytes never travel on the Artifact (the blackboard rule),
+   * and `decodeWorkspaceDiff(await store.get(ref.digest))` recovers them.
+   *
+   * `options.inline` adds the bounded escape hatch: a copy on the Artifact when
+   * the content is within `MAX_INLINE_SNAPSHOT_BYTES`, and an explicit
+   * `INLINE_ARTIFACT_TOO_LARGE` when it is not.
+   */
+  async exportArtifact(store: BlobStore, options: ExportArtifactOptions = {}): Promise<Artifact> {
+    const revision = await this.source?.revision();
+    const changes = await this.diff();
+    const bytes = encodeWorkspaceDiff({ ...(revision !== undefined ? { revision } : {}), changes });
+    const ref = await store.put(bytes, { mediaType: WORKSPACE_DIFF_MEDIA_TYPE, producedBy: this.id });
+    const artifact: Artifact = {
       id: newArtifactId(),
       type: "workspace-diff",
       workspaceId: this.id,
       createdAt: Date.now(),
-      data: {
-        revision: await this.source?.revision(),
-        changes: await this.diff(),
-      },
+      ref,
     };
+    if (options.inline) {
+      if (bytes.byteLength > MAX_INLINE_SNAPSHOT_BYTES) {
+        throw new Error(`INLINE_ARTIFACT_TOO_LARGE:${bytes.byteLength}>${MAX_INLINE_SNAPSHOT_BYTES}; use the reference instead`);
+      }
+      artifact.inline = { mediaType: WORKSPACE_DIFF_MEDIA_TYPE, dataBase64: Buffer.from(bytes).toString("base64"), size: bytes.byteLength };
+    }
+    return artifact;
   }
 }

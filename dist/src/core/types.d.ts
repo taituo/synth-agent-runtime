@@ -1,5 +1,6 @@
 import type { AgentId, ArtifactId, TaskId, WorkspaceId } from "./ids.js";
 import type { ExecutionPolicy } from "../execution/resource-class.js";
+import type { ArtifactRef } from "../execution/types.js";
 export type AgentState = "idle" | "thinking" | "waiting_for_tool" | "waiting_for_agent" | "waiting_for_human" | "waiting_for_resource" | "sleeping" | "blocked" | "completed" | "failed" | "cancelled";
 export type RelationKind = "supervises" | "delegates_to" | "consults" | "reviews" | "reports_to" | "shares_resource";
 export interface Relation {
@@ -28,6 +29,18 @@ export interface TaskSpec {
     status: "pending" | "running" | "blocked" | "completed" | "failed" | "cancelled";
     metadata?: Record<string, unknown>;
 }
+/**
+ * A bounded inline copy of small artifact content. The `ref` is always the
+ * source of truth; this is an explicit escape hatch under the same
+ * `MAX_INLINE_SNAPSHOT_BYTES` ceiling as the snapshot path, so small content
+ * does not force a store read. Over the ceiling it is not produced at all.
+ */
+export interface InlineArtifact {
+    mediaType: string;
+    /** Base64 of the exact bytes; `size` is the decoded length. */
+    dataBase64: string;
+    size: number;
+}
 export interface Artifact {
     id: ArtifactId;
     /** Monotonic per-record revision for compare-and-swap updates (default 0). */
@@ -36,7 +49,15 @@ export interface Artifact {
     taskId?: TaskId;
     workspaceId?: WorkspaceId;
     createdAt: number;
-    data: unknown;
+    /**
+     * A reference to the content, never the bytes: the same rule the rest of the
+     * system follows. The content lives in the blob store and the digest resolves
+     * to exactly those bytes. (This replaced an inline `data: unknown` field,
+     * which let the blackboard carry content the rule forbids.)
+     */
+    ref: ArtifactRef;
+    /** Opt-in, bounded inline copy. Never larger than `MAX_INLINE_SNAPSHOT_BYTES`. */
+    inline?: InlineArtifact;
     metadata?: Record<string, unknown>;
 }
 export interface AgentDefinition {

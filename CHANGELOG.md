@@ -2,6 +2,23 @@
 
 ## 1.0.0-rc.1 — abort-safety fix folded in, git ref/remote argument-injection fixed
 
+### BREAKING: `Artifact.data` is now `Artifact.ref` (+ bounded `inline`)
+
+- The world store is where artifacts land, and it carried `data: unknown`
+  inline — content on the blackboard, which the rest of the system forbids
+  (references, never bytes). `Artifact` now carries `ref: ArtifactRef`
+  (`digest`/`size`/`mediaType`/`mechanism`, with `producedBy`/`producedFrom` for
+  provenance), and `MemoryWorkspace.exportArtifact(store)` writes the encoded
+  diff to a `BlobStore` and returns the reference. `decodeWorkspaceDiff` recovers
+  the changes from the digest. A small-inline escape hatch is kept but explicit:
+  `Artifact.inline` is opt-in and bounded by the same `MAX_INLINE_SNAPSHOT_BYTES`
+  ceiling as the snapshot path; over the ceiling it throws
+  `INLINE_ARTIFACT_TOO_LARGE` and the reference is the only carrier.
+- Writers and readers were enumerated first: the only production writer was
+  `exportArtifact` (plus the demo), and the only readers were the world-store
+  persistence and two tests. Callers that constructed an `Artifact` with `data`
+  must construct a `ref` (and optionally a bounded `inline`).
+
 ### Gym scoring: score the diff, against a test the agent never sees
 
 - **The gym's first half is the scoring pipeline** (`src/gym/scoring.ts`): apply

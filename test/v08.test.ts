@@ -156,16 +156,18 @@ test("world compare-and-swap rejects stale concurrent task and artifact mutation
   assert.equal(stale.task.status, "running");
   assert.equal(stale.task.revision, 1);
 
-  const artifact: Artifact = { id: "art-1" as any, type: "report", createdAt: 1, data: { v: 1 } };
+  // An Artifact carries a REFERENCE, never inline bytes.
+  const ref = (v: number) => ({ digest: `sha256:${String(v).padStart(64, "0")}`, size: v, mediaType: "text/plain", mechanism: "test" });
+  const artifact: Artifact = { id: "art-1" as any, type: "report", createdAt: 1, ref: ref(1) };
   await world.putArtifact(artifact);
   const c = (await world.getArtifact(artifact.id))!;
   const d = (await world.getArtifact(artifact.id))!;
-  const artifactFirst = await world.compareAndSwapArtifact!({ ...c, data: { v: 2 } }, c.revision ?? 0);
+  const artifactFirst = await world.compareAndSwapArtifact!({ ...c, ref: ref(2) }, c.revision ?? 0);
   assert.equal(artifactFirst.swapped, true);
   assert.equal(artifactFirst.artifact.revision, 1);
-  const artifactStale = await world.compareAndSwapArtifact!({ ...d, data: { v: 3 } }, d.revision ?? 0);
+  const artifactStale = await world.compareAndSwapArtifact!({ ...d, ref: ref(3) }, d.revision ?? 0);
   assert.equal(artifactStale.swapped, false);
-  assert.equal((artifactStale.artifact.data as { v: number }).v, 2);
+  assert.equal(artifactStale.artifact.ref.size, 2);
   assert.equal(artifactStale.artifact.revision, 1);
 });
 

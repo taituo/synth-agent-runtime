@@ -1,11 +1,30 @@
 import { type WorkspaceId } from "../core/ids.js";
 import type { Artifact } from "../core/types.js";
+import type { BlobStore } from "../artifacts/blob-store.js";
 import { type TreeSource, type WorkspaceRevision } from "./source.js";
 export interface WorkspaceChange {
     path: string;
     kind: "add" | "modify" | "delete";
     content?: Uint8Array;
 }
+/** The wire form of a workspace diff: file bytes are base64, never raw JSON. */
+export interface EncodedWorkspaceDiff {
+    revision?: WorkspaceRevision;
+    changes: Array<{
+        path: string;
+        kind: WorkspaceChange["kind"];
+        contentBase64?: string;
+    }>;
+}
+export declare const WORKSPACE_DIFF_MEDIA_TYPE = "application/vnd.synth.workspace-diff+json";
+export declare function encodeWorkspaceDiff(diff: {
+    revision?: WorkspaceRevision;
+    changes: readonly WorkspaceChange[];
+}): Uint8Array;
+export declare function decodeWorkspaceDiff(bytes: Uint8Array): {
+    revision?: WorkspaceRevision;
+    changes: WorkspaceChange[];
+};
 export interface WorkspaceSnapshot {
     id: WorkspaceId;
     revision?: WorkspaceRevision;
@@ -13,6 +32,10 @@ export interface WorkspaceSnapshot {
     links?: ReadonlyMap<string, string>;
     deleted: ReadonlySet<string>;
     changed: ReadonlySet<string>;
+}
+export interface ExportArtifactOptions {
+    /** Include a bounded inline copy when the content is within the ceiling. */
+    inline?: boolean;
 }
 export declare class MemoryWorkspace {
     #private;
@@ -48,5 +71,14 @@ export declare class MemoryWorkspace {
     restore(snapshot: WorkspaceSnapshot): void;
     fork(): MemoryWorkspace;
     diff(): Promise<WorkspaceChange[]>;
-    exportArtifact(): Promise<Artifact>;
+    /**
+     * Export the workspace diff as an Artifact whose `ref` points at the content
+     * in `store`. The bytes never travel on the Artifact (the blackboard rule),
+     * and `decodeWorkspaceDiff(await store.get(ref.digest))` recovers them.
+     *
+     * `options.inline` adds the bounded escape hatch: a copy on the Artifact when
+     * the content is within `MAX_INLINE_SNAPSHOT_BYTES`, and an explicit
+     * `INLINE_ARTIFACT_TOO_LARGE` when it is not.
+     */
+    exportArtifact(store: BlobStore, options?: ExportArtifactOptions): Promise<Artifact>;
 }

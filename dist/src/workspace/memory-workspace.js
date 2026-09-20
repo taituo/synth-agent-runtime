@@ -1,9 +1,33 @@
 import { newArtifactId, newWorkspaceId } from "../core/ids.js";
 import { WORKSPACE_PATH_ESCAPES, escapesWorkspace } from "../execution/workspace-errors.js";
+import { MAX_INLINE_SNAPSHOT_BYTES } from "./snapshot-codec.js";
 import { normalizeRelative } from "./source.js";
 import { resolveLinkTarget, resolveSymlinkTarget } from "./symlink-target.js";
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
+export const WORKSPACE_DIFF_MEDIA_TYPE = "application/vnd.synth.workspace-diff+json";
+export function encodeWorkspaceDiff(diff) {
+    const body = {
+        ...(diff.revision !== undefined ? { revision: diff.revision } : {}),
+        changes: diff.changes.map((change) => ({
+            path: change.path,
+            kind: change.kind,
+            ...(change.content ? { contentBase64: Buffer.from(change.content).toString("base64") } : {}),
+        })),
+    };
+    return encoder.encode(JSON.stringify(body));
+}
+export function decodeWorkspaceDiff(bytes) {
+    const parsed = JSON.parse(decoder.decode(bytes));
+    return {
+        ...(parsed.revision !== undefined ? { revision: parsed.revision } : {}),
+        changes: parsed.changes.map((change) => ({
+            path: change.path,
+            kind: change.kind,
+            ...(change.contentBase64 ? { content: new Uint8Array(Buffer.from(change.contentBase64, "base64")) } : {}),
+        })),
+    };
+}
 function equalBytes(a, b) {
     if (a === undefined || b === undefined)
         return a === b;
@@ -264,16 +288,33 @@ export class MemoryWorkspace {
         }
         return changes;
     }
-    async exportArtifact() {
-        return {
+    /**
+     * Export the workspace diff as an Artifact whose `ref` points at the content
+     * in `store`. The bytes never travel on the Artifact (the blackboard rule),
+     * and `decodeWorkspaceDiff(await store.get(ref.digest))` recovers them.
+     *
+     * `options.inline` adds the bounded escape hatch: a copy on the Artifact when
+     * the content is within `MAX_INLINE_SNAPSHOT_BYTES`, and an explicit
+     * `INLINE_ARTIFACT_TOO_LARGE` when it is not.
+     */
+    async exportArtifact(store, options = {}) {
+        const revision = await this.source?.revision();
+        const changes = await this.diff();
+        const bytes = encodeWorkspaceDiff({ ...(revision !== undefined ? { revision } : {}), changes });
+        const ref = await store.put(bytes, { mediaType: WORKSPACE_DIFF_MEDIA_TYPE, producedBy: this.id });
+        const artifact = {
             id: newArtifactId(),
             type: "workspace-diff",
             workspaceId: this.id,
             createdAt: Date.now(),
-            data: {
-                revision: await this.source?.revision(),
-                changes: await this.diff(),
-            },
+            ref,
         };
+        if (options.inline) {
+            if (bytes.byteLength > MAX_INLINE_SNAPSHOT_BYTES) {
+                throw new Error(`INLINE_ARTIFACT_TOO_LARGE:${bytes.byteLength}>${MAX_INLINE_SNAPSHOT_BYTES}; use the reference instead`);
+            }
+            artifact.inline = { mediaType: WORKSPACE_DIFF_MEDIA_TYPE, dataBase64: Buffer.from(bytes).toString("base64"), size: bytes.byteLength };
+        }
+        return artifact;
     }
 }
