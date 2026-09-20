@@ -11,12 +11,14 @@ produces confident wrong answers instead of obvious failures.
 The **real filesystem is the oracle**. `test/rung-parity.test.ts` runs the same
 generated workspace effect sequence (seeded, over a small path alphabet with
 nested paths, a path reused as file then directory, unusual names, and `..`
-segments) against `SyntheticExecutor` and against `RealFsExecutor` (a real
-temp-directory filesystem), then diffs the per-effect `ok`/`error`/output and
-the final listing. `test/fixtures/rung-parity.ts` is the harness. Both rungs
-return the same **shared error vocabulary** (`WORKSPACE_NOT_FOUND`,
+segments) against `SyntheticExecutor` and against `RealFsOracle`
+(`test/fixtures/real-fs-oracle.ts`: raw `node:fs`, no implementation imports),
+then diffs the per-effect `ok`/`error`/output. The oracle returns raw errno, so
+comparability comes from the harness's `categoryOf` mapping in
+`test/fixtures/rung-parity.ts`, not from a shared vocabulary on both sides; the
+synthetic rung's own vocabulary (`WORKSPACE_NOT_FOUND`,
 `WORKSPACE_NOT_DIRECTORY`, `WORKSPACE_IS_DIRECTORY`, `WORKSPACE_PATH_ESCAPES`)
-from `src/execution/workspace-errors.ts`, which is what makes them comparable.
+lives in `src/execution/workspace-errors.ts`.
 
 ## Divergences found and closed
 
@@ -57,9 +59,34 @@ layer, not a behavioural difference.
 
 The raw OS really does escape the workspace (`../escape.txt` writes outside the
 root; an absolute path writes where it says), while the synthetic rung rejects
-such paths. This is deliberate and matches the sandbox rung, which confines via
-`normalizeRelative`. The harness classifies these as `escape` divergences and
-asserts that **no other** divergence exists, so a new unexpected one still fails.
+such paths. This is deliberate. Note the sandbox does **not** execute
+`workspace.*` effects at all (`KubernetesExecutor.canExecute` is only
+`process.exec`; the broker runs workspace effects on `SyntheticExecutor`), and
+the sandbox's own path helpers clamp absolute paths rather than reject them, so
+"the sandbox confines" is only loosely true — the confinement is the synthetic
+rung's policy. The harness classifies these as `escape` divergences and asserts
+that **no other** divergence exists, so a new unexpected one still fails.
+
+## Symlink semantics (decided)
+
+**`workspace.read` follows symlinks** — it means `readFile`, not `readlink`.
+This is the decision that makes the synthetic rung and the independent oracle
+agree: a real filesystem's `readFile` follows a link and yields the target's
+content, so the synthetic rung does the same. A `TreeSource` stores a symlink as
+a blob whose *content is the target string*; the workspace uses that string to
+resolve the path (relative to the link's parent) and then reads the resolved
+path, following a chain with a depth limit. Consequences:
+
+- `stat` reports `kind: "symlink"`, and `read` of a link to a non-empty target is
+  non-empty — so a symlink read is never indistinguishable from an empty file.
+- A **dangling** link reads as absent (`ENOENT`-equivalent), and a **cyclic**
+  chain is depth-limited and also reads as absent. Creation still keeps a
+  dangling link (it is a valid link); only reading it fails.
+- An earlier version returned the link's target *text* (the git blob content),
+  which diverged from the oracle; that was superseded. The commander fixture
+  chain `another-dir/pm -> ../other-dir/pm -> ../pm` is followed to the file
+  `tests/fixtures/pm`, and the test asserts the synthetic and oracle reads are
+  byte-identical.
 
 ## Accepted differences (deliberate, with consequences)
 
@@ -71,10 +98,10 @@ asserts that **no other** divergence exists, so a new unexpected one still fails
   which is the point.
 - **No process execution.** `process.exec` returns `ESCALATION_REQUIRED` and
   escalates to the real rung.
-- **No filesystem metadata.** Modes, ownership, mtimes and symlink creation are
-  not modelled; a symlink that came from a `TreeSource` is reported, but there
-  is no effect to create one. Do not use the synthetic rung to test permissions
-  or symlink behaviour.
+- **No file modes, ownership or mtimes.** A `workspace.symlink` effect and
+  `MemoryWorkspace.symlink` now exist, so symlinks can be created and read; but
+  permission bits, ownership and mtimes are still not modelled. Do not use the
+  synthetic rung to test permissions.
 - **Directories exist only implicitly.** There is no `mkdir` effect; a directory
   exists because something was written beneath it. An empty directory cannot be
   created on the synthetic rung.

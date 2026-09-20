@@ -2,7 +2,7 @@ import { newArtifactId, newWorkspaceId, type WorkspaceId } from "../core/ids.js"
 import type { Artifact } from "../core/types.js";
 import { WORKSPACE_PATH_ESCAPES, escapesWorkspace } from "../execution/workspace-errors.js";
 import { normalizeRelative, type TreeSource, type WorkspaceRevision } from "./source.js";
-import { resolveSymlinkTarget } from "./symlink-target.js";
+import { resolveLinkTarget, resolveSymlinkTarget } from "./symlink-target.js";
 
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
@@ -60,13 +60,28 @@ export class MemoryWorkspace {
       return resolution.ok ? this.read(resolution.resolved) : undefined;
     }
     if (!this.source) return undefined;
+    return this.#readFromSource(p, 0);
+  }
+
+  /**
+   * Read a source path, FOLLOWING symlinks like a real filesystem (the oracle):
+   * a link resolves to its target relative to its own parent and the resolved
+   * path is read. Returning the link's target *text* made a source-backed
+   * symlink diverge from the oracle; following it makes them agree. An escaping
+   * or dangling target reads as absent.
+   */
+  async #readFromSource(p: string, depth: number): Promise<Uint8Array | undefined> {
+    if (depth > 16 || !this.source) return undefined;
     const info = await this.source.stat(p);
-    // Symlinks are readable: the source returns the link target's bytes (the
-    // same text `git cat-file` gives for a mode-120000 blob, as Track 1
-    // asserts). Treating them as unreadable made a symlink indistinguishable
-    // from an empty file, the ambiguity the parity work removed elsewhere.
-    if (!info || (info.kind !== "file" && info.kind !== "symlink")) return undefined;
-    return this.source.readFile(p);
+    if (!info) return undefined;
+    if (info.kind === "file") return this.source.readFile(p);
+    if (info.kind === "symlink") {
+      const target = decoder.decode(await this.source.readFile(p));
+      const step = resolveLinkTarget(p, target);
+      if (step.escapes || step.resolved === undefined) return undefined;
+      return this.#readFromSource(step.resolved, depth + 1);
+    }
+    return undefined; // a directory
   }
 
   /**

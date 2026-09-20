@@ -7,7 +7,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -130,7 +130,7 @@ test("absolute paths are rejected, not silently rewritten", async () => {
   }
 });
 
-test("a source-backed symlink read is distinguishable from an empty file", async (t) => {
+test("a source-backed symlink read follows the link, matching the independent oracle", async (t) => {
   const repo = REAL_REPOS.find((entry) => entry.name === "commander")!;
   let cache: string;
   try {
@@ -144,13 +144,34 @@ test("a source-backed symlink read is distinguishable from an empty file", async
   }
   const parent = await mkdtemp(join(tmpdir(), "synth-symread-"));
   const source = await NativeGitSource.open({ gitDir: join(parent, "cache.git"), remote: cache, ref: repo.commit });
+  const oracleRoot = join(parent, "oracle");
   try {
     const workspace = new MemoryWorkspace({ source });
-    const link = "tests/fixtures/pmlink";
+    // The fixture chain: another-dir/pm -> ../other-dir/pm -> ../pm, and
+    // tests/fixtures/pm is a real executable file. workspace.read follows the
+    // whole chain (readFile semantics), like the real filesystem.
+    const link = "tests/fixtures/another-dir/pm";
+    const finalTarget = "tests/fixtures/pm";
     assert.equal((await workspace.stat(link))?.kind, "symlink");
-    const bytes = await workspace.read(link);
-    assert.ok(bytes && bytes.byteLength > 0, "a symlink read must return the target, not undefined");
-    assert.equal(new TextDecoder().decode(bytes), Buffer.from(await source.readFile(link)).toString("utf8"));
+    const finalContent = new Uint8Array(await source.readFile(finalTarget));
+
+    const synthetic = await workspace.read(link);
+    assert.ok(synthetic && synthetic.byteLength > 0, "a symlink read must stay distinguishable from an empty file");
+    assert.ok(Buffer.from(synthetic).equals(Buffer.from(finalContent)), "synthetic read follows the chain to the file content");
+    assert.notEqual(new TextDecoder().decode(synthetic), "../other-dir/pm", "not the link's target path");
+
+    // Independent oracle: the same chain on a real filesystem.
+    await mkdir(join(oracleRoot, "tests/fixtures/other-dir"), { recursive: true });
+    await mkdir(join(oracleRoot, "tests/fixtures/another-dir"), { recursive: true });
+    await writeFile(join(oracleRoot, finalTarget), finalContent);
+    await symlink("../pm", join(oracleRoot, "tests/fixtures/other-dir/pm"));
+    await symlink("../other-dir/pm", join(oracleRoot, link));
+    const oracle = await new RealFsOracle(oracleRoot).execute(
+      { id: "r", kind: "workspace.read", path: link },
+      { agentId: "a" as never, workspaceId: workspace.id },
+    );
+    assert.equal(oracle.ok, true);
+    assert.ok(Buffer.from(oracle.output as Uint8Array).equals(Buffer.from(synthetic)), "synthetic and oracle reads agree");
   } finally {
     await source.close();
     await rm(parent, { recursive: true, force: true });
