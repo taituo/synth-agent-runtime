@@ -44,6 +44,7 @@ const PROOFS = [
   { name: "replay", cwd: TEMPORAL, runner: "tsx", script: "replay-determinism.ts", requires: "temporal" },
   { name: "phases", cwd: TEMPORAL, runner: "tsx", script: "phase-signals-driver.ts", requires: "temporal" },
   { name: "restart", cwd: TEMPORAL, runner: "tsx", script: "restart-worker.ts", requires: "temporal" },
+  { name: "durable-restart", cwd: TEMPORAL, runner: "tsx", script: "durable-restart-worker.ts", requires: "temporal" },
   { name: "waiting-spin", cwd: TEMPORAL, runner: "tsx", script: "waiting-spin-live.ts", requires: "temporal" },
   { name: "handoff", cwd: TEMPORAL, runner: "tsx", script: "artifact-handoff-live.ts", requires: "temporal" },
   { name: "retry-hint", cwd: TEMPORAL, runner: "tsx", script: "retry-hint-live.ts", requires: "temporal" },
