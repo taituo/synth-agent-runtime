@@ -32,6 +32,10 @@ export class MemoryWorkspace {
   #overlay = new Map<string, Uint8Array>();
   #deleted = new Set<string>();
   #changed = new Set<string>();
+  // Directories created implicitly by writing a file beneath them. A real
+  // filesystem keeps an empty directory after its last child is deleted, so the
+  // synthetic rung must too, or `read`/`list` of that directory diverge.
+  #dirs = new Set<string>();
 
   constructor(options: { id?: WorkspaceId; source?: TreeSource } = {}) {
     this.id = options.id ?? newWorkspaceId();
@@ -40,13 +44,42 @@ export class MemoryWorkspace {
 
   async read(path: string): Promise<Uint8Array | undefined> {
     const p = normalizeRelative(path);
-    if (this.#deleted.has(p)) return undefined;
+    // A re-written child wins over an ancestor directory's deletion.
     const over = this.#overlay.get(p);
     if (over) return over.slice();
+    if (this.#isDeleted(p)) return undefined;
     if (!this.source) return undefined;
     const info = await this.source.stat(p);
     if (!info || info.kind !== "file") return undefined;
     return this.source.readFile(p);
+  }
+
+  /**
+   * Kind of an existing path, or undefined. A directory exists if it is in the
+   * source tree or if anything is overlaid beneath it; deleting a directory
+   * makes its whole subtree absent (see `#isDeleted`).
+   */
+  async stat(path: string): Promise<{ kind: "file" | "directory" | "symlink" } | undefined> {
+    const p = normalizeRelative(path);
+    if (!p) return { kind: "directory" };
+    if (this.#overlay.has(p)) return { kind: "file" };
+    for (const key of this.#overlay.keys()) if (key.startsWith(`${p}/`)) return { kind: "directory" };
+    if (this.#dirs.has(p)) return { kind: "directory" };
+    if (this.#isDeleted(p)) return undefined;
+    if (this.source) {
+      const info = await this.source.stat(p);
+      if (info) return { kind: info.kind === "directory" ? "directory" : info.kind };
+    }
+    return undefined;
+  }
+
+  /** True if `p` or any ancestor directory has been deleted. */
+  #isDeleted(p: string): boolean {
+    if (this.#deleted.has(p)) return true;
+    for (const deleted of this.#deleted) {
+      if (deleted && p.startsWith(`${deleted}/`)) return true;
+    }
+    return false;
   }
 
   async readText(path: string): Promise<string | undefined> {
@@ -61,6 +94,8 @@ export class MemoryWorkspace {
     this.#overlay.set(p, bytes);
     this.#deleted.delete(p);
     this.#changed.add(p);
+    const parts = p.split("/");
+    for (let i = 1; i < parts.length; i++) this.#dirs.add(parts.slice(0, i).join("/"));
   }
 
   delete(path: string): void {
@@ -69,6 +104,19 @@ export class MemoryWorkspace {
     this.#overlay.delete(p);
     this.#deleted.add(p);
     this.#changed.add(p);
+    // Drop any overlay descendants too. Source descendants are covered by
+    // `#isDeleted` (an ancestor delete makes the subtree absent), so a child is
+    // never readable after its parent directory is gone.
+    for (const key of [...this.#overlay.keys()]) {
+      if (key.startsWith(`${p}/`)) {
+        this.#overlay.delete(key);
+        this.#deleted.add(key);
+        this.#changed.add(key);
+      }
+    }
+    for (const dir of [...this.#dirs]) {
+      if (dir === p || dir.startsWith(`${p}/`)) this.#dirs.delete(dir);
+    }
   }
 
   async listDir(path = ""): Promise<string[]> {
@@ -84,6 +132,12 @@ export class MemoryWorkspace {
     for (const p of this.#overlay.keys()) {
       if (dir && !p.startsWith(`${dir}/`)) continue;
       const rel = dir ? p.slice(dir.length + 1) : p;
+      const name = rel.split("/")[0];
+      if (name) names.add(name);
+    }
+    for (const d of this.#dirs) {
+      if (dir && !d.startsWith(`${dir}/`)) continue;
+      const rel = dir ? d.slice(dir.length + 1) : d;
       const name = rel.split("/")[0];
       if (name) names.add(name);
     }

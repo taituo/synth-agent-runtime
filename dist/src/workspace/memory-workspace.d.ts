@@ -22,6 +22,14 @@ export declare class MemoryWorkspace {
         source?: TreeSource;
     });
     read(path: string): Promise<Uint8Array | undefined>;
+    /**
+     * Kind of an existing path, or undefined. A directory exists if it is in the
+     * source tree or if anything is overlaid beneath it; deleting a directory
+     * makes its whole subtree absent (see `#isDeleted`).
+     */
+    stat(path: string): Promise<{
+        kind: "file" | "directory" | "symlink";
+    } | undefined>;
     readText(path: string): Promise<string | undefined>;
     write(path: string, content: Uint8Array | string): void;
     delete(path: string): void;

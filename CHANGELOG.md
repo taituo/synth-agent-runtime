@@ -2,6 +2,28 @@
 
 ## 1.0.0-rc.1 — abort-safety fix folded in, git ref/remote argument-injection fixed
 
+### Synthetic rung parity with the real filesystem
+
+- **The synthetic rung (fidelity 0, `MemoryWorkspace`) returned `ok:true` where
+  a real filesystem fails**, so a cheap in-memory run could teach something
+  false: reading, deleting or listing a missing path all succeeded silently, a
+  directory delete left its children readable, writing under a file path
+  succeeded, and a `..` path was silently rewritten to a different in-workspace
+  path. Added a differential harness (`test/rung-parity.test.ts` +
+  `test/fixtures/rung-parity.ts`) that runs seeded effect sequences against both
+  the synthetic rung and a real-filesystem executor (the oracle) and diffs the
+  per-effect outcome, plus a shared error vocabulary
+  (`src/execution/workspace-errors.ts`) so both rungs return the same `error`
+  string. `SyntheticExecutor` now returns `WORKSPACE_NOT_FOUND` /
+  `WORKSPACE_NOT_DIRECTORY` / `WORKSPACE_IS_DIRECTORY` / `WORKSPACE_PATH_ESCAPES`
+  instead of silent success; `MemoryWorkspace` gained `stat`, recursive
+  directory deletion and implicit-directory tracking, and a path normalising to
+  the root is now an `EffectResult` rather than a thrown exception. The harness
+  found three further divergences beyond the six reported (implicit
+  directories, `ENOTDIR` on read/list/delete under a file, `EISDIR` on write
+  over a directory), all fixed. What can and cannot be trusted on the synthetic
+  rung is documented in `docs/RUNG-PARITY.md`.
+
 ### Park transient turn failures instead of dying
 
 - **A short provider outage killed a durable agent permanently.** Any `runTurn`
