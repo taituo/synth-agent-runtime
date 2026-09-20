@@ -131,6 +131,57 @@ test("editing the runner config is tampering", async () => {
   }
 });
 
+test("a patch with no diff --git header that edits the visible test is tampering", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "gym-"));
+  try {
+    const repo = await makeTaskRepo(parent);
+    const hidden = await makeHiddenTest(parent);
+    const full = await patchFor(repo, (dir) => writeFile(join(dir, "test/visible.test.mjs"), `${VISIBLE}// tampered\n`));
+    // A hand-crafted patch can omit the diff --git header and still apply; the
+    // tampering check must not depend on that header being present.
+    const noHeader = full
+      .split("\n")
+      .filter((line) => !line.startsWith("diff --git ") && !line.startsWith("index "))
+      .join("\n");
+    const score = await scoreGymPatch({ patchText: noHeader, baseRepoDir: repo, hiddenTestPath: hidden });
+    assert.equal(score.outcome, "tampered", `got ${score.outcome}: ${score.detail ?? score.hiddenOutput}`);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("renaming the visible test away is tampering, not a clean delete", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "gym-"));
+  try {
+    const repo = await makeTaskRepo(parent);
+    const hidden = await makeHiddenTest(parent);
+    await git(repo, "mv", "test/visible.test.mjs", "notes.txt");
+    const patch = await git(repo, "diff", "--cached", "-M");
+    await git(repo, "reset", "--hard");
+    const score = await scoreGymPatch({ patchText: patch, baseRepoDir: repo, hiddenTestPath: hidden });
+    assert.equal(score.outcome, "tampered", `got ${score.outcome}: ${score.detail ?? score.hiddenOutput}`);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("a quoted non-ASCII path under test/ is still tampering", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "gym-"));
+  try {
+    const repo = await makeTaskRepo(parent);
+    await writeFile(join(repo, "test/café.test.mjs"), "// extra\n");
+    await git(repo, "add", "-A");
+    await git(repo, "commit", "-q", "-m", "add unicode test");
+    const hidden = await makeHiddenTest(parent);
+    const patch = await patchFor(repo, (dir) => writeFile(join(dir, "test/café.test.mjs"), "// tampered\n"));
+    assert.ok(patch.includes('"a/test/caf'), "expected git to quote the non-ASCII path");
+    const score = await scoreGymPatch({ patchText: patch, baseRepoDir: repo, hiddenTestPath: hidden });
+    assert.equal(score.outcome, "tampered", `got ${score.outcome}: ${score.detail ?? score.hiddenOutput}`);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
 test("a patch that does not apply is errored", async () => {
   const parent = await mkdtemp(join(tmpdir(), "gym-"));
   try {

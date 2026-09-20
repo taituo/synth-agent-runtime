@@ -8,8 +8,23 @@ export interface GymScore {
 }
 /** Paths an agent must not change: the visible test and the runner config. */
 export declare const PROTECTED_PATTERNS: readonly RegExp[];
-/** Repo-relative paths a unified diff touches. */
+/**
+ * Every path-like token a unified diff mentions, taking BOTH sides of a rename
+ * or copy and the `---`/`+++` headers as well as the `diff --git` line. Taking
+ * only the `b/` side of `diff --git` misses a rename that moves a protected file
+ * away under a new name, and a hand-crafted patch can omit the `diff --git`
+ * header entirely while still applying. Over-reporting is safe here: an extra
+ * path can only make the tampering check stricter.
+ */
 export declare function parsePatchPaths(patchText: string): string[];
+/**
+ * Repo-relative paths a patch targets, according to git's own patch parser.
+ * `git apply --numstat` lists what a patch will touch even when it would not
+ * apply (wrong context) and even without a `diff --git` header, and it decodes
+ * git's quoted/octal-escaped paths. The raw parse is unioned in to catch the
+ * original name of a rename, which `--numstat` reports only under the new name.
+ */
+export declare function patchTargetPaths(patchText: string): Promise<string[]>;
 export declare function isTampering(paths: readonly string[]): boolean;
 export interface ScoreGymPatchOptions {
     patchText: string;

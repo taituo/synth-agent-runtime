@@ -23,16 +23,82 @@ export const PROTECTED_PATTERNS = [
     /vitest\.config/,
     /(^|\/)tsconfig[^/]*\.json$/,
     /(^|\/)\.github\//,
+    /(^|\/)\.git\//,
 ];
-/** Repo-relative paths a unified diff touches. */
+function stripQuotes(value) {
+    if (value.length >= 2 && value.startsWith('"') && value.endsWith('"'))
+        return value.slice(1, -1);
+    return value;
+}
+/**
+ * Every path-like token a unified diff mentions, taking BOTH sides of a rename
+ * or copy and the `---`/`+++` headers as well as the `diff --git` line. Taking
+ * only the `b/` side of `diff --git` misses a rename that moves a protected file
+ * away under a new name, and a hand-crafted patch can omit the `diff --git`
+ * header entirely while still applying. Over-reporting is safe here: an extra
+ * path can only make the tampering check stricter.
+ */
 export function parsePatchPaths(patchText) {
     const paths = new Set();
+    const add = (raw) => {
+        let path = stripQuotes(raw.trim());
+        if (!path || path === "/dev/null")
+            return;
+        if (path.startsWith("a/") || path.startsWith("b/"))
+            path = path.slice(2);
+        if (path)
+            paths.add(path);
+    };
     for (const line of patchText.split("\n")) {
-        const match = /^diff --git a\/(.+?) b\/(.+)$/.exec(line);
-        if (match)
-            paths.add(match[2]);
+        if (line.startsWith("diff --git ")) {
+            for (const token of line.slice("diff --git ".length).match(/"[^"]*"|\S+/g) ?? [])
+                add(token);
+        }
+        else if (line.startsWith("--- ") || line.startsWith("+++ ")) {
+            add(line.slice(4));
+        }
+        else if (/^(rename|copy) (from|to) /.test(line)) {
+            add(line.replace(/^(rename|copy) (from|to) /, ""));
+        }
     }
     return [...paths];
+}
+/**
+ * Repo-relative paths a patch targets, according to git's own patch parser.
+ * `git apply --numstat` lists what a patch will touch even when it would not
+ * apply (wrong context) and even without a `diff --git` header, and it decodes
+ * git's quoted/octal-escaped paths. The raw parse is unioned in to catch the
+ * original name of a rename, which `--numstat` reports only under the new name.
+ */
+export async function patchTargetPaths(patchText) {
+    const raw = parsePatchPaths(patchText);
+    const dir = await mkdtemp(join(tmpdir(), "gym-paths-"));
+    try {
+        const file = join(dir, "change.patch");
+        await writeFile(file, patchText);
+        const { stdout } = await execFileAsync("git", ["apply", "--numstat", "-z", file]);
+        const paths = new Set(raw);
+        for (const record of stdout.split("\0")) {
+            if (!record)
+                continue;
+            const fields = record.split("\t");
+            if (fields.length >= 3)
+                for (const field of fields.slice(2))
+                    if (field)
+                        paths.add(field);
+                    else if (fields.length === 1)
+                        paths.add(fields[0]);
+        }
+        return [...paths];
+    }
+    catch {
+        // git could not parse the patch at all; the raw parse is the best we have and
+        // the apply step will surface the real problem as `errored`.
+        return raw;
+    }
+    finally {
+        await rm(dir, { recursive: true, force: true });
+    }
 }
 export function isTampering(paths) {
     return paths.some((path) => PROTECTED_PATTERNS.some((pattern) => pattern.test(path)));
@@ -66,8 +132,9 @@ function runNodeTest(node, args, cwd, timeoutMs) {
     });
 }
 export async function scoreGymPatch(options) {
-    const touchedPaths = parsePatchPaths(options.patchText);
-    if (isTampering(touchedPaths)) {
+    const hiddenDest = options.hiddenTestDest ?? "hidden.test.mjs";
+    const touchedPaths = await patchTargetPaths(options.patchText);
+    if (isTampering(touchedPaths) || touchedPaths.includes(hiddenDest)) {
         return { outcome: "tampered", touchedPaths, detail: `patch touches protected paths: ${touchedPaths.join(", ")}` };
     }
     const work = await mkdtemp(join(tmpdir(), "gym-score-"));
@@ -83,8 +150,7 @@ export async function scoreGymPatch(options) {
             return { outcome: "errored", touchedPaths, detail: `patch does not apply: ${error.message}` };
         }
         await execFileAsync("git", ["-C", clone, "apply", patchFile]);
-        const hiddenDest = join(clone, options.hiddenTestDest ?? "hidden.test.mjs");
-        await copyFile(options.hiddenTestPath, hiddenDest);
+        await copyFile(options.hiddenTestPath, join(clone, hiddenDest));
         const node = options.nodeBin ?? process.execPath;
         const run = await runNodeTest(node, ["--test", hiddenDest], clone, options.timeoutMs ?? 60_000);
         const output = `${run.stdout}\n${run.stderr}`;
