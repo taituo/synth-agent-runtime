@@ -4,6 +4,8 @@
  * Runs against a SEPARATE Temporal (default 127.0.0.1:7244, never the runtime's
  * 7243) and a real tmux pane. Proves, with the real tmux probe and verified
  * pokes:
+ *   - a Temporal Schedule starts the supervisor (created, triggered, and its
+ *     recent actions name the workflow it started — no hand `workflow.start`);
  *   - periodic check-ins happen on the durable timer;
  *   - a pane that stays blocked past the threshold is escalated, and the
  *     escalation text actually landed in the pane;
@@ -23,10 +25,11 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { Client, Connection, type WorkflowHandle } from "@temporalio/client";
+import { Client, Connection, type ScheduleHandle, type WorkflowHandle } from "@temporalio/client";
 import type { SupervisorState } from "./contracts.js";
-import { getSupervisorStateQuery, redirectSignal, stopSignal, superviseSessionWorkflow } from "./workflows.js";
-import { SUPERVISOR_TASK_QUEUE, supervisorAddress } from "./worker.js";
+import { ensureSupervisorSchedule, supervisorScheduleId, supervisorWorkflowId, triggerSupervisorSchedule } from "./schedule.js";
+import { getSupervisorStateQuery, redirectSignal, stopSignal } from "./workflows.js";
+import { supervisorAddress } from "./worker.js";
 
 const execFileAsync = promisify(execFile);
 const HERE = fileURLToPath(new URL(".", import.meta.url));
@@ -75,6 +78,30 @@ async function waitForState(
   throw new Error("workflow state was never queryable");
 }
 
+/**
+ * Prove the *Schedule* (not a hand `workflow.start`) fired the supervisor: wait
+ * until its recent actions include a startWorkflow, and return the workflow id
+ * Temporal actually started. Temporal appends the schedule time to the action's
+ * workflowId, so the returned id is the real handle to query.
+ */
+async function waitForScheduleAction(handle: ScheduleHandle, workflowIdPrefix: string, deadlineMs: number, exclude?: string): Promise<string | undefined> {
+  const end = Date.now() + deadlineMs;
+  while (Date.now() < end) {
+    try {
+      const description = await handle.describe();
+      const action = (description.info.recentActions ?? []).find((entry) =>
+        entry.action.type === "startWorkflow"
+        && entry.action.workflow.workflowId.startsWith(workflowIdPrefix)
+        && entry.action.workflow.workflowId !== exclude);
+      if (action?.action.type === "startWorkflow") return action.action.workflow.workflowId;
+    } catch {
+      // The schedule may not be visible yet; retry until the deadline.
+    }
+    await sleep(200);
+  }
+  return undefined;
+}
+
 function startWorker(address: string): ChildProcess {
   const child = spawn(TSX, [join(HERE, "worker-entry.ts")], {
     cwd: join(HERE, ".."),
@@ -111,6 +138,7 @@ export async function main(): Promise<void> {
   const tmuxName = `sup-live-${Date.now()}`;
   let worker = startWorker(address);
   let sessionStarted = false;
+  let scheduleIdForCleanup: string | undefined;
   const evidence: Record<string, unknown> = { address, tmux: tmuxName, checkInMs: 800, blockedThresholdMs: 1200 };
 
   try {
@@ -126,18 +154,31 @@ export async function main(): Promise<void> {
     await sleep(3_000); // let the worker register
 
     const sessionId = `sup-live-${Date.now()}`;
-    const handle = await client.workflow.start(superviseSessionWorkflow, {
-      taskQueue: SUPERVISOR_TASK_QUEUE,
-      workflowId: `supervisor/${sessionId}`,
-      args: [{
-        sessionId,
-        target: `${tmuxName}:0.0`,
-        checkInMs: 800,
-        blockedThresholdMs: 1_200,
-        maxEscalations: 2,
-        markers: { blocked: "BLOCKED_MARKER" },
-      }],
-    });
+    const input = {
+      sessionId,
+      target: `${tmuxName}:0.0`,
+      checkInMs: 800,
+      blockedThresholdMs: 1_200,
+      maxEscalations: 2,
+      markers: { blocked: "BLOCKED_MARKER" },
+    };
+    // The supervisor is started by a Temporal Schedule, not by hand — the same
+    // production path a deployment uses. A far-future cron means the explicit
+    // trigger is the only action in this run; the schedule is deleted below.
+    const scheduleId = supervisorScheduleId(sessionId);
+    const workflowIdPrefix = supervisorWorkflowId(sessionId);
+    scheduleIdForCleanup = scheduleId;
+    const schedule = await ensureSupervisorSchedule(input, { address, namespace, cron: "0 0 1 1 *" });
+    await triggerSupervisorSchedule(sessionId, { address, namespace });
+    const scheduleHandle = client.schedule.getHandle(scheduleId);
+    evidence.schedule = { scheduleId, created: schedule.created, workflowIdPrefix };
+
+    // The workflow exists because the SCHEDULE started it (no hand start); the
+    // schedule names the workflow it started.
+    const startedWorkflowId = await waitForScheduleAction(scheduleHandle, workflowIdPrefix, 20_000);
+    evidence.scheduleFired = startedWorkflowId !== undefined;
+    evidence.startedWorkflowId = startedWorkflowId ?? null;
+    const handle = client.workflow.getHandle(startedWorkflowId ?? workflowIdPrefix);
 
     // 1. Working: the pane shows the busy marker. Wait for a real check-in
     // rather than a fixed sleep, so a cold worker does not race the assertion.
@@ -171,18 +212,36 @@ export async function main(): Promise<void> {
     const inbox = await readFile(inboxFile, "utf8");
     evidence.escalationDelivered = inbox.includes("[supervisor]");
 
+    // 6. Schedule durability: once the supervisor has ended, a schedule action
+    // starts a fresh one — the reason the Schedule exists instead of a hand run.
+    await triggerSupervisorSchedule(sessionId, { address, namespace });
+    const recreatedWorkflowId = await waitForScheduleAction(scheduleHandle, workflowIdPrefix, 20_000, startedWorkflowId);
+    evidence.scheduleRecreated = recreatedWorkflowId !== undefined;
+    evidence.recreatedWorkflowId = recreatedWorkflowId ?? null;
+    if (recreatedWorkflowId) {
+      const recreated = client.workflow.getHandle(recreatedWorkflowId);
+      await recreated.signal(stopSignal);
+      await recreated.result().catch(() => undefined);
+    }
+
     const ok =
       evidence.working !== undefined &&
+      schedule.created === true &&
+      startedWorkflowId !== undefined &&
       (working.status === "working" || working.status === "blocked") &&
       blocked.escalations >= 1 &&
       redirected.pokes >= 1 &&
       inboxAfterRedirect.includes("hello from the human") &&
       afterRestart.checkIns > checkInsBeforeRestart &&
-      final.stopped === true;
+      final.stopped === true &&
+      evidence.scheduleRecreated === true;
     evidence.ok = ok;
     console.log(JSON.stringify(evidence, null, 2));
     process.exit(ok ? 0 : 1);
   } finally {
+    // Delete the schedule before the pane so no cron tick starts a supervisor
+    // against a session that is gone.
+    if (scheduleIdForCleanup) await client.schedule.getHandle(scheduleIdForCleanup).delete().catch(() => {});
     if (sessionStarted) await execFileAsync("tmux", ["kill-session", "-t", tmuxName]).catch(() => {});
     worker.kill("SIGKILL");
     await rm(work, { recursive: true, force: true });

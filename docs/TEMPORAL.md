@@ -13,6 +13,24 @@ The prototype exposes `sendMessage`, `cancelAgent` and `getAgentState`. `runTurn
 
 Long-lived agents should use Continue-As-New when workflow history reaches an operational threshold.
 
+## Execution paths and Schedules
+
+Every production turn, loop and schedule is Temporal: the agent loop
+(`durableAgentWorkflow`), the graph harness, the gym attempt, and the session
+supervisor. `docs/EXECUTION-PATHS.md` inventories every loop/scheduler/driver in
+the repo and marks each PRODUCTION / CONTROL / DEV, so no in-process production
+loop runs silently.
+
+Host timing that used to be a hand-run loop is a Temporal timer or Schedule:
+
+- durable waits and park/backoff are workflow timers (`condition(..., ms)`);
+- the interactive-session supervisor is started by a per-session Temporal
+  **Schedule** (`supervisor/schedule.ts`; operator CLI `supervisor/supervise.ts`),
+  not a hand-run monitor. Live proof `supervisor/live.ts`: the schedule is
+  created and shown to have started the workflow, a redirect signal is delivered
+  to a real tmux pane, and after the first supervisor ends the schedule starts a
+  fresh one.
+
 ## Workflow sandbox constraints
 
 Temporal workflow code runs in a restricted V8 isolate, not a full Node/browser global scope: notably, the global `structuredClone` is not available there (it is available in ordinary Node worker/activity code). `durableAgentWorkflow` uses a sandbox-safe JSON round-trip clone (`clone()` in `src/correlation.ts`) instead. Anything imported into workflow code — including interceptor modules bundled via `workflowInterceptorModules` — must stay within this restricted API surface.

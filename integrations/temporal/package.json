@@ -27,6 +27,7 @@
     "live:openrouter-429": "tsx openrouter-429-driver.ts",
     "live:flaky-gateway": "tsx flaky-gateway.ts",
     "supervisor:worker": "tsx supervisor/worker-entry.ts",
+    "supervisor:supervise": "tsx supervisor/supervise.ts",
     "live:supervisor": "tsx supervisor/live.ts"
   },
   "dependencies": {

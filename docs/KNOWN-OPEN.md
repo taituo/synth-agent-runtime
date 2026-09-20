@@ -24,15 +24,6 @@ removed only when the closing work lands.
 - **The synthetic rung stays unisolated by design.** It is labelled
   `isolated: false`; it is for cheap/unscored runs. A scored run must use the
   sandbox rung or be refused.
-- **The session supervisor's Schedule helper is unwired.** `supervisor/schedule.ts`
-  exports `ensureSupervisorSchedule`/`triggerSupervisorSchedule` and
-  `docs/SESSION-SUPERVISOR.md` describes a per-session Temporal Schedule as the
-  guarantee that a supervisor exists; nothing calls either function (the live
-  proof starts `superviseSessionWorkflow` directly, and the durable timers inside
-  the workflow are what provide the periodic check-ins). Closing: call
-  `ensureSupervisorSchedule` from a session-creation path and prove the schedule
-  re-creates a killed supervisor, or delete the module.
-
 - **Per-run provider selection is an API, not yet threaded through the turn
   config.** `provider-config.ts` exposes `selectProvider`/`directProviderSettings`
   so a run can pick a provider/profile, and the worker selects one provider at

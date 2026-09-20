@@ -26,14 +26,17 @@ reason.
 
 ## Shape
 
-- **One workflow per session** (`superviseSessionWorkflow`), addressed by
-  `workflowId = supervisor/<sessionId>`.
-- **Periodic check-ins** are durable timers inside the workflow (`checkInMs`).
-  `supervisor/schedule.ts` holds a per-session Temporal Schedule helper
+- **One workflow per session** (`superviseSessionWorkflow`). The Schedule's
+  action names it `supervisor/<sessionId>`; Temporal appends the schedule time
+  to the actual workflow id (e.g. `supervisor/<sessionId>-2026-09-20T21:50:44Z`),
+  so each scheduled start is a distinct run.
+- **A Temporal Schedule starts it.** `supervisor/schedule.ts`
   (`ensureSupervisorSchedule`/`triggerSupervisorSchedule`, cron default every 30
-  minutes, overlap SKIP) that would create the workflow and re-create it if it
-  dies, but nothing calls it yet: the live proof starts
-  `superviseSessionWorkflow` directly. See `KNOWN-OPEN.md`.
+  minutes, overlap SKIP) creates the schedule and re-creates the supervisor if it
+  dies; `supervisor/supervise.ts` is the operator CLI that registers a session
+  and (with `--trigger`) starts it now. This replaces the hand-run monitor loop:
+  run the CLI once, and Temporal keeps the supervisor alive.
+- **Periodic check-ins** are durable timers inside the workflow (`checkInMs`).
 - **Signals for human redirection**: `redirect(text)`, `pause`, `resume`,
   `stop`. A redirect wakes the workflow immediately and is delivered as a
   verified poke.
@@ -68,8 +71,13 @@ temporal server start-dev --headless --port 7244
 # the worker
 SUPERVISOR_TEMPORAL_ADDRESS=127.0.0.1:7244 npm run supervisor:worker
 
-# the live proof: real tmux pane, check-in, escalation, verified redirect,
-# and a worker SIGKILL + restart that the workflow survives
+# register a session (once): creates the Schedule and starts the supervisor now
+SUPERVISOR_TEMPORAL_ADDRESS=127.0.0.1:7244 npm run supervisor:supervise -- \
+  --session-id synth-1 --target synth-1:0.0 --trigger
+
+# the live proof: a Temporal Schedule starts the supervisor, then a real tmux
+# pane gets check-ins, escalation and a verified redirect, and a worker
+# SIGKILL + restart is survived
 SUPERVISOR_TEMPORAL_ADDRESS=127.0.0.1:7244 npm run live:supervisor
 ```
 
