@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import type { AgentId, WorkspaceId } from "../../../src/core/ids.js";
+import { ExecutionBroker } from "../../../src/execution/broker.js";
+import type { EffectContext } from "../../../src/execution/types.js";
+import { LocalRuntimeStateStore } from "../../../src/durability/local-runtime-state.js";
 import type { AgentEngine, AgentEngineContext } from "../../../src/runtime/agent-engine.js";
 import { createGatewayAgentEngine } from "../../../src/runtime/gateway-engine.js";
 import type { DurableMailboxMessage, DurableToolSpec } from "../src/contracts.js";
@@ -15,6 +18,7 @@ import {
   type RungFactory,
   type TurnRung,
 } from "../src/gateway-run-turn.js";
+import { TemporalActivityStateStore } from "../src/receipt-store.js";
 
 function message(text: string, kind?: string): DurableMailboxMessage {
   return { id: `m-${text}`, role: "human", text, createdAt: 1, ...(kind ? { kind } : {}) };
@@ -457,4 +461,77 @@ test("the durable activity and a direct caller run the same engine body", async 
   assert.equal(engineRuns, 2, "both callers must go through the one shared body");
   assert.equal(bodies.length, 2, "both callers must reach the gateway through that body");
   assert.equal(bodies[0], bodies[1], "the shared body must build the same request for both callers");
+});
+
+test("a retried turn dedupes a committed effect by id; the rung hands the state store to the broker", async () => {
+  const store = new LocalRuntimeStateStore();
+  const executed: string[] = [];
+  const rungFactory: RungFactory = (_config, input, runtimeState) => ({
+    runtimeState,
+    executeEffect: (effect, minFidelity) => {
+      const counting = {
+        id: "counting",
+        fidelity: 0,
+        async canExecute() { return true; },
+        async execute() { executed.push(effect.id); return { ok: true }; },
+      };
+      const context: EffectContext = {
+        agentId: input.agentId as AgentId,
+        workspaceId: `temporal:${input.agentId}` as WorkspaceId,
+      };
+      return new ExecutionBroker([counting], runtimeState).execute(effect, context, minFidelity);
+    },
+  });
+  const fetchImpl = (async () => chatReply(JSON.stringify({ tool_calls: [
+    { name: "write_file", arguments: { path: "receipt.txt", content: "once" } },
+  ] }))) as unknown as typeof fetch;
+  const runTurn = createGatewayRunTurn({ baseUrl: "http://gw.test", model: "m", heartbeat: () => {}, fetchImpl, rungFactory, runtimeState: store });
+  const input = {
+    agentId: "agt_receipt",
+    messages: [message("write a file")],
+    config: { systemPrompt: "You edit files.", tools: [{ name: "write_file", effect: "workspace.write" as const }], rung: { kind: "synthetic" as const } },
+  };
+
+  await runTurn(input);
+  // A Temporal activity retry runs the same turn again with the same effect id.
+  await runTurn(input);
+
+  assert.equal(executed.length, 1, "a committed effect must execute once, not once per attempt");
+  assert.deepEqual(executed, ["agt_receipt:write_file:0"]);
+  const receipt = await store.getEffect("agt_receipt:write_file:0");
+  assert.equal(receipt?.status, "committed", "the effect receipt must be persisted in the store the rung was given");
+});
+
+test("the default synthetic rung persists an effect receipt in the injected store", async () => {
+  const store = new LocalRuntimeStateStore();
+  const fetchImpl = (async () => chatReply(JSON.stringify({ tool_calls: [
+    { name: "write_file", arguments: { path: "default.txt", content: "default" } },
+  ] }))) as unknown as typeof fetch;
+  const runTurn = createGatewayRunTurn({ baseUrl: "http://gw.test", model: "m", heartbeat: () => {}, fetchImpl, runtimeState: store });
+  await runTurn({
+    agentId: "agt_default_receipt",
+    messages: [message("write a file")],
+    config: { systemPrompt: "You edit files.", tools: [{ name: "write_file", effect: "workspace.write" }], rung: { kind: "synthetic" } },
+  });
+  const receipt = await store.getEffect("agt_default_receipt:write_file:0");
+  assert.equal(receipt?.status, "committed", "the default rung's broker must receive the injected store");
+  assert.deepEqual(receipt?.result, { ok: true, executor: "synthetic", fidelity: 0 });
+});
+
+test("the Temporal receipt store carries receipts across attempts in heartbeat details", async () => {
+  const written: unknown[] = [];
+  const first = new TemporalActivityStateStore(undefined, (details) => written.push(details));
+  await first.putEffect({ id: "e1", kind: "workspace.write", status: "committed", startedAt: 1, updatedAt: 2, result: { ok: true } });
+  assert.equal(written.length, 1, "committing an effect persists the receipt immediately");
+  assert.deepEqual((written[0] as { synthEffectReceipts?: unknown[] }).synthEffectReceipts?.length, 1);
+
+  // The next activity attempt is seeded from the details Temporal captured.
+  const retry = new TemporalActivityStateStore((written.at(-1) as object));
+  const seeded = await retry.getEffect("e1");
+  assert.equal(seeded?.status, "committed");
+  assert.deepEqual(seeded?.result, { ok: true });
+
+  // A committed receipt is terminal: a stale started write cannot regress it.
+  await retry.putEffect({ id: "e1", kind: "workspace.write", status: "started", startedAt: 3, updatedAt: 4 });
+  assert.equal((await retry.getEffect("e1"))?.status, "committed");
 });

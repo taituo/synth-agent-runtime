@@ -49,6 +49,7 @@ const PROOFS = [
   { name: "graph-child", cwd: TEMPORAL, runner: "tsx", script: "graph-child-live.ts", requires: "temporal" },
   { name: "graph-continue-as-new", cwd: TEMPORAL, runner: "tsx", script: "graph-continue-as-new-live.ts", requires: "temporal" },
   { name: "graph-cancel", cwd: TEMPORAL, runner: "tsx", script: "graph-cancel-live.ts", requires: "temporal" },
+  { name: "effect-receipt", cwd: TEMPORAL, runner: "tsx", script: "effect-receipt-live.ts", requires: "temporal" },
   { name: "waiting-spin", cwd: TEMPORAL, runner: "tsx", script: "waiting-spin-live.ts", requires: "temporal" },
   { name: "handoff", cwd: TEMPORAL, runner: "tsx", script: "artifact-handoff-live.ts", requires: "temporal" },
   { name: "retry-hint", cwd: TEMPORAL, runner: "tsx", script: "retry-hint-live.ts", requires: "temporal" },

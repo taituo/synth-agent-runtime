@@ -9,7 +9,9 @@ import { SandboxWorkspaceExecutor } from "../../../src/execution/kubernetes/sand
 import { DEFAULT_KUBERNETES_RESOURCE_CLASSES } from "../../../src/execution/resource-class.js";
 import { SyntheticExecutor } from "../../../src/execution/synthetic.js";
 import type { Effect, EffectResult } from "../../../src/execution/types.js";
+import type { RuntimeStateStore } from "../../../src/durability/runtime-state.js";
 import type { AgentEngine, AgentEngineContext } from "../../../src/runtime/agent-engine.js";
+import { TemporalActivityStateStore } from "./receipt-store.js";
 import {
   GatewayHttpError,
   createGatewayAgentEngine,
@@ -101,6 +103,11 @@ export interface TurnRung {
    * sandbox pod). `runTurn` then checkpoints instead of closing after each turn.
    */
   persistent?: boolean;
+  /**
+   * The receipt store the rung's broker uses. `runTurn` heartbeats it so its
+   * details (and so the committed effect receipts) survive an activity retry.
+   */
+  runtimeState?: RuntimeStateStore;
   close?(): Promise<void>;
 }
 
@@ -118,6 +125,7 @@ export function assertRungAllowedForScored(rung: TurnRung, scored: boolean): voi
 export type RungFactory = (
   config: Exclude<DurableRungConfig, { kind: "none" }>,
   input: RunTurnInput,
+  runtimeState?: RuntimeStateStore,
 ) => TurnRung | Promise<TurnRung>;
 
 export interface GatewayRunTurnOptions {
@@ -145,6 +153,13 @@ export interface GatewayRunTurnOptions {
    * to observe executor calls.
    */
   rungFactory?: RungFactory;
+  /**
+   * Durable store for effect receipts. Defaults to the Temporal activity state
+   * (`TemporalActivityStateStore.fromCurrentActivity()`), so a retried activity
+   * starts with the committed receipts and dedupes by `effect.id`. Inject one
+   * in unit tests; a direct (non-Temporal) caller can pass a store explicitly.
+   */
+  runtimeState?: RuntimeStateStore;
 }
 
 export const TRIAGE_SYSTEM_PROMPT = [
@@ -291,7 +306,7 @@ function seedWorkspace(workspaceId: WorkspaceId, files?: Record<string, string>)
 // turn; cache it per agent for the worker process's lifetime.
 const sandboxRungs = new Map<string, TurnRung>();
 
-async function sandboxRung(config: Exclude<DurableRungConfig, { kind: "none" }> & { kind: "sandbox" }, input: RunTurnInput): Promise<TurnRung> {
+async function sandboxRung(config: Exclude<DurableRungConfig, { kind: "none" }> & { kind: "sandbox" }, input: RunTurnInput, runtimeState?: RuntimeStateStore): Promise<TurnRung> {
   const key = `temporal:${input.agentId}`;
   const cached = sandboxRungs.get(key);
   if (cached) return cached;
@@ -312,10 +327,11 @@ async function sandboxRung(config: Exclude<DurableRungConfig, { kind: "none" }> 
   // No SyntheticExecutor: workspace.read/write/list must execute in the pod, not
   // in worker RAM. The pod is the medium; `workspace` is only the checkpoint cache.
   const executors = classes.map((resourceClass) => new SandboxWorkspaceExecutor({ resourceClass, backend, workspaces, pool }));
-  const broker = new ExecutionBroker(executors);
+  const broker = new ExecutionBroker(executors, runtimeState);
   const rung: TurnRung = {
     isolated: true,
     persistent: true,
+    ...(runtimeState ? { runtimeState } : {}),
     executeEffect: (effect, minFidelity) => broker.execute(
       effect,
       {
@@ -346,19 +362,20 @@ export async function closeSandboxRungs(): Promise<void> {
 }
 
 /** Default rung factory: serializable config -> live synthetic/sandbox rung. */
-export const defaultRungFactory: RungFactory = (config, input) => {
+export const defaultRungFactory: RungFactory = (config, input, runtimeState) => {
   if (config.kind === "synthetic") {
     const workspaceId = (config.workspaceId ?? `temporal:${input.agentId}`) as WorkspaceId;
     const workspace = seedWorkspace(workspaceId, config.files);
     const workspaces = new Map<WorkspaceId, MemoryWorkspace>([[workspaceId, workspace]]);
-    const broker = new ExecutionBroker([new SyntheticExecutor(workspaces)]);
+    const broker = new ExecutionBroker([new SyntheticExecutor(workspaces)], runtimeState);
     return {
       // Explicitly unisolated: workspace effects run in worker RAM.
       isolated: false,
+      ...(runtimeState ? { runtimeState } : {}),
       executeEffect: (effect, minFidelity) => broker.execute(effect, { agentId: input.agentId as AgentId, workspaceId }, minFidelity),
     };
   }
-  return sandboxRung(config, input);
+  return sandboxRung(config, input, runtimeState);
 };
 
 /** Translate the shared body's status-carrying error into Temporal's retry taxonomy. */
@@ -381,17 +398,29 @@ export function createGatewayRunTurn(options: GatewayRunTurnOptions): AgentActiv
     const config = input.config ?? {};
     const toolMode = (config.tools?.length ?? 0) > 0;
 
+    // Effect receipts are durable Temporal activity state by default: a retry
+    // re-reads the previous attempt's committed receipts from the heartbeat
+    // details, so a committed effect is not executed twice.
+    const runtimeState = options.runtimeState ?? TemporalActivityStateStore.fromCurrentActivity();
+
     // Resolve the turn's execution rung from the serializable selection. No rung
     // (or `none`) leaves `executeEffect` unset, so the shared engine refuses
     // tool calls rather than dropping them.
     let rung: TurnRung | undefined;
     if (config.rung && config.rung.kind !== "none") {
-      rung = await (options.rungFactory ?? defaultRungFactory)(config.rung, input);
+      rung = await (options.rungFactory ?? defaultRungFactory)(config.rung, input, runtimeState);
       // A scored turn must run inside a trust boundary. Refuse an unisolated
       // rung before the model is called, so a scored run can never execute
       // model-authored effects in worker RAM.
       assertRungAllowedForScored(rung, config.scored === true);
     }
+
+    // While the engine waits on the model it heartbeats; each heartbeat must
+    // carry the rung's receipt details, or it would erase the receipts the
+    // broker persisted and defeat the dedupe.
+    const receiptStore = rung?.runtimeState ?? runtimeState;
+    const heartbeat = options.heartbeat
+      ?? (receiptStore instanceof TemporalActivityStateStore ? () => receiptStore.heartbeat() : defaultHeartbeat);
 
     // The one turn body. Configured per turn from the carried config; a
     // tool-configured turn returns observations, the triage turn classifications.
@@ -402,7 +431,7 @@ export function createGatewayRunTurn(options: GatewayRunTurnOptions): AgentActiv
       ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
       ...(options.heartbeatIntervalMs !== undefined ? { heartbeatIntervalMs: options.heartbeatIntervalMs } : {}),
       ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
-      heartbeat: options.heartbeat ?? defaultHeartbeat,
+      heartbeat,
       systemPrompt: config.systemPrompt ?? TRIAGE_SYSTEM_PROMPT,
       buildUserMessage: config.systemPrompt
         ? (messages) => messages.map((message) => message.text).join("\n")
