@@ -14,8 +14,9 @@
  *   node scripts/live-proofs.mjs --only=retry-hint,replay
  *   node scripts/live-proofs.mjs --timeout=600000 --json
  */
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { createConnection } from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -76,6 +77,52 @@ if (listOnly) {
   process.exit(0);
 }
 
+function portOpen(host, port) {
+  return new Promise((resolvePromise) => {
+    const socket = createConnection({ host, port });
+    socket.setTimeout(800);
+    socket.once("connect", () => { socket.destroy(); resolvePromise(true); });
+    socket.once("error", () => resolvePromise(false));
+    socket.once("timeout", () => { socket.destroy(); resolvePromise(false); });
+  });
+}
+
+function hostPort(value, fallback) {
+  const url = value?.includes("://") ? new URL(value) : undefined;
+  if (url) return { host: url.hostname, port: Number(url.port || (url.protocol === "https:" ? 443 : 80)) };
+  const [host, port] = (value ?? fallback).replace(/^\w+:\/\//, "").split(":");
+  return { host: host || "127.0.0.1", port: Number(port || fallback.split(":")[1]) };
+}
+
+/**
+ * Preflight a proof's `requires` so missing infrastructure is an honest SKIP,
+ * not a failure and not a silent pass. This is what makes CI meaningful with no
+ * Temporal, gateway, cluster or Postgres present.
+ */
+async function missingInfra(requires) {
+  for (const token of requires.split("+")) {
+    if (token === "none" || token === "quota") continue;
+    if (token === "temporal") {
+      const { host, port } = hostPort(process.env.TEMPORAL_ADDRESS, "127.0.0.1:7243");
+      if (!(await portOpen(host, port))) return `temporal ${host}:${port} not reachable`;
+    } else if (token === "separate-temporal:7244") {
+      if (!(await portOpen("127.0.0.1", 7244))) return "supervisor Temporal 127.0.0.1:7244 not reachable";
+    } else if (token === "gateway") {
+      const { host, port } = hostPort(process.env.GATEWAY_URL, "127.0.0.1:8787");
+      if (!(await portOpen(host, port))) return `gateway ${host}:${port} not reachable`;
+    } else if (token === "tmux") {
+      try { execFileSync("tmux", ["-V"], { stdio: "ignore" }); } catch { return "tmux not installed"; }
+    } else if (token === "k8s" || token === "gvisor") {
+      if (!process.env.SYNTH_EXECUTOR_IMAGE) return "SYNTH_EXECUTOR_IMAGE not set (no gVisor cluster)";
+    } else if (token === "postgres") {
+      if (!process.env.SYNTH_POSTGRES_URL) return "SYNTH_POSTGRES_URL not set";
+    } else if (token === "OPENROUTER_API_KEY") {
+      if (!process.env.OPENROUTER_API_KEY) return "OPENROUTER_API_KEY not set";
+    }
+  }
+  return undefined;
+}
+
 function runProof(proof) {
   return new Promise((resolvePromise) => {
     const cwd = join(ROOT, proof.cwd);
@@ -105,12 +152,21 @@ if (!existsSync(TSX)) {
 
 const results = [];
 for (const proof of selected) {
+  const missing = await missingInfra(proof.requires);
+  if (missing) {
+    results.push({ proof, code: 2, timedOut: false, durationMs: 0, output: missing, status: "skipped" });
+    if (!asJson) console.log(`${"skipped".padEnd(9)} ${proof.name.padEnd(22)} ${String(0).padStart(7)}ms  requires ${proof.requires}: ${missing}`);
+    continue;
+  }
   const result = await runProof(proof);
   const status = result.timedOut ? "timedout" : result.code === 0 ? "passed" : result.code === 2 ? "skipped" : "failed";
   results.push({ ...result, status });
   if (!asJson) {
     const tail = result.output.trim().split("\n").slice(-1)[0]?.slice(0, 90) ?? "";
     console.log(`${status.padEnd(9)} ${proof.name.padEnd(22)} ${String(result.durationMs).padStart(7)}ms  ${tail}`);
+    if (status === "failed" || status === "timedout") {
+      for (const line of result.output.trim().split("\n").slice(-30)) console.log(`    | ${line.slice(0, 200)}`);
+    }
   }
 }
 

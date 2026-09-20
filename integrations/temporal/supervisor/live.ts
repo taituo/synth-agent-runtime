@@ -23,7 +23,8 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { Client, Connection } from "@temporalio/client";
+import { Client, Connection, type WorkflowHandle } from "@temporalio/client";
+import type { SupervisorState } from "./contracts.js";
 import { getSupervisorStateQuery, redirectSignal, stopSignal, superviseSessionWorkflow } from "./workflows.js";
 import { SUPERVISOR_TASK_QUEUE, supervisorAddress } from "./worker.js";
 
@@ -39,6 +40,39 @@ function skip(reason: string): never {
 async function tmux(...args: string[]): Promise<string> {
   const { stdout } = await execFileAsync("tmux", args);
   return stdout;
+}
+
+function queryWithTimeout(handle: WorkflowHandle, ms: number): Promise<SupervisorState> {
+  return Promise.race([
+    handle.query(getSupervisorStateQuery),
+    sleep(ms).then((): never => { throw new Error("query timed out (no worker?)"); }),
+  ]);
+}
+
+/**
+ * Poll until the state satisfies `predicate`, so the proof does not depend on a
+ * worker having warmed up or come back from a restart within a fixed sleep. A
+ * query that cannot reach a worker is retried; the deadline bounds it.
+ */
+async function waitForState(
+  handle: WorkflowHandle,
+  predicate: (state: SupervisorState) => boolean,
+  deadlineMs: number,
+): Promise<SupervisorState> {
+  const end = Date.now() + deadlineMs;
+  let last: SupervisorState | undefined;
+  while (Date.now() < end) {
+    try {
+      last = await queryWithTimeout(handle, 5_000);
+    } catch {
+      await sleep(300);
+      continue;
+    }
+    if (predicate(last)) return last;
+    await sleep(300);
+  }
+  if (last) return last;
+  throw new Error("workflow state was never queryable");
 }
 
 function startWorker(address: string): ChildProcess {
@@ -105,22 +139,20 @@ export async function main(): Promise<void> {
       }],
     });
 
-    // 1. Working: the pane shows the busy marker.
+    // 1. Working: the pane shows the busy marker. Wait for a real check-in
+    // rather than a fixed sleep, so a cold worker does not race the assertion.
     await writeFile(stateFile, "esc interrupt\n");
-    await sleep(2_000);
-    const working = await handle.query(getSupervisorStateQuery);
+    const working = await waitForState(handle, (state) => state.checkIns >= 1, 25_000);
     evidence.working = { status: working.status, checkIns: working.checkIns };
 
     // 2. Blocked past the threshold: an escalation must fire and land.
     await writeFile(stateFile, "BLOCKED_MARKER\n");
-    await sleep(4_000);
-    const blocked = await handle.query(getSupervisorStateQuery);
+    const blocked = await waitForState(handle, (state) => state.escalations >= 1, 25_000);
     evidence.blocked = { status: blocked.status, escalations: blocked.escalations, checkIns: blocked.checkIns };
 
     // 3. Human redirection: a signal must be delivered and confirmed.
     await handle.signal(redirectSignal, "hello from the human");
-    await sleep(2_000);
-    const redirected = await handle.query(getSupervisorStateQuery);
+    const redirected = await waitForState(handle, (state) => state.pokes >= 1, 25_000);
     const inboxAfterRedirect = await readFile(inboxFile, "utf8");
     evidence.redirect = { pokes: redirected.pokes, lastRedirect: redirected.lastRedirect, delivered: inboxAfterRedirect.includes("hello from the human") };
 
@@ -129,8 +161,7 @@ export async function main(): Promise<void> {
     worker.kill("SIGKILL");
     await sleep(1_000);
     worker = startWorker(address);
-    await sleep(4_000);
-    const afterRestart = await handle.query(getSupervisorStateQuery);
+    const afterRestart = await waitForState(handle, (state) => state.checkIns > checkInsBeforeRestart, 30_000);
     evidence.restart = { checkInsBeforeRestart, checkInsAfterRestart: afterRestart.checkIns, survived: afterRestart.checkIns > checkInsBeforeRestart };
 
     // 5. Stop.
