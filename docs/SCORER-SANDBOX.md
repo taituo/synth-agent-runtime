@@ -21,6 +21,27 @@ snapshots and process reports, which is why it looked like a boundary; it is a
 guardrail, not one. Denying builtins one at a time has no finite end, so an
 OS-level boundary is a **requirement**.
 
+## One boundary, both execution paths (scope)
+
+There must be a SINGLE enforced boundary for all agent-controlled execution —
+the scoring worker AND the agent's own tool execution. Otherwise every isolation
+claim inherits the weakest path it happens to run on. Two paths are therefore
+NOT allowed to run untrusted code:
+
+- **the scorer's host worker** (Node permission model): it escapes — see the
+  table above;
+- **the gym's `localEffectRunner`**: agent tools run on the host as the invoking
+  user with no OS boundary at all. The fault matrix and dry-run use it, and the
+  reviewer read the held-out vectors from it.
+
+Both must run in the same gVisor pod (only the clone mounted, no host `/tmp`, no
+network). Until the pod path is wired, a deployment that requires isolation sets
+`SYNTH_REQUIRE_ISOLATION=1`; the scoring worker then refuses (`errored`,
+"untrusted context") rather than running agent code on the host. The gym's local
+runner must adopt the same contract (untrusted-context-not-allowed, explicit
+opt-in only). The gVisor substrate is confirmed: a pod reports
+`uname 4.19.0-gvisor`.
+
 ## The problem
 
 The gym scorer runs the agent's module in a worker child and confines it with

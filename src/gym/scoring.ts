@@ -361,6 +361,18 @@ export async function isolatedScoreGymPatch(options: IsolatedScoreOptions): Prom
     // No test vectors is not a pass: a vacuous run must be a distinct non-pass.
     return { outcome: "errored", touchedPaths, cases: [], detail: "no hidden cases: refusing a vacuous pass" };
   }
+  // There is ONE enforced boundary for agent-controlled execution: the gVisor
+  // pod. Until the pod path is wired, the host worker is an untrusted context,
+  // named as such. A deployment that requires isolation sets this and the
+  // scorer refuses rather than silently running agent code on the host.
+  if (process.env.SYNTH_REQUIRE_ISOLATION === "1") {
+    return {
+      outcome: "errored",
+      touchedPaths,
+      cases: [],
+      detail: "no OS-level sandbox is configured; refusing to run agent code in an untrusted context (SYNTH_REQUIRE_ISOLATION=1)",
+    };
+  }
 
   const work = await mkdtemp(join(tmpdir(), "gym-isolated-"));
   const clone = join(work, "clone");

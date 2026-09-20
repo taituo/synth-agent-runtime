@@ -31,7 +31,10 @@ removed only when the closing work lands.
   clone, `process.kill` can signal the verifier, and `os.userInfo` returns host
   metadata**. So a gym run can reach the very services we measure with and can
   mutate host state independent of the verdict. Denying builtins one at a time
-  has no finite end.
+  has no finite end. A deployment that requires isolation can set
+  `SYNTH_REQUIRE_ISOLATION=1`, which makes the scorer refuse rather than run on
+  the host — but the real fix is the single boundary below. The agent's own tool
+  path (`localEffectRunner`) is worse: no permission model at all.
   Closing: run the worker in an OS-level sandbox with only the clone
   bind-mounted and no host `/tmp` (a mount namespace, `unshare`/`bwrap`, or the
   existing gVisor rung), so confinement does not depend on a builtin allowlist.

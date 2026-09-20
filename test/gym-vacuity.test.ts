@@ -356,6 +356,27 @@ test("the worker runs one-shot in batch mode, so a sandboxed exec needs no fd", 
   }
 });
 
+test("SYNTH_REQUIRE_ISOLATION refuses the unscoped host worker; without it the golden still passes", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "gym-iso-"));
+  const previous = process.env.SYNTH_REQUIRE_ISOLATION;
+  try {
+    const repo = await makeRepo(parent);
+    const patch = await patchFor(repo, FIXED);
+    // Without the requirement, the host worker runs (the golden passes) — this
+    // is the untrusted context the docs name.
+    assert.equal((await scoreGymPatch({ patchText: patch, baseRepoDir: repo, cases: CASES })).outcome, "passed");
+    // With it, there is no boundary to run under, so even a correct fix refuses.
+    process.env.SYNTH_REQUIRE_ISOLATION = "1";
+    const score = await scoreGymPatch({ patchText: patch, baseRepoDir: repo, cases: CASES });
+    assert.equal(score.outcome, "errored");
+    assert.match(score.detail ?? "", /untrusted context/);
+  } finally {
+    if (previous === undefined) delete process.env.SYNTH_REQUIRE_ISOLATION;
+    else process.env.SYNTH_REQUIRE_ISOLATION = previous;
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
 test("VACUITY: zero cases is errored, never a vacuous pass", async () => {
   const parent = await mkdtemp(join(tmpdir(), "gym-iso-"));
   try {

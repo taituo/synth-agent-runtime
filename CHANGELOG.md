@@ -25,7 +25,9 @@
   needs an OS-level boundary, which is required but not built — see
   docs/SCORER-SANDBOX.md. If no permission model exists, or `node:sqlite` is
   present with no way to deny it, the scorer refuses to run rather than fail
-  open.
+  open. There must be ONE boundary for all agent-controlled execution (the
+  scorer's worker and the agent's tool execution); `SYNTH_REQUIRE_ISOLATION=1`
+  makes the scorer refuse the unscoped host path for deployments that require it.
 - `ScoreGymPatchOptions.hiddenTestPath`/`expectedHiddenTests` are replaced by
   `cases: GymCase[]`. The `he/decimal-option` task fixture ships
   `hidden.cases.json` in place of the in-clone TAP test. The `HIDDEN_HARNESS_*`
