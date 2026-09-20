@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FileSystemBlobStore, sha256Hex } from "../src/index.js";
+import { ExecutionBroker, FileSystemBlobStore, MemoryWorkspace, SyntheticExecutor, sha256Hex } from "../src/index.js";
 
 async function listFiles(dir: string): Promise<string[]> {
   const out: string[] = [];
@@ -65,19 +65,32 @@ test("a corrupted object is detected on read", async () => {
   }
 });
 
-test("stat round-trips the media type, and a receipt digest resolves to the bytes", async () => {
+test("stat round-trips the media type", async () => {
   const root = await mkdtemp(join(tmpdir(), "blob-"));
   try {
     const store = new FileSystemBlobStore(root);
     const bytes = new TextEncoder().encode("report");
     const ref = await store.put(bytes, { mediaType: "text/markdown" });
     assert.equal((await store.stat(ref.digest))?.mediaType, "text/markdown", "mediaType survives put/stat");
-    // A receipt carries the reference; the digest resolves to exactly the bytes.
-    const receipt = { ok: true, artifact: ref };
-    assert.ok(Buffer.from(await store.get(receipt.artifact.digest)).equals(Buffer.from(bytes)));
+    assert.ok(Buffer.from(await store.get(ref.digest)).equals(Buffer.from(bytes)));
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("KNOWN OPEN: no runtime path populates EffectResult.artifact yet", async () => {
+  // The egress spec requires an effect receipt to carry a digest that resolves
+  // to the bytes. No writer sets `EffectResult.artifact`, so this pins the gap:
+  // it fails the day a writer lands, and the known-open entry is then removed
+  // deliberately rather than the gap being silently forgotten.
+  const workspace = new MemoryWorkspace();
+  const broker = new ExecutionBroker([new SyntheticExecutor(new Map([[workspace.id, workspace]]))]);
+  const result = await broker.execute(
+    { id: "e-artifact", kind: "workspace.write", path: "a.txt", content: "x" },
+    { agentId: "agt_blob" as never, workspaceId: workspace.id },
+  );
+  assert.equal(result.ok, true);
+  assert.equal(result.artifact, undefined, "no writer populates EffectResult.artifact yet");
 });
 
 test("stat reports the object, a missing digest is undefined, an invalid one throws", async () => {
