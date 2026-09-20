@@ -29,9 +29,11 @@ reason.
 - **One workflow per session** (`superviseSessionWorkflow`), addressed by
   `workflowId = supervisor/<sessionId>`.
 - **Periodic check-ins** are durable timers inside the workflow (`checkInMs`).
-  A **Temporal Schedule** per session (`ensureSupervisorSchedule`, cron default
-  every 30 minutes, overlap SKIP) guarantees a supervisor exists at all, and
-  re-creates it if it dies.
+  `supervisor/schedule.ts` holds a per-session Temporal Schedule helper
+  (`ensureSupervisorSchedule`/`triggerSupervisorSchedule`, cron default every 30
+  minutes, overlap SKIP) that would create the workflow and re-create it if it
+  dies, but nothing calls it yet: the live proof starts
+  `superviseSessionWorkflow` directly. See `KNOWN-OPEN.md`.
 - **Signals for human redirection**: `redirect(text)`, `pause`, `resume`,
   `stop`. A redirect wakes the workflow immediately and is delivered as a
   verified poke.

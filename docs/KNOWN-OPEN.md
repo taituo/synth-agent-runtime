@@ -6,12 +6,15 @@ removed only when the closing work lands.
 
 ## Runtime and deploy
 
-- **The scored gym path is on `gym-runner`; `main` only provides the rung.**
-  `SandboxWorkspaceExecutor` and `assertRungAllowedForScored` exist on `main`,
-  but the scored loop (`runGymAttempt`, `gym-activities.ts`) is on the
-  `gym-runner` branch. Until it merges and calls the sandbox rung / the refusal,
-  a scored run there can still use the host `localEffectRunner`. Closing: `gym-2`
-  drives the shared sandbox rung and calls the refusal.
+- **The scored gym path is on `gym-runner`; `main` enforces the refusal only on
+  the shared turn path.** `runTurn` refuses a scored turn whose rung is not
+  isolated: `DurableTurnConfig.scored` carries the flag from the workflow and
+  `assertRungAllowedForScored` runs where the rung is resolved (before any model
+  call). The gym's own scored loop (`runGymAttempt`, `gym-activities.ts`) is on
+  the `gym-runner` branch and does not use `runTurn`, so until it merges and
+  routes through the shared harness (or calls the sandbox rung / the refusal
+  itself) a scored run there can still use the host `localEffectRunner`. Closing:
+  `gym-2` drives the shared sandbox rung and calls the refusal.
 - **Sandbox workspace checkpoints are diffs; huge workspaces still need the git
   transport.** `checkpointSandboxWorkspace` writes the workspace diff
   (`exportArtifact`) to the blob store and restores by digest. A very large
@@ -21,6 +24,14 @@ removed only when the closing work lands.
 - **The synthetic rung stays unisolated by design.** It is labelled
   `isolated: false`; it is for cheap/unscored runs. A scored run must use the
   sandbox rung or be refused.
+- **The session supervisor's Schedule helper is unwired.** `supervisor/schedule.ts`
+  exports `ensureSupervisorSchedule`/`triggerSupervisorSchedule` and
+  `docs/SESSION-SUPERVISOR.md` describes a per-session Temporal Schedule as the
+  guarantee that a supervisor exists; nothing calls either function (the live
+  proof starts `superviseSessionWorkflow` directly, and the durable timers inside
+  the workflow are what provide the periodic check-ins). Closing: call
+  `ensureSupervisorSchedule` from a session-creation path and prove the schedule
+  re-creates a killed supervisor, or delete the module.
 
 - **Per-run provider selection is an API, not yet threaded through the turn
   config.** `provider-config.ts` exposes `selectProvider`/`directProviderSettings`

@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased — wire the scored-rung refusal into the turn
+
+- `runTurn` now calls `assertRungAllowedForScored` where it resolves the rung, so
+  a scored turn on the unisolated synthetic rung is refused before any model
+  call. The flag is threaded from the workflow as `DurableTurnConfig.scored`,
+  carried through `durableAgentWorkflow` and the graph harness like the rest of
+  the turn config. This closes verify-9's finding: the guard had no production
+  caller while `README`/`ARCHITECTURE` named it.
+- Tests: a scored synthetic turn is refused (failing-first: the assertion was
+  red before the wiring); an unscored synthetic turn and a scored isolated turn
+  are the controls.
+- `docs/SESSION-SUPERVISOR.md` no longer claims the unwired per-session Temporal
+  Schedule (`ensureSupervisorSchedule`) guarantees a supervisor exists;
+  `KNOWN-OPEN.md` records that as an open item.
+
 ## Unreleased — docs describe the current mechanism, not deleted APIs
 
 - Rewrote the seven docs verify-7 found still telling a reader to call deleted
