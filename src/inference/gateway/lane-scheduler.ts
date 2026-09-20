@@ -60,6 +60,10 @@ export class LaneScheduler {
   #inFlight = 0;
   #queue: Queued[] = [];
   #sequence = 0;
+  // Deficit weighted round-robin state per lane (piece 2): weight is credited
+  // on each decision within a band and the winner is debited the active total,
+  // so a lane's share tracks its weight without starving the others.
+  #deficit = new Map<LaneId, number>();
 
   constructor(lanes: readonly LaneSpec[], options: LaneSchedulerOptions) {
     if (lanes.length === 0) throw new Error("LaneScheduler requires at least one lane");
@@ -105,17 +109,37 @@ export class LaneScheduler {
 
   #takeNext(): Queued | undefined {
     if (this.#queue.length === 0) return undefined;
-    let best = 0;
-    for (let i = 1; i < this.#queue.length; i++) {
-      const candidate = this.#lanes.get(this.#queue[i]!.request.lane);
-      const incumbent = this.#lanes.get(this.#queue[best]!.request.lane);
-      const candidatePriority = candidate?.priority ?? 0;
-      const incumbentPriority = incumbent?.priority ?? 0;
-      if (candidatePriority > incumbentPriority) best = i;
-      // Equal bands fall back to FIFO here; the fair-share piece replaces this
-      // with weighted selection.
+    const priorityOf = (entry: Queued): number => this.#lanes.get(entry.request.lane)?.priority ?? 0;
+    const weightOf = (lane: LaneId): number => {
+      const weight = this.#lanes.get(lane)?.weight ?? 1;
+      return Number.isFinite(weight) && weight > 0 ? weight : 1;
+    };
+
+    // Band first: only the highest priority band is eligible this round.
+    const maxPriority = Math.max(...this.#queue.map(priorityOf));
+    const band = this.#queue.filter((entry) => priorityOf(entry) === maxPriority);
+    const activeLanes = [...new Set(band.map((entry) => entry.request.lane))];
+
+    // Weighted fair-share across the lanes in the band (deficit round-robin).
+    const totalWeight = activeLanes.reduce((sum, lane) => sum + weightOf(lane), 0);
+    for (const lane of activeLanes) this.#deficit.set(lane, (this.#deficit.get(lane) ?? 0) + weightOf(lane));
+    let bestLane = activeLanes[0]!;
+    for (const lane of activeLanes) {
+      const deficit = this.#deficit.get(lane) ?? 0;
+      const bestDeficit = this.#deficit.get(bestLane) ?? 0;
+      // Ties go to the lane whose earliest queued request arrived first (FIFO).
+      if (deficit > bestDeficit || (deficit === bestDeficit && this.#firstIndex(lane) < this.#firstIndex(bestLane))) {
+        bestLane = lane;
+      }
     }
-    return this.#queue.splice(best, 1)[0];
+    this.#deficit.set(bestLane, (this.#deficit.get(bestLane) ?? 0) - totalWeight);
+
+    const index = this.#queue.findIndex((entry) => entry.request.lane === bestLane);
+    return this.#queue.splice(index, 1)[0];
+  }
+
+  #firstIndex(lane: LaneId): number {
+    return this.#queue.findIndex((entry) => entry.request.lane === lane);
   }
 
   pending(): readonly AdmissionRequest[] {

@@ -63,6 +63,41 @@ test("a single lane with capacity behaves like the old path under capacity", () 
   assert.deepEqual(scheduler.admit(request("default", "over")), { outcome: "reject", reason: "lane-full", retryAfterMs: 0 });
 });
 
+test("weighted fair-share within a band tracks the configured weights", () => {
+  const lanes: LaneSpec[] = [
+    { id: "heavy", priority: 5, weight: 3, maxWaitMs: 60_000 },
+    { id: "light", priority: 5, weight: 1, maxWaitMs: 60_000 },
+  ];
+  const scheduler = new LaneScheduler(lanes, { capacity: 1 });
+  scheduler.admit(request("heavy", "seed")); // occupy the single slot
+  scheduler.admit(request("heavy", "h0"));
+  scheduler.admit(request("light", "l0"));
+  // Sustain contention: replenish whichever lane was just admitted, so both
+  // lanes always have a queued request and the ratio reflects the weights
+  // rather than which finite backlog drained first.
+  const admitted: Record<string, number> = { heavy: 0, light: 0 };
+  for (let i = 0; i < 400; i++) {
+    const next = scheduler.release();
+    if (!next) break;
+    admitted[next.lane] = (admitted[next.lane] ?? 0) + 1;
+    scheduler.admit(request(next.lane, `${next.lane}-${i}`));
+  }
+  const ratio = admitted.heavy! / admitted.light!;
+  assert.ok(ratio > 2.4 && ratio < 3.6, `expected ~3:1, got ${admitted.heavy}:${admitted.light}`);
+});
+
+test("band priority beats weight: a heavy low band waits behind a light high band", () => {
+  const lanes: LaneSpec[] = [
+    { id: "high", priority: 10, weight: 1, maxWaitMs: 60_000 },
+    { id: "low", priority: 1, weight: 100, maxWaitMs: 60_000 },
+  ];
+  const scheduler = new LaneScheduler(lanes, { capacity: 1 });
+  scheduler.admit(request("high", "seed"));
+  scheduler.admit(request("low", "low1"));
+  scheduler.admit(request("high", "high1"));
+  assert.equal(scheduler.release()?.lane, "high");
+});
+
 test("constructor rejects bad configuration", () => {
   assert.throws(() => new LaneScheduler([], { capacity: 1 }), /at least one lane/);
   assert.throws(() => new LaneScheduler(LANES, { capacity: 0 }), /Invalid capacity/);
