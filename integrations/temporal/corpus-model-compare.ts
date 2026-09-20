@@ -73,6 +73,7 @@ interface ModelResult {
   substitutions: number;
   unknownServed: number;
   finalStatus: string;
+  mismatches: Array<{ id: string; planted: string; got: string; text: string }>;
 }
 
 async function runModel(model: string): Promise<ModelResult> {
@@ -137,6 +138,7 @@ async function runModel(model: string): Promise<ModelResult> {
       substitutions: turns.filter((turn) => turn.modelSubstituted).length,
       unknownServed: turns.filter((turn) => turn.servedModel === null).length,
       finalStatus: state?.status ?? "unknown",
+      mismatches: score.mismatches.map((m) => ({ id: m.id, planted: m.planted, got: m.got, text: m.text })),
     };
   } catch (error) {
     return {
@@ -152,6 +154,7 @@ async function runModel(model: string): Promise<ModelResult> {
       substitutions: 0,
       unknownServed: 0,
       finalStatus: "unknown",
+      mismatches: [],
     };
   } finally {
     await runner?.close();
@@ -205,6 +208,7 @@ export async function main(): Promise<void> {
           substitutions: result.substitutions,
           unknownServed: result.unknownServed,
           finalStatus: result.finalStatus,
+          mismatches: result.mismatches,
           ok: result.ok,
           ...(result.reason ? { reason: result.reason } : {}),
         })),

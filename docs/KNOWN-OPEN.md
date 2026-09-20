@@ -52,6 +52,17 @@ removed only when the closing work lands.
   protocol; a guessed marker is `errored` (`test/gym-vacuity.test.ts`). Closing
   it fully would need the assertions to run outside the agent's process.
 
+## Measurement
+
+- **Corpus accuracy is definitional on the four `cve-*` items.** They were
+  reclassified to `news` to agree with one model, so the "12/12 = 1.0" baseline
+  is that model's number. deepseek-v4-pro scores 9/12 = 0.75 and every mismatch
+  is a CVE item it calls `incident` — a labelling disagreement on genuinely
+  ambiguous texts, not a capability difference or a bug (order/structural/
+  injection checks all pass). Closing: move the CVE items to `ambiguous` (the
+  class already exists) or report accuracy with and without them, and stop
+  quoting 12/12 as a capability baseline.
+
 ## Inference and scheduling
 
 - **Lane starvation bound is not implemented.** The spec reserves lower bands a

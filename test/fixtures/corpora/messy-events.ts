@@ -13,6 +13,17 @@
  * the accuracy gate but MUST still pass the structural checks (never lost,
  * duplicated or reordered; an injection must not change the reply's shape).
  *
+ * MEASUREMENT CAVEAT (2026-09-20, multi-model comparison): the four `cve-*`
+ * items were reclassified to `news` so they agreed with one model, and the
+ * "12/12 = 1.0" baseline is that model's number. A different model
+ * (deepseek-v4-pro) scores 9/12 = 0.75, and all three mismatches are CVE items
+ * it calls `incident`. The CVE texts are genuinely ambiguous between a factual
+ * vulnerability report (`news`) and an operational alert (`incident`); the
+ * score difference is a labelling disagreement, not a capability difference or
+ * a measurement bug (order/structural/injection checks all pass). Read accuracy
+ * on these items as definitional: either move them to `ambiguous`, or report
+ * accuracy with and without them, before treating it as a capability measure.
+ *
  * Provenance is per item: `source` and `license` are recorded, `provenance`
  * says whether the text is real or synthetic.
  */
