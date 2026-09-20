@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased — docs describe the current mechanism, not deleted APIs
+
+- Rewrote the seven docs verify-7 found still telling a reader to call deleted
+  code (`ARCHITECTURE`, `DISTRIBUTED`, `HARDENING`, `RECOVERY`, `RELEASE-GATE`,
+  plus `CODE-REVIEW`/`TRANSACTIONS` which are purely historical and moved to
+  `docs/history/`). `ARCHITECTURE.md` now describes the current runtime:
+  Temporal (`durableAgentWorkflow` → `runTurn` → `GatewayAgentEngine`), the
+  graph harness, the execution rung (synthetic unisolated / sandbox Pod
+  workspace), the Postgres store contracts, fencing and recovery.
+- `SECOND-REVIEW.md` and `SUPER.md` also moved to `docs/history/` as
+  point-in-time records. The remaining historical docs carry a symbol-free
+  consolidation banner. `docs/README.md` labels every doc current or historical.
+- Grep for the deleted symbols (`LeasedAgentRunner`, `CommandCoordinator`,
+  `AgentRuntime`, `DurableTurn`, `EffectReconciler`, `PolicyEffectGate`,
+  `TemporalDurabilityProvider`, `EffectPolicy`, …) across `docs/` excluding
+  `docs/history/` is empty.
+- Also fixed verify-7's committed-`dist/` defect: deleted the 18 tracked
+  compiled artifacts of the quarantined modules (and refreshed the rest), so a
+  fresh clone's `npm test` is green without `rm -rf dist`.
+
 ## Unreleased — the sandbox rung's workspace lives in the Pod
 
 ### `workspace.read/write/list` now execute inside the boundary
