@@ -2,6 +2,31 @@
 
 This directory contains the cluster-side pieces for physical agent execution.
 
+## 0. The Temporal worker is the runtime
+
+`worker-deployment.yaml` is the only runtime workload. It runs
+`integrations/temporal`'s worker: the durable workflow plus the `runTurn`
+activity (the shared `GatewayAgentEngine`). It talks to a Temporal frontend and
+an OpenAI-compatible gateway; `SYNTH_POSTGRES_URL` is consumed by the
+Postgres-backed stores. Model-authored code never runs in this Pod — the
+execution rung escalates `process.exec` to an executor Pod behind the `gvisor`
+RuntimeClass (below).
+
+**Honest status: not applied by CI.** There is no cluster in the per-push
+workflows, so this manifest is a documented deploy shape, not an enforced one.
+The gVisor and Temporal live proofs remain manual / self-hosted. Build the worker
+image from `integrations/temporal` (which depends on the root `src/`), for
+example:
+
+```bash
+# from the repository root
+docker build -f deploy/worker-image/Dockerfile -t registry.example/synth-temporal-worker:0.4.0 .
+kubectl apply -f deploy/kubernetes/worker-deployment.yaml
+```
+
+There is deliberately no homegrown control-plane Deployment: the worker above
+replaces it, and the Postgres stores it uses are the only durability it owns.
+
 ## 1. Install/configure gVisor
 
 The runtime expects a Kubernetes `RuntimeClass` named `gvisor` backed by `runsc`.

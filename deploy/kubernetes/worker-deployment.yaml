@@ -1,0 +1,86 @@
+# The Temporal worker is the runtime.
+#
+# It runs the durable workflow and the `runTurn` activity (the shared
+# GatewayAgentEngine). It is a trusted control-plane process: it holds the
+# gateway credentials and (for the execution rung) the Kubernetes credentials,
+# and it dispatches model-authored code into gVisor executor Pods. It is NOT
+# applied by CI — the cluster-side proof is manual (`deploy/kubernetes/README.md`).
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: synth-temporal-worker
+  namespace: synth-control-plane
+data:
+  TEMPORAL_ADDRESS: "temporal-frontend.temporal.svc.cluster.local:7233"
+  TEMPORAL_NAMESPACE: "default"
+  TEMPORAL_TASK_QUEUE: "synth-agent-runtime"
+  GATEWAY_BASE_URL: "http://synth-gateway.synth-control-plane.svc.cluster.local:8787"
+  GATEWAY_MODEL: "worker/cheap"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: synth-temporal-worker
+  namespace: synth-control-plane
+  labels:
+    app.kubernetes.io/name: synth-temporal-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: synth-temporal-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: synth-temporal-worker
+    spec:
+      # The worker is trusted control-plane code; it runs in the restricted
+      # namespace and never mounts a host path. Untrusted code runs only in the
+      # sandbox namespace behind the gVisor RuntimeClass.
+      serviceAccountName: synth-control-plane
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          image: registry.example/synth-temporal-worker:0.4.0
+          command: ["node", "integrations/temporal/dist/integrations/temporal/src/worker-entry.js"]
+          envFrom:
+            - configMapRef:
+                name: synth-temporal-worker
+            - secretRef:
+                name: synth-temporal-worker-secrets
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+# Required secret keys (create out of band; never commit values):
+#   GATEWAY_API_KEY        bearer token for the inference gateway
+#   SYNTH_POSTGRES_URL     Postgres DSN for the Postgres-backed stores
+#   SYNTH_EXECUTOR_IMAGE   executor image pinned by digest
+apiVersion: v1
+kind: Secret
+metadata:
+  name: synth-temporal-worker-secrets
+  namespace: synth-control-plane
+type: Opaque
+stringData: {}
