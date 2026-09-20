@@ -182,3 +182,4 @@ repeated with the hardened scorer and the bounded-wait/logging harness.
 |---|---|---|---|---|---|
 | 1 | lost | **passed** | 3 | 2 | 358 B |
 | 2 | lost | **passed** | 6 | 2 | 358 B |
+| 3 | lost | **passed** | 3 | 2 | 358 B |
