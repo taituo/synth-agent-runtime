@@ -40,10 +40,6 @@ const { gymPrepareActivity, runTurn, gymScoreActivity } = proxyActivities<GymAct
   },
 });
 
-function renderObservation(observation: { output?: unknown; error?: string }): string {
-  return JSON.stringify(observation.output ?? observation.error ?? null);
-}
-
 /**
  * One turn, with the durable park path: a transient failure (after Temporal's
  * activity retries) parks with backoff instead of killing the attempt, and a
@@ -99,7 +95,7 @@ export async function gymAttemptWorkflow(input: GymAttemptActivityInput): Promis
     if (last.finished) break;
     transcript.push({ role: "assistant", content: last.content });
     for (const observation of last.observations) {
-      transcript.push({ role: "tool", name: observation.name, content: renderObservation(observation) });
+      transcript.push({ role: "tool", name: observation.name, content: observation.content });
     }
   }
 

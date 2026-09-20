@@ -93,8 +93,13 @@ export interface GymTurnToolCall {
 export interface GymTurnObservation {
   name: string;
   ok: boolean;
-  output?: unknown;
-  error?: string;
+  /**
+   * The observation as TEXT the model can read. The rung returns bytes for
+   * `read_file`; rendering them as `{"type":"Buffer","data":[...]}` made the
+   * model unable to read the source (found live: the durable arm scored 0 B
+   * while the plain arm scored the fix).
+   */
+  content: string;
 }
 
 /** What the prepare activity hands to every turn activity. */
