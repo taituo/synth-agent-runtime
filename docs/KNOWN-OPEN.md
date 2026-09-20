@@ -23,10 +23,7 @@ removed only when the closing work lands.
   automatic GC wired from the artifact index's reachable set, a per-tenant write
   quota, and read auditing. Closing: a scheduled retention job, a `put` size
   ceiling, and an audit event on `get`.
-- **Git-as-transport needs sandbox credentials.** Mechanism 2 requires the agent
-  to push from inside the untrusted sandbox, which contradicts the existing
-  "no repository credentials in the sandbox" posture. Closing: scoped/one-shot
-  credentials or a broker that performs the push outside the sandbox.
+
 
 ## Measurement
 

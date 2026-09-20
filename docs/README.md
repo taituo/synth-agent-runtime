@@ -29,6 +29,7 @@ Everything below is design/subsystem detail, in rough reading order.
 - [`TEMPORAL.md`](TEMPORAL.md) — Temporal durability adapter.
 - [`SESSION-SUPERVISOR.md`](SESSION-SUPERVISOR.md) — durable supervisor for interactive agent sessions (separate Temporal deployment).
 - [`BLOB-STORE.md`](BLOB-STORE.md) — content-addressed store: access model (digest-as-capability, tenant isolation) and lifecycle.
+- [`GIT-PUSH-CREDENTIALS.md`](GIT-PUSH-CREDENTIALS.md) — scoped, one-shot sandbox push grants for git-as-transport, and the residual risk.
 - [`OBSERVABILITY.md`](OBSERVABILITY.md) — tracing.
 - [`UPGRADE.md`](UPGRADE.md) — *historical*: a specific `v0.8 → v0.9` migration note, correct as-is for that transition.
 

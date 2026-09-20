@@ -6,6 +6,7 @@ export * from "./workspace/source.js";
 export * from "./workspace/memory-workspace.js";
 export * from "./workspace/symlink-target.js";
 export * from "./workspace/git-transport.js";
+export * from "./workspace/scoped-push.js";
 export * from "./artifacts/blob-store.js";
 export * from "./artifacts/artifact-index.js";
 export * from "./gym/scoring.js";

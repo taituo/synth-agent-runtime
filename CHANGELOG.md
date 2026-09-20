@@ -42,6 +42,18 @@
   high-band admissions, not merely eventually — and the sustained-contention
   share; failing-first with the reservation removed.
 
+### Git-as-transport: scoped, one-shot sandbox push grants
+
+- Mechanism 2 needs a credential inside the untrusted sandbox. Added
+  `createScopedPushGrant` plus a `pre-receive` hook on the runtime-controlled
+  bare repo: a push must be exactly one NEW ref matching an unexpired grant;
+  deletes and force/overwrite are rejected; the grant is consumed, so it is
+  one-shot. The sandbox carries only the transport secret; authorization is the
+  grant plus the hook, so a stolen credential can create the granted ref once
+  and nothing else. Residual risk (transport scope, untrusted content,
+  exfiltration, read access) is stated in `docs/GIT-PUSH-CREDENTIALS.md`. Tests
+  run against real git; failing-first with the hook neutered.
+
 ### Gym: the completion marker is cryptographic, not held out
 
 - `passed` was decided by a per-run nonce the hidden test printed, which agent
