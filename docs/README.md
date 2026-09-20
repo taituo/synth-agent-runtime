@@ -5,6 +5,7 @@ Everything below is design/subsystem detail, in rough reading order.
 
 ## Core design
 
+- [`MAP.md`](MAP.md) — plain-language map of the layers and what each is not.
 - [`SPEC.md`](SPEC.md) — full behavioral specification.
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — runtime layers and invariants.
 - [`DISTRIBUTED.md`](DISTRIBUTED.md) — control-plane distribution model.

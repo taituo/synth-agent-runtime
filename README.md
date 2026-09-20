@@ -163,6 +163,8 @@ npm run release-hardening:contract
 npm run live:proof
 ```
 
+Start with `docs/MAP.md` for a plain-language map of the layers (model / provider /
+gateway / backend / profile / execution rung / runtime / Pi) and what each is not.
 For the design and failure rules, read:
 
 1. `docs/ARCHITECTURE.md`
