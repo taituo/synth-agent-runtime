@@ -13,6 +13,7 @@ import {
   createScriptedGymTurn,
   localEffectRunner,
   runGymAttempt,
+  type GymCase,
   type GymTask,
   type GymTurn,
   type MaterializedGymTask,
@@ -30,6 +31,12 @@ const HIDDEN = [
   'test("hidden", () => { assert.equal(slugify(""), ""); assert.equal(slugify("  A  B "), "a-b"); assert.equal(slugify("a__b--c"), "a-b-c"); });',
   "",
 ].join("\n");
+/** Held-out vectors: the combined tree decides passes with the isolated verifier. */
+const CASES: GymCase[] = [
+  { module: "./lib.mjs", call: "slugify", args: [""], expect: "", label: "empty" },
+  { module: "./lib.mjs", call: "slugify", args: ["  A  B "], expect: "a-b", label: "spacing" },
+  { module: "./lib.mjs", call: "slugify", args: ["a__b--c"], expect: "a-b-c", label: "repeats" },
+];
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
   const { stdout } = await execFileAsync("git", args, { cwd });
@@ -58,6 +65,7 @@ async function makeMaterialized(parent: string): Promise<MaterializedGymTask> {
     hiddenTestPath,
     mutationPatch: "unused",
     taskDir: parent,
+    hiddenCases: CASES,
   };
   return {
     task,
@@ -169,19 +177,22 @@ test("a thrown scorer is errored, not a crash", async () => {
   }
 });
 
-test("a patch that turns the hidden-test destination into a directory is errored, not a crash", async () => {
+test("held-out cases that cannot be evaluated are errored, not a crash", async () => {
   const parent = await mkdtemp(join(tmpdir(), "gym-attempt-"));
   try {
     const task = await makeMaterialized(parent);
     const runner = localEffectRunner(task.repoDir);
-    // `hidden.test.mjs` is the scorer's copy destination. A directory there makes
-    // `copyFile` throw inside scoreGymPatch; the runner must surface `errored`.
+    // A missing module makes the isolated verifier's worker report an error; the
+    // runner must surface `errored` rather than crash on the scoring seam.
+    const broken: MaterializedGymTask = {
+      ...task,
+      task: { ...task.task, hiddenCases: [{ module: "./missing.mjs", call: "nope", args: [], expect: 1 }] },
+    };
     const turn = createScriptedGymTurn([
-      { toolCalls: [{ name: "write_file", arguments: { path: "hidden.test.mjs/placeholder", content: "not a test\n" } }, { name: "finish" }] },
+      { toolCalls: [{ name: "write_file", arguments: { path: "lib.mjs", content: FIXED } }, { name: "finish" }] },
     ]);
-    const record = await runGymAttempt({ task, runner, turn, nodeBin: process.execPath });
+    const record = await runGymAttempt({ task: broken, runner, turn, nodeBin: process.execPath });
     assert.equal(record.outcome, "errored", `got ${record.outcome}: ${record.error ?? record.score.detail}`);
-    assert.match(record.error ?? "", /EISDIR|directory/);
   } finally {
     await rm(parent, { recursive: true, force: true });
   }

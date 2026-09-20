@@ -146,8 +146,21 @@
   uses the isolated scorer. Regression tests pin the exact fifth-round forges
   (nonce read, early exit, constant stub, assert mutation) and the control
   confirms the legacy in-process scorer still passes the early-exit forge while
-  the isolated scorer rejects it. This is additive: `src/gym/scoring.ts` is
-  untouched so the fix cannot conflict with concurrent work there.
+  the isolated scorer rejects it.
+- **Combined-tree decision: the isolated verifier is the gym's pass decision.**
+  Main's harness scorer and this one were merged and initially collided: a plain
+  held-out test scored by the harness scorer is `errored`, so the golden control
+  failed (rejects-everything). The two are not equivalent. The harness scorer
+  places `check`/`complete` in the clone and runs agent code in the same process
+  as the hidden test, so agent code can `import` the harness, record its own
+  passing checks, call `complete()`, and exit before the real checks run —
+  executed against the merged dist, that scores `passed` with the bug unfixed.
+  A same-process decision cannot be sound when the adversary runs in that
+  process. `runGymAttempt` therefore routes every scored task through
+  `isolatedScoreGymPatch` (held-out cases, agent code in a worker that never
+  sees the expected outputs or a secret) and a task without cases is `errored`,
+  not silently handed to the harness scorer. Main's `scoreGymPatch` remains a
+  library for its own hidden-test-file tests; it is not the runner's decision.
 
 ### Model visibility: never guess which model answered
 

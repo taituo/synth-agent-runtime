@@ -18,9 +18,9 @@ import { promisify } from "node:util";
 import {
   GymFixtureUnavailableError,
   goldenReversePatch,
+  isolatedScoreGymPatch,
   loadGymTask,
   materializeGymTask,
-  scoreGymPatch,
   DEFAULT_GYM_FIXTURE_CACHE_DIR,
 } from "../src/index.js";
 
@@ -80,6 +80,13 @@ async function makeSyntheticFixture(parent: string): Promise<string> {
   await writeFile(join(taskDir, "bug.patch"), mutationPatch);
   await writeFile(join(taskDir, "visible.test.mjs"), VISIBLE);
   await writeFile(join(taskDir, "hidden.test.mjs"), HIDDEN);
+  await writeFile(join(taskDir, "hidden.cases.json"), JSON.stringify({
+    cases: [
+      { module: "./lib.mjs", call: "slugify", args: [""], expect: "", label: "empty" },
+      { module: "./lib.mjs", call: "slugify", args: ["  A  B "], expect: "a-b", label: "spacing" },
+      { module: "./lib.mjs", call: "slugify", args: ["a__b--c"], expect: "a-b-c", label: "repeats" },
+    ],
+  }));
   return taskDir;
 }
 
@@ -95,16 +102,15 @@ test("materialize commits the bug: hidden fails, empty patch fails, golden passe
     assert.equal(await readFile(join(materialized.repoDir, "lib.mjs"), "utf8"), BUGGED);
     assert.notEqual(materialized.bugCommit, materialized.baseCommit);
 
-    // An empty patch must NOT pass: this is the baseRepoDir trap. (The scorer
-    // may label an empty patch `errored`; the discriminating quantity is that it
-    // is not `passed`, i.e. baseRepoDir really is the bugged checkout.)
-    const empty = await scoreGymPatch({ patchText: "", baseRepoDir: materialized.baseRepoDir, hiddenTestPath: materialized.hiddenTestPath });
+    if (!task.hiddenCases) throw new Error("fixture must carry held-out cases for the isolated scorer");
+    // An empty patch must NOT pass: this is the baseRepoDir trap.
+    const empty = await isolatedScoreGymPatch({ patchText: "", baseRepoDir: materialized.baseRepoDir, cases: task.hiddenCases });
     assert.notEqual(empty.outcome, "passed", `empty patch must not pass, got ${empty.outcome}`);
 
     // The bug's own reverse patch is the fix and must score passed.
     const golden = await goldenReversePatch(materialized.baseRepoDir, task.mutationPatch);
-    const goldScore = await scoreGymPatch({ patchText: golden, baseRepoDir: materialized.baseRepoDir, hiddenTestPath: materialized.hiddenTestPath });
-    assert.equal(goldScore.outcome, "passed", `golden scored ${goldScore.outcome}: ${goldScore.detail ?? goldScore.hiddenOutput}`);
+    const goldScore = await isolatedScoreGymPatch({ patchText: golden, baseRepoDir: materialized.baseRepoDir, cases: task.hiddenCases });
+    assert.equal(goldScore.outcome, "passed", `golden scored ${goldScore.outcome}: ${goldScore.detail}`);
   } finally {
     await rm(parent, { recursive: true, force: true });
   }
@@ -136,12 +142,13 @@ test("the checked-in he task fixture loads and its golden patch passes when the 
     assert.ok(source.includes("parseInt(hexDigits, 10)"), "materialized checkout must contain the planted bug");
     assert.ok(!source.includes("parseInt(hexDigits, 16)"), "clean upstream code must not be present");
 
-    const empty = await scoreGymPatch({ patchText: "", baseRepoDir: materialized.baseRepoDir, hiddenTestPath: materialized.hiddenTestPath });
-    assert.notEqual(empty.outcome, "passed", `hidden test must fail on the freshly materialized bug: got ${empty.outcome}`);
+    if (!task.hiddenCases) throw new Error("he fixture must carry held-out cases for the isolated scorer");
+    const empty = await isolatedScoreGymPatch({ patchText: "", baseRepoDir: materialized.baseRepoDir, cases: task.hiddenCases });
+    assert.notEqual(empty.outcome, "passed", `hidden cases must fail on the freshly materialized bug: got ${empty.outcome}`);
 
     const golden = await goldenReversePatch(materialized.baseRepoDir, task.mutationPatch);
-    const goldScore = await scoreGymPatch({ patchText: golden, baseRepoDir: materialized.baseRepoDir, hiddenTestPath: materialized.hiddenTestPath });
-    assert.equal(goldScore.outcome, "passed", `golden scored ${goldScore.outcome}: ${goldScore.detail ?? goldScore.hiddenOutput}`);
+    const goldScore = await isolatedScoreGymPatch({ patchText: golden, baseRepoDir: materialized.baseRepoDir, cases: task.hiddenCases });
+    assert.equal(goldScore.outcome, "passed", `golden scored ${goldScore.outcome}: ${goldScore.detail}`);
   } finally {
     await rm(parent, { recursive: true, force: true });
   }

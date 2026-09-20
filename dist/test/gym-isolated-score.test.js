@@ -120,6 +120,29 @@ test("FORGE 3: a constant stub and an assert-mutating payload do not pass", asyn
         await rm(parent, { recursive: true, force: true });
     }
 });
+test("FORGE 4: importing a scorer harness and self-completing does not pass", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "gym-iso-"));
+    try {
+        const repo = await makeRepo(parent);
+        // This is the forge that defeats a same-process harness scorer: agent code
+        // imports the harness the hidden test uses and calls its own check()/complete()
+        // before the real checks run. Under isolation there is no such harness in the
+        // agent's process, so the payload cannot even load a passing result.
+        const forge = [
+            'import { check, complete } from "./gym-hidden-harness.mjs";',
+            'check("x", () => {});',
+            "complete();",
+            "process.exit(0);",
+            BUGGY,
+        ].join("\n");
+        const patch = await patchFor(repo, forge);
+        const score = await isolatedScoreGymPatch({ patchText: patch, baseRepoDir: repo, cases: CASES });
+        assert.notEqual(score.outcome, "passed", "harness self-completion must not pass under isolation");
+    }
+    finally {
+        await rm(parent, { recursive: true, force: true });
+    }
+});
 test("VACUITY: zero cases is errored, never a vacuous pass", async () => {
     const parent = await mkdtemp(join(tmpdir(), "gym-iso-"));
     try {

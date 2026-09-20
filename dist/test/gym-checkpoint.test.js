@@ -22,6 +22,11 @@ const HIDDEN = [
     'test("hidden", () => { assert.equal(slugify(""), ""); assert.equal(slugify("  A  B "), "a-b"); assert.equal(slugify("a__b--c"), "a-b-c"); });',
     "",
 ].join("\n");
+const CASES = [
+    { module: "./lib.mjs", call: "slugify", args: [""], expect: "", label: "empty" },
+    { module: "./lib.mjs", call: "slugify", args: ["  A  B "], expect: "a-b", label: "spacing" },
+    { module: "./lib.mjs", call: "slugify", args: ["a__b--c"], expect: "a-b-c", label: "repeats" },
+];
 async function git(cwd, ...args) {
     const { stdout } = await execFileAsync("git", args, { cwd });
     return stdout;
@@ -47,6 +52,7 @@ async function makeMaterialized(parent) {
         hiddenTestPath,
         mutationPatch: "unused",
         taskDir: parent,
+        hiddenCases: CASES,
     };
     return { task, repoDir: repo, baseRepoDir: repo, visibleTestPath: join(repo, "test/visible.test.mjs"), hiddenTestPath, bugCommit: "HEAD", baseCommit: "HEAD" };
 }

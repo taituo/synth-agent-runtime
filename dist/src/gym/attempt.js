@@ -1,4 +1,4 @@
-import { isTampering, patchTargetPaths, scoreGymPatch, PROTECTED_PATTERNS } from "./scoring.js";
+import { isTampering, patchTargetPaths, PROTECTED_PATTERNS } from "./scoring.js";
 import { buildGymSystemPrompt, buildGymUserPrompt, createGymTools, GYM_TOOL_DEFINITIONS } from "./tools.js";
 import { harvestPatch } from "./harvest.js";
 import { isolatedScoreGymPatch } from "./isolated-score.js";
@@ -155,14 +155,19 @@ export async function runGymAttempt(options) {
                 score = { outcome: "failed", touchedPaths: [], detail: "no changes; the planted bug is still present" };
             }
             else {
-                // When the task ships held-out cases, always use the isolated scorer:
-                // the pass decision is the verifier's comparison, never a child process
-                // the agent's code controls. Only case-less tasks fall back to the
-                // legacy in-process scorer.
-                const cases = task.task.hiddenCases;
-                const scorer = options.score ?? (cases
-                    ? (request) => isolatedScoreGymPatch({ patchText: request.patchText, baseRepoDir: request.baseRepoDir, cases, ...(options.nodeBin ? { nodeBin: options.nodeBin } : {}) })
-                    : scoreGymPatch);
+                // The gym's pass decision is the ISOLATED verifier: it runs agent code
+                // in a worker that never sees the expected outputs and never holds a
+                // secret, and decides by comparing returned values. The harness-based
+                // in-process scorer is deliberately not a fallback here — agent code can
+                // import that harness and call its own complete(). A task with no
+                // held-out cases is `errored`, not scored.
+                const cases = task.task.hiddenCases ?? [];
+                const scorer = options.score ?? ((request) => isolatedScoreGymPatch({
+                    patchText: request.patchText,
+                    baseRepoDir: request.baseRepoDir,
+                    cases,
+                    ...(options.nodeBin ? { nodeBin: options.nodeBin } : {}),
+                }));
                 score = await scorer({
                     patchText: patch,
                     baseRepoDir: task.baseRepoDir,
