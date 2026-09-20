@@ -38,24 +38,32 @@ export class FileSystemBlobStore {
         const digest = digestOf(bytes);
         const path = this.#path(digest);
         const mediaType = options.mediaType ?? "application/octet-stream";
+        const meta = {
+            mediaType,
+            ...(options.producedBy ? { producedBy: options.producedBy } : {}),
+            ...(options.producedFrom && options.producedFrom.length > 0 ? { producedFrom: [...options.producedFrom] } : {}),
+        };
         await mkdir(dirname(path), { recursive: true });
         // Deduplicate: identical content is one object.
+        let existed = false;
         try {
             const existing = await readFile(path);
             if (digestOf(existing) === digest)
-                return { digest, size: existing.byteLength, mediaType, mechanism: "blob-store" };
+                existed = true;
         }
         catch {
             // not present yet
         }
-        // Atomic write so a crash cannot leave a half object under a real digest.
-        const temp = `${path}.${randomUUID()}.tmp`;
-        await writeFile(temp, bytes);
-        await rename(temp, path);
-        // Sidecar metadata keeps `stat`'s mediaType stable without polluting the
-        // content-addressed object itself (the object is exactly the bytes).
-        await writeFile(this.#metaPath(digest), JSON.stringify({ mediaType })).catch(() => undefined);
-        return { digest, size: bytes.byteLength, mediaType, mechanism: "blob-store" };
+        if (!existed) {
+            // Atomic write so a crash cannot leave a half object under a real digest.
+            const temp = `${path}.${randomUUID()}.tmp`;
+            await writeFile(temp, bytes);
+            await rename(temp, path);
+        }
+        // Sidecar metadata keeps `stat`'s mediaType/provenance stable without
+        // polluting the content-addressed object itself (the object is the bytes).
+        await writeFile(this.#metaPath(digest), JSON.stringify(meta)).catch(() => undefined);
+        return { digest, size: bytes.byteLength, mechanism: "blob-store", ...meta };
     }
     async get(digest) {
         const normalized = normalizeDigest(digest);
@@ -69,15 +77,28 @@ export class FileSystemBlobStore {
         try {
             const info = await stat(this.#path(normalized));
             let mediaType = "application/octet-stream";
+            let producedBy;
+            let producedFrom;
             try {
                 const meta = JSON.parse(await readFile(this.#metaPath(normalized), "utf8"));
                 if (typeof meta.mediaType === "string")
                     mediaType = meta.mediaType;
+                if (typeof meta.producedBy === "string")
+                    producedBy = meta.producedBy;
+                if (Array.isArray(meta.producedFrom))
+                    producedFrom = meta.producedFrom.filter((value) => typeof value === "string");
             }
             catch {
-                // no sidecar: default media type
+                // no sidecar: defaults
             }
-            return { digest: normalized, size: info.size, mediaType, mechanism: "blob-store" };
+            return {
+                digest: normalized,
+                size: info.size,
+                mediaType,
+                mechanism: "blob-store",
+                ...(producedBy ? { producedBy } : {}),
+                ...(producedFrom ? { producedFrom } : {}),
+            };
         }
         catch {
             return undefined;

@@ -53,6 +53,10 @@ export interface ArtifactRef {
     size: number;
     mediaType: string;
     mechanism: string;
+    /** Producer (agent/workflow id) for provenance. */
+    producedBy?: string;
+    /** Input digests, so a chain of agents can be walked backwards. */
+    producedFrom?: string[];
 }
 export interface EffectResult {
     ok: boolean;

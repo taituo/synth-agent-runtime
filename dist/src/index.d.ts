@@ -7,6 +7,7 @@ export * from "./workspace/memory-workspace.js";
 export * from "./workspace/symlink-target.js";
 export * from "./workspace/git-transport.js";
 export * from "./artifacts/blob-store.js";
+export * from "./artifacts/artifact-index.js";
 export * from "./workspace/native-git-source.js";
 export * from "./execution/types.js";
 export * from "./execution/workspace-errors.js";

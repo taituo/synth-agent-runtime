@@ -4,9 +4,15 @@ export interface BlobRef {
     size: number;
     mediaType: string;
     mechanism: "blob-store";
+    /** Who produced it (e.g. an agent/workflow id), for provenance. */
+    producedBy?: string;
+    /** Digests of the inputs it was derived from, so a chain is walkable. */
+    producedFrom?: string[];
 }
 export interface PutBlobOptions {
     mediaType?: string;
+    producedBy?: string;
+    producedFrom?: readonly string[];
 }
 export interface BlobStore {
     put(bytes: Uint8Array, options?: PutBlobOptions): Promise<BlobRef>;
