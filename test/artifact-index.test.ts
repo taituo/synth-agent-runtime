@@ -37,14 +37,45 @@ test("the provenance chain from B back to its input is walkable and cycle-safe",
   index.record(ref(a, "agent-A", [input]));
   index.record(ref(b, "agent-B", [a]));
 
-  const chain = index.walkProvenance(b);
-  assert.ok(chain.includes(b) && chain.includes(a) && chain.includes(input), `chain was ${chain.join(",")}`);
+  const report = index.walkProvenance(b);
+  const digests = report.nodes.map((node) => node.digest);
+  assert.ok(digests.includes(b) && digests.includes(a) && digests.includes(input), `chain was ${digests.join(",")}`);
+  assert.equal(report.intact, true);
+  assert.deepEqual(report.gaps, []);
+  assert.ok(report.nodes.every((node) => node.known));
 
   // A cycle must not loop forever.
   const cyc = new InMemoryArtifactIndex();
   cyc.record(ref("d1", "x", ["d2"]));
   cyc.record(ref("d2", "y", ["d1"]));
-  assert.deepEqual(new Set(cyc.walkProvenance("d1")), new Set(["d1", "d2"]));
+  assert.deepEqual(new Set(cyc.walkProvenance("d1").nodes.map((node) => node.digest)), new Set(["d1", "d2"]));
+});
+
+test("a broken chain is distinguishable from an intact one, and an unknown root is a gap", () => {
+  const input = digestOf(new TextEncoder().encode("input"));
+  const a = digestOf(new TextEncoder().encode("A"));
+  const b = digestOf(new TextEncoder().encode("B"));
+
+  const intact = new InMemoryArtifactIndex();
+  intact.record(ref(input, "agent-0"));
+  intact.record(ref(a, "agent-A", [input]));
+  intact.record(ref(b, "agent-B", [a]));
+  const intactReport = intact.walkProvenance(b);
+  assert.equal(intactReport.intact, true);
+  assert.deepEqual(intactReport.gaps, []);
+
+  const broken = new InMemoryArtifactIndex();
+  broken.record(ref(b, "agent-B", [a])); // `a` is named by producedFrom but never recorded
+  const brokenReport = broken.walkProvenance(b);
+  assert.equal(brokenReport.intact, false);
+  assert.deepEqual(brokenReport.gaps, [a]);
+  assert.notDeepEqual(brokenReport.nodes, intactReport.nodes, "broken and intact chains must differ");
+
+  // A digest that was never recorded is a gap, not a known root.
+  const unknown = broken.walkProvenance(digestOf(new TextEncoder().encode("never")));
+  assert.equal(unknown.intact, false);
+  assert.equal(unknown.nodes[0]!.known, false);
+  assert.deepEqual(unknown.gaps, [unknown.nodes[0]!.digest]);
 });
 
 test("put/stat round-trip provenance through the blob store", async () => {

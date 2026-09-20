@@ -37,20 +37,55 @@ export class InMemoryArtifactIndex {
   }
 
   /**
-   * Walk the `producedFrom` chain backwards from `digest`, returning every
-   * reachable digest (including the start). Depth-limited and cycle-safe.
+   * Walk the `producedFrom` chain backwards from `digest`. Depth-limited and
+   * cycle-safe.
+   *
+   * Returns a report, not a bare digest list: a bare list cannot distinguish an
+   * intact chain from a broken one (a digest named by `producedFrom` but never
+   * recorded looks identical to a recorded ancestor), nor a known root from an
+   * unknown digest — both would silently give false confidence. `gaps` names
+   * every referenced-but-unknown digest and `intact` is true only when the walk
+   * completed with no gaps.
    */
-  walkProvenance(digest: string, maxDepth = 32): string[] {
+  walkProvenance(digest: string, maxDepth = 32): ProvenanceReport {
     const seen = new Set<string>();
-    const out: string[] = [];
+    const nodes: ProvenanceNode[] = [];
+    const gaps: string[] = [];
+    let truncated = false;
     const stack: Array<{ id: string; depth: number }> = [{ id: digest, depth: 0 }];
     while (stack.length > 0) {
       const { id, depth } = stack.pop()!;
-      if (seen.has(id) || depth > maxDepth) continue;
+      if (seen.has(id)) continue;
+      if (depth > maxDepth) {
+        truncated = true;
+        continue;
+      }
       seen.add(id);
-      out.push(id);
-      for (const input of this.#byDigest.get(id)?.ref.producedFrom ?? []) stack.push({ id: input, depth: depth + 1 });
+      const record = this.#byDigest.get(id);
+      if (record) nodes.push({ digest: id, known: true, record });
+      else {
+        nodes.push({ digest: id, known: false });
+        gaps.push(id);
+      }
+      for (const input of record?.ref.producedFrom ?? []) stack.push({ id: input, depth: depth + 1 });
     }
-    return out;
+    return { nodes, gaps, truncated, intact: gaps.length === 0 && !truncated };
   }
+}
+
+export interface ProvenanceNode {
+  digest: string;
+  /** True when this digest has a record in the index. */
+  known: boolean;
+  record?: ArtifactRecord;
+}
+
+export interface ProvenanceReport {
+  nodes: ProvenanceNode[];
+  /** Digests referenced by `producedFrom` but with no record in the index. */
+  gaps: string[];
+  /** True when the depth limit stopped the walk early. */
+  truncated: boolean;
+  /** True only when every reachable ancestor is known and the walk completed. */
+  intact: boolean;
 }
