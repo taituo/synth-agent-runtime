@@ -1,12 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import type { DurableMailboxMessage } from "../src/contracts.js";
+import type { AgentId, WorkspaceId } from "../../../src/core/ids.js";
+import type { AgentEngine, AgentEngineContext } from "../../../src/runtime/agent-engine.js";
+import { createGatewayAgentEngine } from "../../../src/runtime/gateway-engine.js";
+import type { DurableMailboxMessage, DurableToolSpec } from "../src/contracts.js";
 import {
+  TRIAGE_SYSTEM_PROMPT,
   buildTriageUserMessage,
   createGatewayRunTurn,
   extractJsonObject,
   parseClassifications,
   type GatewayTurnRecord,
+  type RungFactory,
 } from "../src/gateway-run-turn.js";
 
 function message(text: string, kind?: string): DurableMailboxMessage {
@@ -211,4 +216,159 @@ test("user message lists every event in order", () => {
     buildTriageUserMessage([message("first"), message("second")]),
     "Classify these 2 event(s), in order:\n1. first\n2. second",
   );
+});
+
+test("runTurn invokes the shared engine body and makes no HTTP call of its own", async () => {
+  const engineCalls: Array<readonly unknown[]> = [];
+  let rawHttpCalls = 0;
+  const engine: AgentEngine = {
+    async run(messages) {
+      engineCalls.push(messages);
+      return {
+        content: JSON.stringify({ events: [{ classification: "incident", reaction: "page on-call" }] }),
+        toolCalls: [],
+        observations: [],
+        requestedModel: "m",
+        servedModel: "m",
+        modelSubstituted: false,
+        latencyMs: 3,
+      };
+    },
+  };
+  const runTurn = createGatewayRunTurn({
+    baseUrl: "http://gw.test",
+    model: "m",
+    heartbeat: () => {},
+    engine,
+    fetchImpl: (async () => {
+      rawHttpCalls++;
+      throw new Error("the activity must not make its own HTTP call");
+    }) as unknown as typeof fetch,
+  });
+
+  const result = await runTurn({ agentId: "a", messages: [message("central bank holds rates")] });
+
+  assert.equal(engineCalls.length, 1, "the activity must invoke the shared body exactly once");
+  assert.equal(engineCalls[0]!.length, 1);
+  assert.equal(rawHttpCalls, 0, "the old raw-HTTP turn path must be gone");
+  assert.deepEqual((result.result as { classifications: unknown[] }).classifications, [
+    { classification: "incident", reaction: "page on-call" },
+  ]);
+});
+
+test("a tool-configured turn executes the model's calls through the rung; no rung refuses", async () => {
+  let executorCalls = 0;
+  const rungFactory: RungFactory = () => ({
+    async executeEffect(effect) {
+      executorCalls++;
+      if (effect.kind === "workspace.write") return { ok: true };
+      if (effect.kind === "workspace.read") return { ok: true, output: new TextEncoder().encode("tool-bytes") };
+      return { ok: false, error: `unexpected ${effect.kind}` };
+    },
+  });
+  const fetchImpl = (async () => chatReply(JSON.stringify({ tool_calls: [
+    { name: "write_file", arguments: { path: "a.txt", content: "hi" } },
+    { name: "read_file", arguments: { path: "a.txt" } },
+  ] }))) as unknown as typeof fetch;
+  const tools: DurableToolSpec[] = [
+    { name: "write_file", effect: "workspace.write" },
+    { name: "read_file", effect: "workspace.read" },
+  ];
+
+  const runTurn = createGatewayRunTurn({ baseUrl: "http://gw.test", model: "m", heartbeat: () => {}, fetchImpl, rungFactory });
+  const result = await runTurn({
+    agentId: "agt_tool",
+    messages: [message("write then read")],
+    config: { systemPrompt: "You edit files.", tools, rung: { kind: "synthetic" } },
+  });
+
+  assert.equal(executorCalls, 2, "both model tool calls must reach the execution rung");
+  const observations = (result.result as { observations: Array<{ ok: boolean; output?: unknown; error?: string }> }).observations;
+  assert.equal(observations.length, 2);
+  assert.equal(observations[0]!.ok, true);
+  assert.equal(observations[1]!.ok, true);
+  assert.equal(new TextDecoder().decode(observations[1]!.output as Uint8Array), "tool-bytes");
+
+  // Control: the same turn with no rung configured must refuse, not silently drop.
+  let factoryCalls = 0;
+  const neverFactory: RungFactory = () => { factoryCalls++; return { async executeEffect() { return { ok: true }; } }; };
+  const withoutRung = createGatewayRunTurn({ baseUrl: "http://gw.test", model: "m", heartbeat: () => {}, fetchImpl, rungFactory: neverFactory });
+  const refused = await withoutRung({
+    agentId: "agt_tool",
+    messages: [message("write then read")],
+    config: { systemPrompt: "You edit files.", tools },
+  });
+  assert.equal(factoryCalls, 0, "no rung configured means no rung is built");
+  const refusedObservations = (refused.result as { observations: Array<{ ok: boolean; error?: string }> }).observations;
+  assert.equal(refusedObservations.length, 2);
+  assert.equal(refusedObservations.every((entry) => entry.ok === false), true, "every call must be refused");
+  assert.match(refusedObservations[0]!.error ?? "", /No effect executor configured/);
+});
+
+test("the default synthetic rung round-trips a write then read through the real executor", async () => {
+  const fetchImpl = (async () => chatReply(JSON.stringify({ tool_calls: [
+    { name: "write_file", arguments: { path: "round-trip.txt", content: "round-trip" } },
+    { name: "read_file", arguments: { path: "round-trip.txt" } },
+  ] }))) as unknown as typeof fetch;
+  const runTurn = createGatewayRunTurn({ baseUrl: "http://gw.test", model: "m", heartbeat: () => {}, fetchImpl });
+  const result = await runTurn({
+    agentId: `agt_roundtrip_${Date.now()}`,
+    messages: [message("write then read")],
+    config: {
+      systemPrompt: "You edit files.",
+      tools: [
+        { name: "write_file", effect: "workspace.write" },
+        { name: "read_file", effect: "workspace.read" },
+      ],
+      rung: { kind: "synthetic" },
+    },
+  });
+  const observations = (result.result as { observations: Array<{ ok: boolean; output?: unknown }> }).observations;
+  assert.equal(observations.length, 2);
+  assert.equal(observations[0]!.ok, true);
+  assert.equal(observations[1]!.ok, true);
+  assert.equal(new TextDecoder().decode(observations[1]!.output as Uint8Array), "round-trip");
+});
+
+test("the durable activity and a direct caller run the same engine body", async () => {
+  const bodies: string[] = [];
+  let engineRuns = 0;
+  const body = createGatewayAgentEngine({
+    baseUrl: "http://gw.test",
+    model: "m",
+    heartbeat: () => {},
+    systemPrompt: TRIAGE_SYSTEM_PROMPT,
+    buildUserMessage: (messages) => buildTriageUserMessage(messages),
+    fetchImpl: (async (_url: string, init: RequestInit) => {
+      bodies.push(String(init.body));
+      return chatReply('{"events":[{"classification":"news","reaction":"log it"}]}');
+    }) as unknown as typeof fetch,
+  });
+  const engine: AgentEngine = {
+    async run(messages, context) {
+      engineRuns++;
+      return body.run(messages, context);
+    },
+  };
+
+  // Durable path: the workflow's runTurn activity.
+  const runTurn = createGatewayRunTurn({ baseUrl: "http://gw.test", model: "m", heartbeat: () => {}, engine });
+  await runTurn({ agentId: "agt_shared", messages: [message("event one")] });
+
+  // Direct (non-Temporal) path: exactly what an in-process driver does with the
+  // shared body. The workflow is the runtime, but the body is not Temporal-only.
+  const context: AgentEngineContext = {
+    agentId: "agt_shared" as AgentId,
+    workspaceId: "temporal:agt_shared" as WorkspaceId,
+    definition: { id: "def", inferenceProfile: { id: "m", model: "m" } },
+    inferenceProfile: { id: "m", model: "m" },
+    signal: new AbortController().signal,
+    emitOutput: () => {},
+    emitTool: () => {},
+  };
+  await engine.run([{ id: "m1", role: "human", text: "event one", createdAt: 1 }], context);
+
+  assert.equal(engineRuns, 2, "both callers must go through the one shared body");
+  assert.equal(bodies.length, 2, "both callers must reach the gateway through that body");
+  assert.equal(bodies[0], bodies[1], "the shared body must build the same request for both callers");
 });

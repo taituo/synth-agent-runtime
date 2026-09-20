@@ -1,18 +1,31 @@
 import { ApplicationFailure, Context as ActivityContext } from "@temporalio/activity";
-import type { AgentActivities, DurableMailboxMessage, RunTurnInput, RunTurnResult } from "./contracts.js";
-import { parseRetryHintMs } from "./retry-hints.js";
+import type { AgentId, WorkspaceId } from "../../../src/core/ids.js";
+import type { AgentMessage } from "../../../src/core/types.js";
+import { ExecutionBroker } from "../../../src/execution/broker.js";
+import { EXECUTOR_IMAGE } from "../../../src/execution/executor-image.js";
+import { KubernetesExecutor } from "../../../src/execution/kubernetes/executor.js";
+import { KubectlSandboxBackend } from "../../../src/execution/kubernetes/kubectl-backend.js";
+import { WarmSandboxPool } from "../../../src/execution/kubernetes/pool.js";
+import { DEFAULT_KUBERNETES_RESOURCE_CLASSES } from "../../../src/execution/resource-class.js";
+import { SyntheticExecutor } from "../../../src/execution/synthetic.js";
+import type { Effect, EffectResult } from "../../../src/execution/types.js";
+import type { AgentEngine, AgentEngineContext } from "../../../src/runtime/agent-engine.js";
+import {
+  GatewayHttpError,
+  createGatewayAgentEngine,
+  type GatewayAgentEngineOptions,
+  type GatewayToolCall,
+  type GatewayToolObservation,
+  type GatewayTurnOutcome,
+} from "../../../src/runtime/gateway-engine.js";
+import { MemoryWorkspace } from "../../../src/workspace/memory-workspace.js";
+import type { AgentActivities, DurableMailboxMessage, DurableRungConfig, DurableToolSpec, RunTurnInput, RunTurnResult } from "./contracts.js";
 
 /**
- * HTTP statuses that will never succeed on retry (bad request, auth, missing
- * route/model, validation). Everything else — 408/409/425/429, 5xx, timeouts,
- * network errors, empty or malformed completions — is treated as transient and
- * left to Temporal's retry policy and, after that, the workflow's park/backoff.
- */
-const PERMANENT_HTTP_STATUSES = new Set([400, 401, 402, 403, 404, 422]);
-
-/**
- * A `runTurn` activity that does REAL inference through an OpenAI-compatible
- * gateway (this repo's own gateway, or any Chat Completions endpoint).
+ * The `runTurn` activity. It is a thin Temporal adapter: it maps the durable
+ * mailbox input into the shared turn body (`GatewayAgentEngine`, in `src/`) and
+ * the turn outcome back into the workflow's result shape. It does NOT make the
+ * model HTTP call itself — that would be a second turn implementation.
  *
  * Task given to the model: classify each event in the turn's batch. The typed
  * `kind` tag on a message is deliberately NEVER sent to the model, so it stays
@@ -29,6 +42,14 @@ const PERMANENT_HTTP_STATUSES = new Set([400, 401, 402, 403, 404, 422]);
  * model the activity heartbeats, because the workflow configures a heartbeat
  * timeout and a slow (reasoning) model would otherwise be failed for silence.
  */
+
+/**
+ * HTTP statuses that will never succeed on retry (bad request, auth, missing
+ * route/model, validation). Everything else — 408/409/425/429, 5xx, timeouts,
+ * network errors, empty or malformed completions — is treated as transient and
+ * left to Temporal's retry policy and, after that, the workflow's park/backoff.
+ */
+const PERMANENT_HTTP_STATUSES = new Set([400, 401, 402, 403, 404, 422]);
 
 export const EVENT_CLASSES = ["news", "social_post", "incident"] as const;
 export type EventClass = (typeof EVENT_CLASSES)[number];
@@ -52,7 +73,29 @@ export interface GatewayTurnRecord {
   modelSubstituted: boolean;
   latencyMs: number;
   usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+  /** Present only on a tool-configured turn: the calls the model asked for. */
+  toolCalls?: GatewayToolCall[];
+  /** Present only on a tool-configured turn: how each call fared on the rung. */
+  observations?: GatewayToolObservation[];
+  /** Present only on a tool-configured turn: the assistant's raw content. */
+  content?: string;
 }
+
+/**
+ * The resolved execution rung for one turn: the `executeEffect` the shared
+ * engine calls for each tool call. `synthetic` is the in-memory workspace;
+ * `sandbox` escalates `process.exec` to Kubernetes/gVisor.
+ */
+export interface TurnRung {
+  executeEffect(effect: Effect, minFidelity?: number): Promise<EffectResult>;
+  close?(): Promise<void>;
+}
+
+/** Resolves a serializable rung selection into a live rung for one turn. */
+export type RungFactory = (
+  config: Exclude<DurableRungConfig, { kind: "none" }>,
+  input: RunTurnInput,
+) => TurnRung | Promise<TurnRung>;
 
 export interface GatewayRunTurnOptions {
   /** Base URL of the gateway, without a trailing path (e.g. http://127.0.0.1:8787). */
@@ -68,6 +111,17 @@ export interface GatewayRunTurnOptions {
   heartbeat?: () => void;
   /** Called with one record per successful turn (in-process observers, e.g. a live driver). */
   onTurn?: (record: GatewayTurnRecord) => void;
+  /**
+   * The shared turn body. Defaults to `GatewayAgentEngine` configured for event
+   * triage; tests inject one to observe that the activity really runs it.
+   */
+  engine?: AgentEngine;
+  /**
+   * Resolves the turn's serializable rung selection into a live execution rung.
+   * Defaults to the synthetic/sandbox factory in this module; tests inject one
+   * to observe executor calls.
+   */
+  rungFactory?: RungFactory;
 }
 
 export const TRIAGE_SYSTEM_PROMPT = [
@@ -133,77 +187,204 @@ function currentAttempt(): number {
   }
 }
 
-export function createGatewayRunTurn(options: GatewayRunTurnOptions): AgentActivities["runTurn"] {
-  const doFetch = options.fetchImpl ?? fetch;
-  const heartbeat = options.heartbeat ?? defaultHeartbeat;
-  const timeoutMs = options.timeoutMs ?? 120_000;
-  const heartbeatIntervalMs = options.heartbeatIntervalMs ?? 10_000;
-  const url = `${options.baseUrl.replace(/\/$/, "")}/v1/chat/completions`;
+function toAgentMessage(message: DurableMailboxMessage): AgentMessage {
+  return { id: message.id, role: message.role, text: message.text, createdAt: message.createdAt };
+}
 
-  return async function runTurn(input: RunTurnInput): Promise<RunTurnResult> {
-    const startedAt = Date.now();
-    const headers: Record<string, string> = { "content-type": "application/json" };
-    if (options.apiKey) headers.authorization = `Bearer ${options.apiKey}`;
+function buildTurnContext(input: RunTurnInput, model: string, rung?: TurnRung): AgentEngineContext {
+  const inferenceProfile = { id: model, model };
+  return {
+    agentId: input.agentId as AgentId,
+    workspaceId: `temporal:${input.agentId}` as WorkspaceId,
+    definition: { id: input.agentId, inferenceProfile },
+    inferenceProfile,
+    signal: new AbortController().signal,
+    // The durable workflow owns observable state; the activity is pure compute.
+    emitOutput: () => {},
+    emitTool: () => {},
+    // Without a configured rung the shared engine refuses every tool call
+    // ("No effect executor configured") instead of silently dropping it.
+    ...(rung ? { executeEffect: (effect: Effect, minFidelity?: number) => rung.executeEffect(effect, minFidelity) } : {}),
+  };
+}
 
-    heartbeat();
-    const timer = setInterval(heartbeat, heartbeatIntervalMs);
-    let body: {
-      choices?: Array<{ message?: { content?: string | null } }>;
-      usage?: GatewayTurnRecord["usage"];
-      model?: string;
+/** Map the serializable tool surface to the engine's `toEffect` hook. */
+export function buildToEffect(tools: readonly DurableToolSpec[]): NonNullable<GatewayAgentEngineOptions["toEffect"]> {
+  const byName = new Map(tools.map((tool) => [tool.name, tool]));
+  return (call, context, index) => {
+    const spec = byName.get(call.name);
+    if (!spec) return undefined;
+    const arg = (name: string): string | undefined => {
+      const value = call.arguments[name];
+      if (value === undefined || value === null) return undefined;
+      return typeof value === "string" ? value : String(value);
     };
-    try {
-      const response = await doFetch(url, {
-        method: "POST",
-        headers,
-        signal: AbortSignal.timeout(timeoutMs),
-        body: JSON.stringify({
-          model: options.model,
-          messages: [
-            { role: "system", content: TRIAGE_SYSTEM_PROMPT },
-            { role: "user", content: buildTriageUserMessage(input.messages) },
-          ],
-        }),
-      });
-      const text = await response.text();
-      if (!response.ok) {
-        const message = `gateway returned HTTP ${response.status}: ${text.slice(0, 300)}`;
-        if (PERMANENT_HTTP_STATUSES.has(response.status)) {
-          throw ApplicationFailure.nonRetryable(message, `GatewayHTTP${response.status}`);
-        }
-        const retryAfterMs = parseRetryHintMs(response.headers);
-        if (retryAfterMs !== undefined && (response.status === 429 || response.status === 503)) {
-          // Carry the server's reset hint across the activity boundary so the
-          // workflow waits for the real window instead of a blind backoff.
-          throw ApplicationFailure.create({ message, type: "RateLimited", details: [{ retryAfterMs }] });
-        }
-        throw new Error(message);
+    const id = `${context.agentId}:${call.name}:${index}`;
+    switch (spec.effect) {
+      case "workspace.read":
+        return { id, kind: "workspace.read", path: arg(spec.pathArg ?? "path") ?? "" };
+      case "workspace.write":
+        return { id, kind: "workspace.write", path: arg(spec.pathArg ?? "path") ?? "", content: arg(spec.contentArg ?? "content") ?? "" };
+      case "workspace.delete":
+        return { id, kind: "workspace.delete", path: arg(spec.pathArg ?? "path") ?? "" };
+      case "workspace.list": {
+        const path = arg(spec.pathArg ?? "path");
+        return path === undefined ? { id, kind: "workspace.list" } : { id, kind: "workspace.list", path };
       }
-      body = JSON.parse(text);
-    } finally {
-      clearInterval(timer);
+      case "process.exec": {
+        const command = arg(spec.commandArg ?? "command") ?? "";
+        const cwd = arg(spec.cwdArg ?? "cwd");
+        const timeout = call.arguments[spec.timeoutArg ?? "timeoutMs"];
+        return {
+          id,
+          kind: "process.exec",
+          command,
+          ...(cwd !== undefined ? { cwd } : {}),
+          ...(typeof timeout === "number" ? { timeoutMs: timeout } : {}),
+          ...(spec.resourceClass ? { resourceClass: spec.resourceClass } : {}),
+        };
+      }
+    }
+  };
+}
+
+// Synthetic workspaces persist for the lifetime of the worker process, keyed by
+// workspace id, so a multi-turn tool run sees its earlier writes. Durability
+// across worker restarts is the materialization/checkpoint layer's job (the gym
+// branch), not the cheap rung's.
+const syntheticWorkspaces = new Map<string, MemoryWorkspace>();
+
+function seedWorkspace(workspaceId: WorkspaceId, files?: Record<string, string>): MemoryWorkspace {
+  let workspace = syntheticWorkspaces.get(workspaceId);
+  if (!workspace) {
+    workspace = new MemoryWorkspace({ id: workspaceId });
+    for (const [path, content] of Object.entries(files ?? {})) workspace.write(path, content);
+    syntheticWorkspaces.set(workspaceId, workspace);
+  }
+  return workspace;
+}
+
+async function sandboxRung(config: Exclude<DurableRungConfig, { kind: "none" }> & { kind: "sandbox" }, input: RunTurnInput): Promise<TurnRung> {
+  const image = config.image ?? EXECUTOR_IMAGE;
+  const classes = DEFAULT_KUBERNETES_RESOURCE_CLASSES
+    .filter((entry) => entry.id !== "project-cell")
+    .map((entry) => ({ ...entry, image }));
+  const backend = new KubectlSandboxBackend({
+    namespace: config.namespace ?? "synth-sandboxes",
+    ...(config.kubectlContext ? { context: config.kubectlContext } : {}),
+  });
+  const pool = new WarmSandboxPool(backend, classes);
+  await pool.maintain();
+  const workspaceId = `temporal:${input.agentId}` as WorkspaceId;
+  const workspace = seedWorkspace(workspaceId, config.files);
+  const workspaces = new Map<WorkspaceId, MemoryWorkspace>([[workspaceId, workspace]]);
+  const executors = [
+    new SyntheticExecutor(workspaces),
+    ...classes.map((resourceClass) => new KubernetesExecutor({ resourceClass, backend, workspaces, pool })),
+  ];
+  const broker = new ExecutionBroker(executors);
+  return {
+    executeEffect: (effect, minFidelity) => broker.execute(
+      effect,
+      {
+        agentId: input.agentId as AgentId,
+        workspaceId,
+        executionPolicy: { preferredClass: "sandbox-small", allowedClasses: classes.map((entry) => entry.id), allowEscalation: true },
+      },
+      minFidelity,
+    ),
+    close: () => pool.close(),
+  };
+}
+
+/** Default rung factory: serializable config -> live synthetic/sandbox rung. */
+export const defaultRungFactory: RungFactory = (config, input) => {
+  if (config.kind === "synthetic") {
+    const workspaceId = (config.workspaceId ?? `temporal:${input.agentId}`) as WorkspaceId;
+    const workspace = seedWorkspace(workspaceId, config.files);
+    const workspaces = new Map<WorkspaceId, MemoryWorkspace>([[workspaceId, workspace]]);
+    const broker = new ExecutionBroker([new SyntheticExecutor(workspaces)]);
+    return {
+      executeEffect: (effect, minFidelity) => broker.execute(effect, { agentId: input.agentId as AgentId, workspaceId }, minFidelity),
+    };
+  }
+  return sandboxRung(config, input);
+};
+
+/** Translate the shared body's status-carrying error into Temporal's retry taxonomy. */
+function toTemporalError(error: unknown): unknown {
+  if (error instanceof GatewayHttpError) {
+    if (PERMANENT_HTTP_STATUSES.has(error.status)) {
+      return ApplicationFailure.nonRetryable(error.message, `GatewayHTTP${error.status}`);
+    }
+    if (error.retryAfterMs !== undefined && (error.status === 429 || error.status === 503)) {
+      // Carry the server's reset hint across the activity boundary so the
+      // workflow waits for the real window instead of a blind backoff.
+      return ApplicationFailure.create({ message: error.message, type: "RateLimited", details: [{ retryAfterMs: error.retryAfterMs }] });
+    }
+  }
+  return error;
+}
+
+export function createGatewayRunTurn(options: GatewayRunTurnOptions): AgentActivities["runTurn"] {
+  return async function runTurn(input: RunTurnInput): Promise<RunTurnResult> {
+    const config = input.config ?? {};
+    const toolMode = (config.tools?.length ?? 0) > 0;
+
+    // Resolve the turn's execution rung from the serializable selection. No rung
+    // (or `none`) leaves `executeEffect` unset, so the shared engine refuses
+    // tool calls rather than dropping them.
+    let rung: TurnRung | undefined;
+    if (config.rung && config.rung.kind !== "none") {
+      rung = await (options.rungFactory ?? defaultRungFactory)(config.rung, input);
     }
 
-    const content = body.choices?.[0]?.message?.content;
-    if (typeof content !== "string" || content.length === 0) throw new Error("gateway reply had no message content");
-    const classifications = parseClassifications(content, input.messages.length);
+    // The one turn body. Configured per turn from the carried config; a
+    // tool-configured turn returns observations, the triage turn classifications.
+    const engine = options.engine ?? createGatewayAgentEngine({
+      baseUrl: options.baseUrl,
+      model: options.model,
+      ...(options.apiKey ? { apiKey: options.apiKey } : {}),
+      ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+      ...(options.heartbeatIntervalMs !== undefined ? { heartbeatIntervalMs: options.heartbeatIntervalMs } : {}),
+      ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+      heartbeat: options.heartbeat ?? defaultHeartbeat,
+      systemPrompt: config.systemPrompt ?? TRIAGE_SYSTEM_PROMPT,
+      buildUserMessage: config.systemPrompt
+        ? (messages) => messages.map((message) => message.text).join("\n")
+        : (messages) => buildTriageUserMessage(messages),
+      ...(config.tools ? { toEffect: buildToEffect(config.tools) } : {}),
+    });
 
-    // The upstream is the only authority on which model answered. If it omits the
-    // field we record `null` (unknown) rather than back-filling the requested id,
-    // which would hide a router substitution behind failover or cooldown.
-    const servedModel = typeof body.model === "string" && body.model.trim() ? body.model.trim() : null;
+    const messages = input.messages.map(toAgentMessage);
+    let outcome: GatewayTurnOutcome;
+    try {
+      outcome = (await engine.run(messages, buildTurnContext(input, options.model, rung))) as GatewayTurnOutcome;
+    } catch (error) {
+      throw toTemporalError(error);
+    } finally {
+      await rung?.close?.();
+    }
+
+    const classifications = toolMode ? [] : parseClassifications(outcome.content, input.messages.length);
     const record: GatewayTurnRecord = {
       agentId: input.agentId,
       attempt: currentAttempt(),
       plantedKinds: input.messages.map((message) => message.kind ?? null),
       classifications,
-      requestedModel: options.model,
-      servedModel,
-      modelSubstituted: servedModel !== null && servedModel !== options.model,
-      latencyMs: Date.now() - startedAt,
-      ...(body.usage ? { usage: body.usage } : {}),
+      requestedModel: outcome.requestedModel ?? options.model,
+      // The upstream is the only authority on which model answered. If it omits
+      // the field we record `null` (unknown) rather than back-filling the
+      // requested id, which would hide a router substitution.
+      servedModel: outcome.servedModel ?? null,
+      modelSubstituted: outcome.modelSubstituted ?? false,
+      latencyMs: outcome.latencyMs ?? 0,
+      ...(outcome.usage ? { usage: outcome.usage } : {}),
+      ...(toolMode ? { toolCalls: outcome.toolCalls, observations: outcome.observations, content: outcome.content } : {}),
     };
     options.onTurn?.(record);
-    return { result: { classifications, latencyMs: record.latencyMs }, state: "idle" };
+    return toolMode
+      ? { result: { content: outcome.content, toolCalls: outcome.toolCalls, observations: outcome.observations, latencyMs: record.latencyMs }, state: "idle" }
+      : { result: { classifications, latencyMs: record.latencyMs }, state: "idle" };
   };
 }

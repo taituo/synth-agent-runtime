@@ -71,7 +71,11 @@ export async function durableAgentWorkflow(initial: DurableAgentState): Promise<
     // this turn.
     const consumedCount = state.mailbox.length;
     try {
-      const result = await runTurn({ agentId: state.agentId, messages: clone(state.mailbox) });
+      const result = await runTurn({
+        agentId: state.agentId,
+        messages: clone(state.mailbox),
+        ...(state.turnConfig ? { config: clone(state.turnConfig) } : {}),
+      });
       state.lastResult = result.result;
       const returned = result.state ?? "idle";
       state.updatedAt = Date.now();
