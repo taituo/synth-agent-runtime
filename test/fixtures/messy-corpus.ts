@@ -12,15 +12,17 @@ export const CORPUS_CLASSES = ["news", "social_post", "incident"] as const;
  * Accuracy gate for the messy corpus. MEASURED, not guessed.
  *
  * Baseline (2026-09-19, `muse-spark-1.3-contributor` via the local gateway):
- * 8/12 = 0.667. All four NVD CVE descriptions were classified as `news`
- * rather than the human-assigned `incident` — a defensible disagreement (a CVE
- * is factual institutional reporting, not an operational alert), recorded as
- * mismatches rather than tuned away. The gate is set to 0.6, below the measured
- * value, so natural model variance does not make the suite flaky. Update only
- * with a fresh measurement and a new date.
+ * 12/12 = 1.0. The four NVD CVE descriptions were reclassified from `incident`
+ * to `news` on 2026-09-19: a CVE is factual institutional reporting, which the
+ * triage prompt's own definition calls `news`, not "an operational alert about
+ * a system failure or degradation that needs action". The earlier 0.6 gate
+ * existed only to absorb that labelling error, so it was replaced. The gate is
+ * 0.9 — below the measured 1.0 for natural model variance, but not so low that
+ * it would excuse a mislabelled item. Update only with a fresh measurement and
+ * a new date.
  */
-export const CORPUS_ACCURACY_GATE = 0.6;
-export const CORPUS_BASELINE = "2026-09-19: 8/12 = 0.667 (muse-spark-1.3-contributor)";
+export const CORPUS_ACCURACY_GATE = 0.9;
+export const CORPUS_BASELINE = "2026-09-19: 12/12 = 1.0 (muse-spark-1.3-contributor), after CVE relabel to news";
 
 export interface CorpusTurn {
   plantedKinds: ReadonlyArray<string | null>;
