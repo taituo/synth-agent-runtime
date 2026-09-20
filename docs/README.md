@@ -46,6 +46,7 @@ archived under [`history/`](history/); unwired modules are in
 ## Status and verification
 
 - [`KNOWN-OPEN.md`](KNOWN-OPEN.md) — **current**: deliberately unfinished work, one line each on why it is open and what closing it needs.
+- [`VERIFICATION.md`](VERIFICATION.md) — **current**: the verification standard, how to run the set (`npm run verify`), and the permanent regression test behind each demonstrated attack.
 - [`VERIFICATION-LOG.md`](VERIFICATION-LOG.md) — failing-first evidence: per commit, the mutation applied, the failure it produced, and the restore.
 
 ## Other

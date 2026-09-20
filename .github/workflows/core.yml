@@ -28,5 +28,17 @@ jobs:
         run: npm install --prefix integrations/temporal
       - run: npm run build --prefix integrations/temporal
       - run: npm test --prefix integrations/temporal
-      - name: live proofs (infra-absent proofs skip honestly, never pass)
-        run: node scripts/live-proofs.mjs
+      - name: install the Temporal CLI
+        uses: temporalio/setup-temporal@v0
+      # Start a real dev server and run the Temporal-dependent proofs in one
+      # step so the background server is alive for them. `live-proofs.mjs`
+      # exits 2 when any selected proof skips, so a missing server fails the
+      # job instead of silently passing on skips.
+      - name: Temporal live proofs against a dev server
+        run: |
+          temporal server start-dev --headless --port 7243 --db-filename /tmp/temporal-dev.db > /tmp/temporal-dev.log 2>&1 &
+          for _ in $(seq 1 60); do
+            if (exec 3<>/dev/tcp/127.0.0.1/7243) 2>/dev/null; then echo "temporal 127.0.0.1:7243 is up"; break; fi
+            sleep 1
+          done
+          node scripts/live-proofs.mjs --only=graph-restart,durable-restart,graph-child,graph-continue-as-new,graph-cancel,effect-receipt --timeout=600000

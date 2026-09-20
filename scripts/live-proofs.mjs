@@ -179,10 +179,17 @@ for (const proof of selected) {
 
 const summary = results.reduce((acc, result) => { acc[result.status] = (acc[result.status] ?? 0) + 1; return acc; }, {});
 const failures = (summary.failed ?? 0) + (summary.timedout ?? 0);
+const skips = summary.skipped ?? 0;
 if (asJson) {
   console.log(JSON.stringify({ summary, results: results.map((r) => ({ name: r.proof.name, status: r.status, code: r.code, durationMs: r.durationMs, requires: r.proof.requires })) }, null, 2));
 } else {
   console.log(`\npassed ${summary.passed ?? 0}  skipped ${summary.skipped ?? 0}  failed ${summary.failed ?? 0}  timedout ${summary.timedout ?? 0}  (of ${results.length})`);
-  if ((summary.skipped ?? 0) > 0) console.log("a skip means its `requires` was unavailable; it is not a pass");
+  if (skips > 0) console.log("a skip means its `requires` was unavailable; it is not a pass");
 }
-process.exit(failures > 0 ? 1 : 0);
+// Exit codes: 0 all selected proofs passed, 1 any failed/timed out,
+// 2 any skipped (including a skip-only run). A skip is never a pass
+// (standing order 6), so a run that did not execute every selected proof
+// must not exit 0.
+if (failures > 0) process.exit(1);
+if (skips > 0) process.exit(2);
+process.exit(0);

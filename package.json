@@ -13,6 +13,7 @@
     "chaos:matrix": "npm run build && node scripts/chaos-matrix.mjs",
     "responses:contract": "npm run build && node --test dist/test/responses.test.js",
     "integrations:syntax": "node scripts/check-integrations.mjs",
+    "verify": "node scripts/verify.mjs",
     "models:list": "node scripts/models.mjs",
     "secret-scan": "node scripts/secret-scan.mjs",
     "scorer:isolation-probe": "node scripts/scorer-isolation-probe.mjs",
