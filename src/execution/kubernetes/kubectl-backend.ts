@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { dirname, posix } from "node:path";
+import { withSpan } from "../../observability/otel.js";
 import type { KubernetesResourceClass } from "../resource-class.js";
 import { assertValidNamespace, buildRestrictedNamespace, buildSandboxNetworkPolicy, buildSandboxPod } from "./manifests.js";
 import type { KubernetesObject, SandboxBackend, SandboxExecRequest, SandboxExecResult, SandboxIdentity } from "./types.js";
@@ -169,6 +170,14 @@ export class KubectlSandboxBackend implements SandboxBackend {
   }
 
   async exec(sandbox: SandboxIdentity, request: SandboxExecRequest): Promise<SandboxExecResult> {
+    return withSpan("synth.sandbox.exec", { "sandbox.id": sandbox.id, "sandbox.pod": sandbox.podName, command: request.command }, async (span) => {
+      const result = await this.#exec(sandbox, request);
+      span.setAttribute("exitCode", result.exitCode);
+      return result;
+    });
+  }
+
+  async #exec(sandbox: SandboxIdentity, request: SandboxExecRequest): Promise<SandboxExecResult> {
     const cwd = request.cwd ? safeWorkspacePath(request.cwd) : "/workspace";
     // /workspace is an emptyDir owned by root and group-owned by the pod's
     // fsGroup; the pod runs as a non-root uid, so git refuses to operate in it
@@ -205,6 +214,10 @@ export class KubectlSandboxBackend implements SandboxBackend {
   }
 
   async writeFile(sandbox: SandboxIdentity, path: string, content: Uint8Array): Promise<void> {
+    return withSpan("synth.sandbox.writeFile", { "sandbox.id": sandbox.id, path }, () => this.#writeFile(sandbox, path, content));
+  }
+
+  async #writeFile(sandbox: SandboxIdentity, path: string, content: Uint8Array): Promise<void> {
     const full = safeWorkspacePath(path);
     const parent = dirname(full).replace(/\\/g, "/");
     const script = `mkdir -p ${shQuote(parent)} && base64 -d > ${shQuote(full)}`;
@@ -218,6 +231,10 @@ export class KubectlSandboxBackend implements SandboxBackend {
   }
 
   async readFile(sandbox: SandboxIdentity, path: string): Promise<Uint8Array> {
+    return withSpan("synth.sandbox.readFile", { "sandbox.id": sandbox.id, path }, () => this.#readFile(sandbox, path));
+  }
+
+  async #readFile(sandbox: SandboxIdentity, path: string): Promise<Uint8Array> {
     const full = safeWorkspacePath(path);
     const script = `base64 ${shQuote(full)} | tr -d '\\n'`;
     const result = await this.#run(

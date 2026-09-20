@@ -1,6 +1,7 @@
 import type { AgentMessage } from "../core/types.js";
 import type { Effect } from "../execution/types.js";
 import { parseRetryHintMs } from "../inference/gateway/retry-hint.js";
+import { withSpan } from "../observability/otel.js";
 import type { AgentEngine, AgentEngineContext } from "./agent-engine.js";
 
 /**
@@ -142,7 +143,12 @@ export class GatewayAgentEngine implements AgentEngine {
     this.#url = `${options.baseUrl.replace(/\/$/, "")}/v1/chat/completions`;
   }
 
+  /** One agent turn, as one span in the caller's trace. */
   async run(messages: readonly AgentMessage[], context: AgentEngineContext): Promise<GatewayTurnOutcome> {
+    return withSpan("synth.engine.run", { model: this.#options.model, messages: messages.length }, () => this.#run(messages, context));
+  }
+
+  async #run(messages: readonly AgentMessage[], context: AgentEngineContext): Promise<GatewayTurnOutcome> {
     const startedAt = Date.now();
     const headers: Record<string, string> = { "content-type": "application/json" };
     if (this.#options.apiKey) headers.authorization = `Bearer ${this.#options.apiKey}`;
@@ -155,19 +161,21 @@ export class GatewayAgentEngine implements AgentEngine {
       usage?: GatewayUsage;
     };
     try {
-      const response = await this.#doFetch(this.#url, {
-        method: "POST",
-        headers,
-        signal: AbortSignal.timeout(this.#timeoutMs),
-        body: JSON.stringify({
-          model: this.#options.model,
-          messages: [
-            { role: "system", content: this.#options.systemPrompt },
-            { role: "user", content: this.#options.buildUserMessage(messages) },
-          ],
-        }),
+      const { response, text } = await withSpan("synth.model.request", { model: this.#options.model }, async () => {
+        const response = await this.#doFetch(this.#url, {
+          method: "POST",
+          headers,
+          signal: AbortSignal.timeout(this.#timeoutMs),
+          body: JSON.stringify({
+            model: this.#options.model,
+            messages: [
+              { role: "system", content: this.#options.systemPrompt },
+              { role: "user", content: this.#options.buildUserMessage(messages) },
+            ],
+          }),
+        });
+        return { response, text: await response.text() };
       });
-      const text = await response.text();
       if (!response.ok) {
         const message = `gateway returned HTTP ${response.status}: ${text.slice(0, 300)}`;
         throw new GatewayHttpError(message, response.status, parseRetryHintMs(response.headers));

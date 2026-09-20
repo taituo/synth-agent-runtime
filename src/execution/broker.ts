@@ -1,4 +1,5 @@
 import type { RuntimeStateStore } from "../durability/runtime-state.js";
+import { withSpan } from "../observability/otel.js";
 import type { Effect, EffectContext, EffectResult, Executor } from "./types.js";
 
 export class ExecutionBroker {
@@ -15,7 +16,20 @@ export class ExecutionBroker {
    * uncertain external side effect after a crash and is not automatically
    * repeated. This favors duplicate prevention over blind retry.
    */
+  /** One effect, as one span, tagged with the executor that served it. */
   async execute(effect: Effect, context: EffectContext, minFidelity = 0): Promise<EffectResult> {
+    const startedAt = Date.now();
+    return withSpan("synth.effect.execute", { "effect.kind": effect.kind, "effect.id": effect.id }, async (span) => {
+      const result = await this.#execute(effect, context, minFidelity);
+      span.setAttribute("effect.ok", result.ok);
+      if (result.executor) span.setAttribute("executor", result.executor);
+      if (result.fidelity !== undefined) span.setAttribute("fidelity", result.fidelity);
+      span.setAttribute("durationMs", Date.now() - startedAt);
+      return result;
+    });
+  }
+
+  async #execute(effect: Effect, context: EffectContext, minFidelity = 0): Promise<EffectResult> {
     const existing = await this.state?.getEffect(effect.id);
     if (existing?.status === "committed") return structuredClone(existing.result) as EffectResult;
     if (existing?.status === "failed") {

@@ -31,5 +31,8 @@
   "devDependencies": {
     "@types/node": "22.20.4",
     "typescript": "5.9.3"
+  },
+  "dependencies": {
+    "@opentelemetry/api": "^1.9.1"
   }
 }
