@@ -18,7 +18,7 @@
  * the git baseline harvest diffs against.
  */
 import { lstat, readFile, readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 import {
   DEFAULT_KUBERNETES_RESOURCE_CLASSES,
   ExecutionBroker,
@@ -139,7 +139,27 @@ export async function buildSandboxRunner(options: BuildSandboxRunnerOptions): Pr
     agentId: (options.agentId ?? "gym-agent") as never,
     workspaceId: workspace.id,
   };
-  const runner = brokerEffectRunner(broker, context, "sandbox");
+  const raw = brokerEffectRunner(broker, context, "sandbox");
+  const repoRoot = options.repoDir;
+  // `runGymAttempt` passes host absolute paths (`task.repoDir`) as `cwd` for its
+  // git commands (harvest, checkpoint restore). Inside the pod the workspace
+  // root IS the repo, so translate that path to the workspace root; any path
+  // under it becomes workspace-relative. Without this the pod runs
+  // `cd /workspace/tmp/<host path>` and every git command fails.
+  const translatedCwd = (cwd: string | undefined): string | undefined => {
+    if (cwd === undefined) return undefined;
+    if (cwd === repoRoot) return undefined;
+    const rel = relative(repoRoot, cwd);
+    if (rel !== "" && !rel.startsWith("..") && !rel.split(sep).includes("..")) return rel;
+    return cwd;
+  };
+  const runner: EffectRunner = {
+    ...raw,
+    async exec(command, options_ = {}) {
+      const cwd = translatedCwd(options_.cwd);
+      return raw.exec(command, cwd === undefined ? { ...options_, cwd: undefined } : { ...options_, cwd });
+    },
+  };
   return {
     runner,
     async close() {
