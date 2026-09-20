@@ -1,0 +1,157 @@
+/**
+ * Gym scoring + anti-cheat. The score comes from applying the agent's patch to
+ * a fresh checkout and running a held-out test; tampering is a distinct outcome
+ * from failure.
+ */
+import test from "node:test";
+import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { promisify } from "node:util";
+import { parsePatchPaths, scoreGymPatch } from "../src/index.js";
+
+const execFileAsync = promisify(execFile);
+
+const BUGGY = `export function slugify(text) {\n  return String(text).toUpperCase().replace(/[^A-Z0-9]+/g, "-");\n}\n`;
+const FIXED = `export function slugify(text) {\n  return String(text).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");\n}\n`;
+const VISIBLE = `import test from "node:test";\nimport assert from "node:assert/strict";\nimport { slugify } from "../lib.mjs";\ntest("slugify lowercases and hyphenates", () => { assert.equal(slugify("Hello World"), "hello-world"); });\n`;
+
+async function git(cwd: string, ...args: string[]): Promise<string> {
+  const { stdout } = await execFileAsync("git", args, { cwd });
+  return stdout;
+}
+
+/** A pinned base checkout with the planted bug and the visible (read-only) test. */
+async function makeTaskRepo(parent: string, lib = BUGGY): Promise<string> {
+  const repo = join(parent, "task");
+  await mkdir(join(repo, "test"), { recursive: true });
+  await writeFile(join(repo, "lib.mjs"), lib);
+  await writeFile(join(repo, "test/visible.test.mjs"), VISIBLE);
+  await writeFile(join(repo, "package.json"), JSON.stringify({ name: "gym-task", type: "module" }));
+  await git(repo, "init", "-q");
+  await git(repo, "config", "user.email", "t@example.com");
+  await git(repo, "config", "user.name", "tester");
+  await git(repo, "add", "-A");
+  await git(repo, "commit", "-q", "-m", "base with planted bug");
+  return repo;
+}
+
+/** Hidden test the agent never sees: cases the visible test does not cover. */
+async function makeHiddenTest(parent: string, sleepMs = 0): Promise<string> {
+  const path = join(parent, "hidden.test.mjs");
+  await writeFile(
+    path,
+    [
+      'import test from "node:test";',
+      'import assert from "node:assert/strict";',
+      'import { slugify } from "./lib.mjs";',
+      `test("hidden", async () => {${sleepMs ? ` await new Promise((r) => setTimeout(r, ${sleepMs}));` : ""} assert.equal(slugify(""), ""); assert.equal(slugify("  A  B "), "a-b"); assert.equal(slugify("a__b--c"), "a-b-c"); });`,
+      "",
+    ].join("\n"),
+  );
+  return path;
+}
+
+/** Produce a patch by mutating the repo, diffing, then resetting. */
+async function patchFor(repo: string, mutate: (repo: string) => Promise<void>): Promise<string> {
+  await mutate(repo);
+  const patch = await git(repo, "diff");
+  await git(repo, "reset", "--hard");
+  return patch;
+}
+
+test("a correct fix passes the held-out test", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "gym-"));
+  try {
+    const repo = await makeTaskRepo(parent);
+    const hidden = await makeHiddenTest(parent);
+    const patch = await patchFor(repo, (dir) => writeFile(join(dir, "lib.mjs"), FIXED));
+    const score = await scoreGymPatch({ patchText: patch, baseRepoDir: repo, hiddenTestPath: hidden });
+    assert.equal(score.outcome, "passed", score.hiddenOutput);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("a wrong fix fails the held-out test", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "gym-"));
+  try {
+    const repo = await makeTaskRepo(parent);
+    const hidden = await makeHiddenTest(parent);
+    const patch = await patchFor(repo, (dir) => writeFile(join(dir, "lib.mjs"), `${BUGGY}// touched\n`));
+    const score = await scoreGymPatch({ patchText: patch, baseRepoDir: repo, hiddenTestPath: hidden });
+    assert.equal(score.outcome, "failed", `got ${score.outcome}: ${score.hiddenOutput ?? score.detail}`);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("a constant stub passes the visible test but fails the held-out test", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "gym-"));
+  try {
+    const repo = await makeTaskRepo(parent);
+    const hidden = await makeHiddenTest(parent);
+    const patch = await patchFor(repo, (dir) => writeFile(join(dir, "lib.mjs"), 'export function slugify() { return "hello-world"; }\n'));
+    // The visible test would pass; the hidden test (empty, repeats, spacing) fails.
+    const score = await scoreGymPatch({ patchText: patch, baseRepoDir: repo, hiddenTestPath: hidden });
+    assert.equal(score.outcome, "failed", "a constant-returning stub must not score");
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("deleting the visible test is tampering, not failure", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "gym-"));
+  try {
+    const repo = await makeTaskRepo(parent);
+    const hidden = await makeHiddenTest(parent);
+    const patch = await patchFor(repo, async (dir) => {
+      await rm(join(dir, "test/visible.test.mjs"));
+    });
+    assert.ok(parsePatchPaths(patch).includes("test/visible.test.mjs"));
+    const score = await scoreGymPatch({ patchText: patch, baseRepoDir: repo, hiddenTestPath: hidden });
+    assert.equal(score.outcome, "tampered");
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("editing the runner config is tampering", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "gym-"));
+  try {
+    const repo = await makeTaskRepo(parent);
+    const hidden = await makeHiddenTest(parent);
+    const patch = await patchFor(repo, (dir) => writeFile(join(dir, "package.json"), JSON.stringify({ name: "gym-task", type: "module", scripts: { test: "true" } })));
+    const score = await scoreGymPatch({ patchText: patch, baseRepoDir: repo, hiddenTestPath: hidden });
+    assert.equal(score.outcome, "tampered");
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("a patch that does not apply is errored", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "gym-"));
+  try {
+    const repo = await makeTaskRepo(parent);
+    const hidden = await makeHiddenTest(parent);
+    const score = await scoreGymPatch({ patchText: "this is not a patch", baseRepoDir: repo, hiddenTestPath: hidden });
+    assert.equal(score.outcome, "errored");
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("a hidden test that outlives the timeout is timed-out", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "gym-"));
+  try {
+    const repo = await makeTaskRepo(parent);
+    const hidden = await makeHiddenTest(parent, 5_000);
+    const patch = await patchFor(repo, (dir) => writeFile(join(dir, "lib.mjs"), FIXED));
+    const score = await scoreGymPatch({ patchText: patch, baseRepoDir: repo, hiddenTestPath: hidden, timeoutMs: 500 });
+    assert.equal(score.outcome, "timed-out", `got ${score.outcome}: ${score.hiddenOutput ?? score.detail}`);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
