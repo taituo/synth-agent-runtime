@@ -49,6 +49,8 @@ const SELF = resolve("integrations/gym/p2-faults.ts");
 
 interface ArmResult {
   arm: "plain" | "durable";
+  /** `control` = plain loop, no runtime; `temporal` = the `gymAttemptWorkflow`. */
+  role?: "control" | "temporal";
   outcome: string;
   callCount: number;
   turns: number;
@@ -197,6 +199,7 @@ async function runPlainOnce(args: Args, baseUrl: string, workDir: string): Promi
     });
     return {
       arm: "plain",
+      role: "control",
       outcome: record.outcome,
       callCount: record.callCount,
       turns: record.turns,
@@ -279,6 +282,7 @@ async function runDurableOnce(args: Args, baseUrl: string, workDir: string, faul
     if (raced && typeof raced === "object" && "__harnessTimeout" in raced) {
       return {
         arm: "durable",
+        role: "temporal",
         outcome: "harness-timeout",
         callCount: 0,
         turns: 0,
@@ -304,6 +308,7 @@ async function runDurableOnce(args: Args, baseUrl: string, workDir: string, faul
     };
     return {
       arm: "durable",
+      role: "temporal",
       outcome: output.outcome,
       callCount: output.callCount,
       turns: output.turns,
@@ -340,6 +345,7 @@ async function runPlainKilled(args: Args, baseUrl: string, workDir: string, sign
     const exited = await exitedPromise;
     return {
       arm: "plain",
+      role: "control",
       outcome: "lost",
       callCount: 0,
       turns: 0,

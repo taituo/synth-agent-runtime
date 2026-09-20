@@ -40,6 +40,14 @@ import { buildSandboxRunner } from "./sandbox.js";
 
 interface ArmResult {
   arm: "plain" | "durable";
+  /**
+   * Which arm this is, named. `control` is the same task with no runtime (a
+   * plain loop); `temporal` is the durable arm, driven by the `gymAttemptWorkflow`
+   * Temporal workflow and its activity, never a local direct call. The dry-run
+   * arm omits it: it simulates durability with a local retry, so calling it
+   * `temporal` would be false.
+   */
+  role?: "control" | "temporal";
   outcome: string;
   requestedModel: string | null;
   servedModel: string | null;
@@ -228,6 +236,7 @@ async function runLivePlain(
     });
     return {
       arm: "plain",
+      role: "control",
       outcome: record.outcome,
       requestedModel: record.requestedModel,
       servedModel: record.servedModel,
@@ -307,6 +316,7 @@ async function runDurableWorkflow(
   const output = (await handle.result()) as Omit<ArmResult, "arm" | "patchBytes"> & { detail?: string; error?: string };
   return {
     arm: "durable",
+    role: "temporal",
     outcome: output.outcome,
     requestedModel: output.requestedModel,
     servedModel: output.servedModel,
