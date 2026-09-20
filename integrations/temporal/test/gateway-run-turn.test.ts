@@ -6,12 +6,14 @@ import { createGatewayAgentEngine } from "../../../src/runtime/gateway-engine.js
 import type { DurableMailboxMessage, DurableToolSpec } from "../src/contracts.js";
 import {
   TRIAGE_SYSTEM_PROMPT,
+  assertRungAllowedForScored,
   buildTriageUserMessage,
   createGatewayRunTurn,
   extractJsonObject,
   parseClassifications,
   type GatewayTurnRecord,
   type RungFactory,
+  type TurnRung,
 } from "../src/gateway-run-turn.js";
 
 function message(text: string, kind?: string): DurableMailboxMessage {
@@ -328,6 +330,14 @@ test("the default synthetic rung round-trips a write then read through the real 
   assert.equal(observations[0]!.ok, true);
   assert.equal(observations[1]!.ok, true);
   assert.equal(new TextDecoder().decode(observations[1]!.output as Uint8Array), "round-trip");
+});
+
+test("a scored run refuses an unisolated rung, accepts an isolated one", () => {
+  const unisolated: TurnRung = { executeEffect: async () => ({ ok: true }), isolated: false };
+  const isolated: TurnRung = { executeEffect: async () => ({ ok: true }), isolated: true };
+  assert.throws(() => assertRungAllowedForScored(unisolated, true), /UNISOLATED_RUNG_REFUSED/);
+  assert.doesNotThrow(() => assertRungAllowedForScored(isolated, true));
+  assert.doesNotThrow(() => assertRungAllowedForScored(unisolated, false), "an unscored cheap run may use the synthetic rung");
 });
 
 test("the durable activity and a direct caller run the same engine body", async () => {
