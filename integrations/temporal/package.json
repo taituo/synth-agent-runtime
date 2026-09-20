@@ -19,6 +19,7 @@
     "live:waiting-spin": "tsx waiting-spin-live.ts",
     "live:retry-hint": "tsx retry-hint-live.ts",
     "live:quota-exhausted": "tsx quota-exhausted-live.ts",
+    "live:openrouter-429": "tsx openrouter-429-driver.ts",
     "live:flaky-gateway": "tsx flaky-gateway.ts"
   },
   "dependencies": {
