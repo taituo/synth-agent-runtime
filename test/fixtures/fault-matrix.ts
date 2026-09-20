@@ -7,18 +7,20 @@
  * whether that difference is the one we claim. Rows that do not differentiate
  * the rungs say so explicitly.
  *
- * A row is a CLAIM, so every row is `status: "proven"` and carries an
- * `artifact`: a repo-relative path to the live proof or test that produced the
- * values. `test/fault-matrix.test.ts` asserts each artifact exists (and, for
- * the executor rows, that the synthetic behaviour it cites actually happens),
- * rather than comparing two hand-written fields to each other.
+ * A row is a CLAIM. `proven` means a live artifact executed the behaviour and
+ * recorded output; its `evidence` must begin `EXECUTED <date>:` and its
+ * `artifact` must be a runnable proof, not a unit test. `reasoned` means the
+ * behaviour was NOT measured under both rungs and is inferred from shared code
+ * instead; those rows carry a `rationale` and must not claim differentiation.
+ * `test/fault-matrix.test.ts` enforces both, so a filename cannot stand in for
+ * an executed proof.
  *
  * Faults we could NOT execute are not rows; they are listed in
  * `NOT_COVERED_FAULTS` and in the suite's "not covered" report.
  */
 export type Rung = "synthetic" | "real";
 export type FaultCategory = "provider" | "executor" | "temporal";
-export type FaultStatus = "proven" | "not-covered";
+export type FaultStatus = "proven" | "reasoned" | "not-covered";
 
 export interface FaultRow {
   id: string;
@@ -31,9 +33,11 @@ export interface FaultRow {
   /** True when the two rungs behave differently for this fault. */
   differentiates: boolean;
   status: FaultStatus;
-  /** Repo-relative path to the proof/test that produced these values. */
+  /** Repo-relative path to the proof that produced these values. */
   artifact: string;
   evidence: string;
+  /** Required for `reasoned` rows: why it was not measured under both rungs. */
+  rationale?: string;
 }
 
 export const FAULT_MATRIX: readonly FaultRow[] = [
@@ -44,9 +48,10 @@ export const FAULT_MATRIX: readonly FaultRow[] = [
     synthetic: "retry 3x, then park (waiting); recovers when upstream returns",
     real: "retry 3x, then park (waiting); recovers when upstream returns",
     differentiates: false,
-    status: "proven",
+    status: "reasoned",
     artifact: "integrations/temporal/park-live.ts",
     evidence: "park-live.ts + fault-scenarios always502/fail12 (park, then recover)",
+    rationale: "Reasoned from the shared HTTP classification and durable park path; a provider fault does not vary with the executor rung, so running both rungs would not change it.",
   },
   {
     id: "provider-429",
@@ -55,9 +60,10 @@ export const FAULT_MATRIX: readonly FaultRow[] = [
     synthetic: "retry (transient), then park; recovers",
     real: "retry (transient), then park; recovers",
     differentiates: false,
-    status: "proven",
+    status: "reasoned",
     artifact: "integrations/temporal/test/gateway-run-turn.test.ts",
     evidence: "gateway-run-turn.test.ts permanent-vs-transient HTTP classification (429 is transient)",
+    rationale: "Reasoned from the shared HTTP classification and durable park path; a provider fault does not vary with the executor rung, so running both rungs would not change it.",
   },
   {
     id: "provider-timeout",
@@ -66,9 +72,10 @@ export const FAULT_MATRIX: readonly FaultRow[] = [
     synthetic: "abort -> retry -> park; recovers when timeout raised",
     real: "abort -> retry -> park; recovers when timeout raised",
     differentiates: false,
-    status: "proven",
+    status: "reasoned",
     artifact: "integrations/temporal/park-live.ts",
     evidence: "fault-scenarios GATEWAY_TIMEOUT_MS=3000 (park) + hang1",
+    rationale: "Reasoned from the shared HTTP classification and durable park path; a provider fault does not vary with the executor rung, so running both rungs would not change it.",
   },
   {
     id: "provider-hang",
@@ -77,9 +84,10 @@ export const FAULT_MATRIX: readonly FaultRow[] = [
     synthetic: "client timeout -> retry -> recover",
     real: "client timeout -> retry -> recover",
     differentiates: false,
-    status: "proven",
+    status: "reasoned",
     artifact: "integrations/temporal/test/gateway-run-turn.test.ts",
     evidence: "gateway-run-turn.test.ts aborts a call that outlives its timeout; fault-scenarios hang1",
+    rationale: "Reasoned from the shared HTTP classification and durable park path; a provider fault does not vary with the executor rung, so running both rungs would not change it.",
   },
   {
     id: "provider-garbage",
@@ -88,9 +96,10 @@ export const FAULT_MATRIX: readonly FaultRow[] = [
     synthetic: "parse error -> retry -> recover",
     real: "parse error -> retry -> recover",
     differentiates: false,
-    status: "proven",
+    status: "reasoned",
     artifact: "integrations/temporal/test/gateway-run-turn.test.ts",
     evidence: "fault-scenarios garbage2; gateway-run-turn.test.ts rejects structurally invalid answers",
+    rationale: "Reasoned from the shared HTTP classification and durable park path; a provider fault does not vary with the executor rung, so running both rungs would not change it.",
   },
   {
     id: "provider-slow-ok",
@@ -99,9 +108,10 @@ export const FAULT_MATRIX: readonly FaultRow[] = [
     synthetic: "heartbeat while waiting -> success",
     real: "heartbeat while waiting -> success",
     differentiates: false,
-    status: "proven",
+    status: "reasoned",
     artifact: "integrations/temporal/swarm-inference-driver.ts",
     evidence: "live:swarm-inference (8-14s reasoning calls, heartbeat keeps it alive)",
+    rationale: "Reasoned from the shared HTTP classification and durable park path; a provider fault does not vary with the executor rung, so running both rungs would not change it.",
   },
   {
     id: "exec-success",
@@ -165,15 +175,23 @@ export const FAULT_MATRIX: readonly FaultRow[] = [
 /** Faults from the spec that we could NOT execute; kept out of the matrix. */
 export const NOT_COVERED_FAULTS = ["clock-jump"] as const;
 
-/** Faults the suite claims to prove; each must be a `proven` row. */
+/** Faults the suite claims to have EXECUTED; each must be a `proven` row. */
 export const REQUIRED_PROVEN_FAULT_IDS = [
+  "exec-sigkill",
+  "worker-sigkill-mid-turn",
+  "two-workers-race",
+] as const;
+
+/**
+ * Provider faults reasoned from shared code, not measured under both rungs. A
+ * provider fault does not vary with the executor rung, so the honest status is
+ * `reasoned`; running the rungs would not change the row.
+ */
+export const REQUIRED_REASONED_FAULT_IDS = [
   "provider-502",
   "provider-429",
   "provider-timeout",
   "provider-hang",
   "provider-garbage",
   "provider-slow-ok",
-  "exec-sigkill",
-  "worker-sigkill-mid-turn",
-  "two-workers-race",
 ] as const;

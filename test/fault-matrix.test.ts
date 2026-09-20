@@ -18,7 +18,12 @@ import {
   type Executor,
   type WorkspaceId,
 } from "../src/index.js";
-import { FAULT_MATRIX, NOT_COVERED_FAULTS, REQUIRED_PROVEN_FAULT_IDS } from "./fixtures/fault-matrix.js";
+import {
+  FAULT_MATRIX,
+  NOT_COVERED_FAULTS,
+  REQUIRED_PROVEN_FAULT_IDS,
+  REQUIRED_REASONED_FAULT_IDS,
+} from "./fixtures/fault-matrix.js";
 
 function context(workspaceId: WorkspaceId): EffectContext {
   return { agentId: "agt_matrix" as EffectContext["agentId"], workspaceId };
@@ -34,22 +39,35 @@ function fakeRealExecutor(): Executor {
   };
 }
 
-test("every proven fault has a row citing an existing proof artifact", () => {
+test("proven rows cite an EXECUTED live artifact; reasoned rows say why", () => {
   const byId = new Map(FAULT_MATRIX.map((row) => [row.id, row]));
   for (const required of REQUIRED_PROVEN_FAULT_IDS) {
     const row = byId.get(required);
     assert.ok(row, `missing fault row: ${required}`);
     assert.equal(row!.status, "proven", `${required}: must be proven`);
-    assert.ok(row!.evidence.length > 0, `${required}: needs evidence`);
+    assert.match(row!.evidence, /^EXECUTED \d{4}-\d{2}-\d{2}:/, `${required}: proven evidence must record an executed run`);
+    assert.ok(!row!.artifact.endsWith(".test.ts"), `${required}: a unit test is not an executed rung proof`);
     assert.ok(existsSync(resolve(row!.artifact)), `${required}: artifact does not exist: ${row!.artifact}`);
+  }
+  for (const required of REQUIRED_REASONED_FAULT_IDS) {
+    const row = byId.get(required);
+    assert.ok(row, `missing fault row: ${required}`);
+    assert.equal(row!.status, "reasoned", `${required}: must be reasoned, not proven`);
+    assert.ok((row!.rationale ?? "").length > 0, `${required}: reasoned rows need a rationale`);
+    assert.equal(row!.differentiates, false, `${required}: an unmeasured row must not claim differentiation`);
   }
   // A fault we could not execute is not a row (no claim without evidence).
   for (const id of NOT_COVERED_FAULTS) assert.equal(byId.has(id), false, `${id} must not be a matrix row`);
-  // The matrix only holds proven rows; nothing unproven may masquerade here.
   for (const row of FAULT_MATRIX) {
-    assert.equal(row.status, "proven", `${row.id}: matrix only holds proven rows`);
+    assert.ok(row.status === "proven" || row.status === "reasoned", `${row.id}: status must be proven or reasoned`);
     assert.ok(row.synthetic && row.real, `${row.id}: rung outcomes populated`);
-    assert.ok(row.evidence.includes("EXECUTED") || row.artifact.endsWith(".test.ts") || row.artifact.endsWith("park-live.ts") || row.artifact.endsWith("swarm-inference-driver.ts"), `${row.id}: evidence must cite an executed proof or test`);
+    assert.ok(existsSync(resolve(row.artifact)), `${row.id}: artifact does not exist: ${row.artifact}`);
+    if (row.status === "proven") {
+      assert.match(row.evidence, /^EXECUTED \d{4}-\d{2}-\d{2}:/, `${row.id}: proven evidence must record an executed run`);
+      assert.ok(!row.artifact.endsWith(".test.ts"), `${row.id}: a unit test is not an executed proof`);
+    } else {
+      assert.ok((row.rationale ?? "").length > 0, `${row.id}: reasoned rows need a rationale`);
+    }
   }
 });
 
