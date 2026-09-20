@@ -148,3 +148,27 @@ real work (`read_file` -> `replace_in_file` -> `finish`, 358 B canonical diff),
 but under the fifth-round finding a `passed` from that scorer is not a
 certification. A clean re-run of the SIGKILL samples under the isolated scorer
 (`src/gym/isolated-score.ts`) is the remaining measurement.
+
+## Re-score of recorded patches under the isolated scorer (zero model calls)
+
+Every stored per-turn checkpoint patch from the checkpoint-era runs was re-scored
+with `isolatedScoreGymPatch` against the real `he` task, plus the canonical
+minimal patch and an empty no-op as controls:
+
+| patch source | patch bytes | isolated verdict |
+|---|---|---|
+| stored checkpoint `…mfsu` (turn 3) | 358 | passed |
+| stored checkpoint `…rewh` (turn 6) | 358 | passed |
+| stored checkpoint `…v6zy` (turn 6) | 358 | passed |
+| stored checkpoint `…xamo` (turn 4) | 0 | failed |
+| stored checkpoint `…kebx` (turn 4) | 358 | passed |
+| canonical minimal fix | 358 | passed |
+| empty no-op | 0 | failed |
+
+No previously-passed row changes verdict. The stored 0 B checkpoint is the 0 B
+SIGKILL sample and remains `failed`, exactly as it was originally recorded, so
+the re-score is discriminating rather than uniformly green. Passing rows whose
+final patch was not persisted (the pre-checkpoint 502/429/timeout/worker-restart
+rows) all recorded exactly 358 bytes, and this task has a unique deterministic
+minimal diff (the reviewer measured the golden at 358 bytes); that patch passes
+the isolated scorer. The matrix therefore stands on the unforgeable scorer.
