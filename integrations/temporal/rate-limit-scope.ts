@@ -30,10 +30,12 @@ if (models.length < 2) {
 const projectedCalls = burst + (models.length - 1) * 2;
 console.log(JSON.stringify({ projectedCalls, burst, probeModels: models.slice(1), gateway: baseUrl }));
 
+type ThrottleKind = "none" | "rate-limit" | "error";
+
 interface Attempt {
   model: string;
   status: number;
-  throttled: boolean;
+  kind: ThrottleKind;
   retryAfter: string | null;
   body: string;
   rateLimitHeaders: Record<string, string>;
@@ -52,9 +54,13 @@ const RATE_LIMIT_HEADERS = new Set([
   "x-rate-limit-reset",
 ]);
 
-function throttled(status: number, body: string): boolean {
-  if (status === 429 || status === 402) return true;
-  return /(^|[^0-9])(429|rate.?limit|quota|too many requests)/i.test(body);
+function throttleKind(status: number, body: string): ThrottleKind {
+  if (status === 429 || status === 402) return "rate-limit";
+  // A 5xx (or a fetch failure) is a transient provider error, not proof of a
+  // rate limit; the gateway surfaces a masked upstream 429 as 5xx, so the body
+  // is checked too.
+  if (status >= 500 || status === 0) return /(^|[^0-9])(429|rate.?limit|quota|too many requests)/i.test(body) ? "rate-limit" : "error";
+  return "none";
 }
 
 async function call(model: string): Promise<Attempt> {
@@ -69,9 +75,9 @@ async function call(model: string): Promise<Attempt> {
     const body = (await response.text()).slice(0, 300);
     const rateLimitHeaders: Record<string, string> = {};
     response.headers.forEach((value, key) => { if (RATE_LIMIT_HEADERS.has(key.toLowerCase())) rateLimitHeaders[key.toLowerCase()] = value; });
-    return { model, status: response.status, throttled: throttled(response.status, body), retryAfter: response.headers.get("retry-after"), body, rateLimitHeaders };
+    return { model, status: response.status, kind: throttleKind(response.status, body), retryAfter: response.headers.get("retry-after"), body, rateLimitHeaders };
   } catch (error) {
-    return { model, status: 0, throttled: false, retryAfter: null, body: `${error instanceof Error ? error.message : String(error)} (${Date.now() - started}ms)`, rateLimitHeaders: {} };
+    return { model, status: 0, kind: "error" as const, retryAfter: null, body: `${error instanceof Error ? error.message : String(error)} (${Date.now() - started}ms)`, rateLimitHeaders: {} };
   }
 }
 
@@ -84,9 +90,12 @@ async function main(): Promise<void> {
 
   // Phase A: burst model A concurrently.
   const primary = models[0]!;
+  const burstStart = Date.now();
   const burstAttempts = await Promise.all(Array.from({ length: burst }, () => call(primary)));
-  const burstThrottled = burstAttempts.filter((attempt) => attempt.throttled).length;
-  const firstThrottle = burstAttempts.findIndex((attempt) => attempt.throttled);
+  const burstWallMs = Date.now() - burstStart;
+  const burstRateLimited = burstAttempts.filter((attempt) => attempt.kind === "rate-limit").length;
+  const burstErrors = burstAttempts.filter((attempt) => attempt.kind === "error").length;
+  const firstThrottle = burstAttempts.findIndex((attempt) => attempt.kind !== "none");
 
   // Phase B: immediately probe each other model once, then once more after 2s.
   const probes: Attempt[] = [];
@@ -96,9 +105,15 @@ async function main(): Promise<void> {
 
   const actualCalls = burstAttempts.length + probes.length;
   const overBudget = actualCalls > projectedCalls * 1.2;
-  const probeThrottled = probes.filter((attempt) => attempt.throttled).length;
-  const conclusive = burstThrottled > 0 && !overBudget;
-  const scope = !conclusive ? "inconclusive" : probeThrottled > 0 ? "shared-account" : "per-model";
+  const probeRateLimited = probes.filter((attempt) => attempt.kind === "rate-limit").length;
+  const conclusive = burstRateLimited > 0 && !overBudget;
+  const scope = !conclusive
+    ? burstErrors > 0
+      ? "transient-errors-only"
+      : "inconclusive"
+    : probeRateLimited > 0
+      ? "shared-account"
+      : "per-model";
 
   console.log(
     JSON.stringify(
@@ -107,9 +122,19 @@ async function main(): Promise<void> {
         conclusive,
         burstModel: primary,
         burst,
-        burstThrottled,
+        burstRateLimited,
+        burstErrors,
         firstThrottleIndex: firstThrottle,
         burstStatuses: burstAttempts.map((attempt) => attempt.status),
+        burstStatusCounts: burstAttempts.reduce<Record<string, number>>((acc, attempt) => {
+          acc[attempt.status] = (acc[attempt.status] ?? 0) + 1;
+          return acc;
+        }, {}),
+        burstWallMs,
+        nonOkSamples: [...burstAttempts, ...probes]
+          .filter((attempt) => attempt.status !== 200)
+          .slice(0, 10)
+          .map((attempt) => ({ model: attempt.model, status: attempt.status, body: attempt.body.slice(0, 200) })),
         burstRetryAfter: [...new Set(burstAttempts.map((attempt) => attempt.retryAfter))],
         observedRateLimitHeaders: (() => {
           const out: Record<string, string[]> = {};
@@ -121,8 +146,8 @@ async function main(): Promise<void> {
           }
           return out;
         })(),
-        probeResults: probes.map((attempt) => ({ model: attempt.model, status: attempt.status, throttled: attempt.throttled, retryAfter: attempt.retryAfter, body: attempt.body.slice(0, 160) })),
-        probeThrottled,
+        probeResults: probes.map((attempt) => ({ model: attempt.model, status: attempt.status, kind: attempt.kind, retryAfter: attempt.retryAfter, body: attempt.body.slice(0, 160) })),
+        probeRateLimited,
         actualCalls,
         projectedCalls,
         overBudget,

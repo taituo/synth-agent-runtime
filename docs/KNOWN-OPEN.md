@@ -62,13 +62,21 @@ removed only when the closing work lands.
   "20 requests/minute and 50/day" and per-million prices as facts with no
   artifact. Closing: a real-key run that records the observed headers and cost,
   or removal of the numbers.
-- **Rate-limit scope is still unmeasured above 80 concurrent.** The probe
-  (`npm run live:rate-limit-scope`) sustained 80 concurrent calls to one cheap
-  model with zero throttling and no rate-limit response headers, so the limit
-  was not reached and per-model vs shared is undecided; one account also makes
-  per-account and per-provider indistinguishable. Closing: a direct-upstream or
-  stack-router-event probe (the gateway masks upstream 429s) at a scale above
-  the observed ceiling, or provider documentation of the limit.
-- **Adaptive concurrency is not built.** `LaneScheduler` takes a fixed capacity
-  that is a guess with one account. Closing: the AIMD controller in
-  `spec-adaptive-scarcity.md`, only after the rate-limit-scope measurement.
+- **Rate-limit scope: no practical limit binds at our scale (measured).** The
+  probe (`npm run live:rate-limit-scope`) sustained **1000 concurrent** calls to
+  one cheap model: 998 returned 200 in ~20s (~50 req/s), 2 returned a transient
+  5xx ("Stream ended without finish_reason" / "503 status code (no body)"), and
+  there were **zero 429/402 responses and no rate-limit headers**. A second
+  model was unaffected immediately after. So the provider did not throttle at
+  ~3000 req/min-equivalent on this tier, and the observed failures are transient
+  provider errors under a huge simultaneous burst, not rate limiting. Per-model
+  vs shared stays undecidable without ever hitting a limit; one account also
+  makes per-account and per-provider indistinguishable. Consequence: adaptive
+  concurrency is **deprioritised** — do not build a controller for a constraint
+  that does not bind. Revisit only if a limit appears at higher sustained load
+  or on a paid tier.
+- **Adaptive concurrency is deprioritised, not built.** `LaneScheduler` takes a
+  fixed capacity, but the rate-limit-scope measurement found no practical limit
+  at our scale (1000 concurrent, no throttle), so an AIMD controller would have
+  nothing to discover. Revisit only if a limit appears; the measurement is in
+  the rate-limit-scope entry above.
