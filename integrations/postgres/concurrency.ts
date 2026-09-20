@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 import { openPostgresPersistence } from "./node-pg.js";
 
 const url = process.env.SYNTH_POSTGRES_URL;
-if (!url) throw new Error("Set SYNTH_POSTGRES_URL");
+if (!url) {
+  console.error(JSON.stringify({ skipped: true, reason: "SYNTH_POSTGRES_URL not set; live Postgres required" }));
+  process.exit(2);
+}
 const workers = Math.max(2, Number(process.env.SYNTH_POSTGRES_WORKERS ?? 16));
 const prefix = `live-${randomUUID()}`;
 

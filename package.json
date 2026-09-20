@@ -23,6 +23,7 @@
     "live:litellm-failover": "integrations/temporal/node_modules/.bin/tsx scripts/litellm-failover-live.ts",
     "live:lane-gateway": "integrations/temporal/node_modules/.bin/tsx scripts/lane-gateway-live.ts",
     "live:proof": "node scripts/live-proof.mjs",
+    "live:proofs": "node scripts/live-proofs.mjs",
     "distributed:contract": "npm run build && node --test dist/test/v08.test.js",
     "release-hardening:contract": "npm run build && node --test dist/test/v09.test.js"
   },
