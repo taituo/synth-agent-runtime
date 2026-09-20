@@ -39,38 +39,14 @@ export class WorkspaceSynchronizer {
                 await this.#backend.writeFile(sandbox, path, content);
             }
         }
-        // Overlay symlinks (created by an agent) are links too: materialize them as
-        // symlinks and skip them in the content diff, which follows a link into its
-        // target and would otherwise write the target's bytes at the link's path.
-        const overlay = await workspace.snapshot();
-        const linkPaths = new Set();
-        for (const [path, target] of overlay.links ?? []) {
-            linkPaths.add(path);
-            files++;
-            bytes += target.length;
-            this.#checkLimits(files, bytes, "workspace overlay");
-            await this.#backend.writeSymlink(sandbox, path, target);
-        }
-        // Materialize any overlay changes (writes on top of the base tree that
-        // MemoryWorkspace hasn't committed anywhere else) BEFORE the Git baseline
-        // is committed, so they are part of what "baseline" means. If the
-        // baseline were committed first, an overlay-only file would be untracked
-        // in the sandbox: `git status` would never report deleting it, and
-        // syncBack() would have no way to see that deletion.
-        for (const change of await workspace.diff()) {
-            if (linkPaths.has(change.path))
-                continue;
-            if (change.kind === "delete") {
-                await this.#backend.removePath(sandbox, change.path);
-            }
-            else {
-                const content = change.content ?? new Uint8Array();
-                files++;
-                bytes += content.byteLength;
-                this.#checkLimits(files, bytes, "workspace overlay");
-                await this.#backend.writeFile(sandbox, change.path, content);
-            }
-        }
+        // Commit the Git baseline from the BASE tree ONLY, before any overlay is
+        // applied. The baseline is what "the unmodified checkout" means, so an
+        // agent's overlay writes must sit ON TOP of it and show up as changes.
+        // Committing after the overlay (the old order) baked the agent's edits into
+        // the baseline: `git diff HEAD` was always empty and the gym could never
+        // harvest a patch from the sandbox. `listGitChanges` uses
+        // `--untracked-files=all`, so an overlay-only file added after the baseline
+        // is still visible to syncBack, including when it is later deleted.
         if (this.#initializeGitBaseline) {
             const init = await this.#backend.exec(sandbox, {
                 command: "git init -q && git config user.name synth-runtime && git config user.email synth@invalid && git add -A && git commit -q --allow-empty -m synthetic-base",
@@ -85,6 +61,35 @@ export class WorkspaceSynchronizer {
             });
             if (init.exitCode !== 0) {
                 throw new Error(`Failed to initialize sandbox Git baseline: ${init.stderr || init.stdout}`);
+            }
+        }
+        // Overlay symlinks (created by an agent) are links too: materialize them as
+        // symlinks and skip them in the content diff, which follows a link into its
+        // target and would otherwise write the target's bytes at the link's path.
+        const overlay = await workspace.snapshot();
+        const linkPaths = new Set();
+        for (const [path, target] of overlay.links ?? []) {
+            linkPaths.add(path);
+            files++;
+            bytes += target.length;
+            this.#checkLimits(files, bytes, "workspace overlay");
+            await this.#backend.writeSymlink(sandbox, path, target);
+        }
+        // Materialize overlay changes (writes on top of the base tree that
+        // MemoryWorkspace hasn't committed anywhere else) AFTER the baseline, so
+        // they are reported as working-tree changes against it.
+        for (const change of await workspace.diff()) {
+            if (linkPaths.has(change.path))
+                continue;
+            if (change.kind === "delete") {
+                await this.#backend.removePath(sandbox, change.path);
+            }
+            else {
+                const content = change.content ?? new Uint8Array();
+                files++;
+                bytes += content.byteLength;
+                this.#checkLimits(files, bytes, "workspace overlay");
+                await this.#backend.writeFile(sandbox, change.path, content);
             }
         }
     }

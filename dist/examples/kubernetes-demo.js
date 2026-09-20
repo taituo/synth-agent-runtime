@@ -1,5 +1,5 @@
-import { AgentRuntime, DEFAULT_KUBERNETES_RESOURCE_CLASSES, ExecutionBroker, KubernetesExecutor, KubectlSandboxBackend, LocalMemoryDurability, MemoryWorkspace, SyntheticExecutor, WarmSandboxPool, } from "../src/index.js";
-const image = process.env.SYNTH_EXECUTOR_IMAGE ?? "ghcr.io/example/synth-executor:latest";
+import { AgentRuntime, DEFAULT_KUBERNETES_RESOURCE_CLASSES, ExecutionBroker, EXECUTOR_IMAGE, KubernetesExecutor, KubectlSandboxBackend, LocalMemoryDurability, MemoryWorkspace, SyntheticExecutor, WarmSandboxPool, } from "../src/index.js";
+const image = process.env.SYNTH_EXECUTOR_IMAGE ?? EXECUTOR_IMAGE;
 const classes = DEFAULT_KUBERNETES_RESOURCE_CLASSES
     .filter((entry) => entry.id !== "project-cell")
     .map((entry) => ({ ...entry, image }));

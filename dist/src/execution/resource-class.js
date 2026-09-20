@@ -1,3 +1,4 @@
+import { EXECUTOR_IMAGE } from "./executor-image.js";
 const CONTROL_PLANE_NS = { "synth.openai.dev/control-plane": "true" };
 const CONTROL_PLANE_POD = { "app.kubernetes.io/name": "synth-control-plane" };
 const KUBE_SYSTEM_NS = { "kubernetes.io/metadata.name": "kube-system" };
@@ -18,12 +19,12 @@ function restrictedNetwork(mode) {
             : {}),
     };
 }
-/** Opinionated defaults. Images are placeholders and should be pinned by digest in production. */
+/** Opinionated defaults. The executor image is the repo's own, pinned by digest. */
 export const DEFAULT_KUBERNETES_RESOURCE_CLASSES = [
     {
         id: "sandbox-small",
         fidelity: 20,
-        image: "ghcr.io/example/synth-executor:latest",
+        image: EXECUTOR_IMAGE,
         runtimeClassName: "gvisor",
         resources: {
             cpuRequest: "250m",
@@ -47,7 +48,7 @@ export const DEFAULT_KUBERNETES_RESOURCE_CLASSES = [
     {
         id: "sandbox-medium",
         fidelity: 30,
-        image: "ghcr.io/example/synth-executor:latest",
+        image: EXECUTOR_IMAGE,
         runtimeClassName: "gvisor",
         resources: {
             cpuRequest: "1",
@@ -71,7 +72,7 @@ export const DEFAULT_KUBERNETES_RESOURCE_CLASSES = [
     {
         id: "sandbox-heavy",
         fidelity: 40,
-        image: "ghcr.io/example/synth-executor:latest",
+        image: EXECUTOR_IMAGE,
         runtimeClassName: "gvisor",
         resources: {
             cpuRequest: "2",
@@ -95,7 +96,7 @@ export const DEFAULT_KUBERNETES_RESOURCE_CLASSES = [
     {
         id: "project-cell",
         fidelity: 50,
-        image: "ghcr.io/example/synth-executor:latest",
+        image: EXECUTOR_IMAGE,
         runtimeClassName: "gvisor",
         resources: {
             cpuRequest: "1",

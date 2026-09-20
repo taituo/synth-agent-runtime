@@ -61,6 +61,6 @@ export interface ExecutionPolicy {
     allowEscalation?: boolean;
     projectCellId?: string;
 }
-/** Opinionated defaults. Images are placeholders and should be pinned by digest in production. */
+/** Opinionated defaults. The executor image is the repo's own, pinned by digest. */
 export declare const DEFAULT_KUBERNETES_RESOURCE_CLASSES: readonly KubernetesResourceClass[];
 export declare function resourceClassMap(classes: readonly KubernetesResourceClass[]): Map<string, KubernetesResourceClass>;

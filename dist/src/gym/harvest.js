@@ -5,11 +5,12 @@ export async function harvestPatch(runner, options) {
     // The pathspec magic contains parentheses and a wildcard; quote it because the
     // runner executes through a shell.
     const excludes = NODE_MODULES_EXCLUDES.map((pathspec) => `'${pathspec}'`).join(" ");
-    const add = await runner.exec(`git add -A -- . ${excludes}`, { cwd: options.repoDir });
-    if (add.code !== 0)
-        throw new Error(`git add failed (exit ${add.code}): ${add.stderr || add.stdout}`);
-    const diff = await runner.exec(`git diff --cached ${baseRef}`, { cwd: options.repoDir });
-    if (diff.code !== 0)
-        throw new Error(`git diff failed (exit ${diff.code}): ${diff.stderr || diff.stdout}`);
-    return diff.stdout;
+    // ONE exec for add+diff. The staging index lives in the process that runs
+    // `git add`, and the sandbox runner runs each exec in a fresh one-shot pod
+    // with a fresh index; splitting the two made `git diff --cached` always empty
+    // in the pod. `git add` prints nothing on success, so stdout is the diff.
+    const result = await runner.exec(`git add -A -- . ${excludes} && git diff --cached ${baseRef}`, { cwd: options.repoDir });
+    if (result.code !== 0)
+        throw new Error(`git harvest failed (exit ${result.code}): ${result.stderr || result.stdout}`);
+    return result.stdout;
 }
