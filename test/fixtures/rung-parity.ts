@@ -1,30 +1,25 @@
 /**
- * Differential harness for rung parity: runs the SAME generated workspace
- * effect sequence against the synthetic rung (MemoryWorkspace + SyntheticExecutor)
- * and against a real filesystem (RealFsExecutor over a temp dir), then diffs the
- * observable outcome per effect plus the final top-level listing.
+ * Differential harness for rung parity.
  *
- * The real filesystem is the oracle. A divergence is either a synthetic bug or
- * a documented, deliberately-accepted difference.
+ * Runs the SAME generated workspace effect sequence against the synthetic rung
+ * (MemoryWorkspace + SyntheticExecutor) and against the INDEPENDENT oracle
+ * (`real-fs-oracle.ts`: raw node:fs, no implementation imports), then diffs the
+ * observable outcome. The oracle arm must never import path-policy helpers from
+ * `src/execution` or `src/workspace` — see `test/rung-parity.test.ts`.
  */
-import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { mkdtemp } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import {
   MemoryWorkspace,
   SyntheticExecutor,
-  WORKSPACE_IS_DIRECTORY,
-  WORKSPACE_NOT_DIRECTORY,
-  WORKSPACE_NOT_FOUND,
-  WORKSPACE_PATH_ESCAPES,
-  escapesWorkspace,
-  normalizeRelative,
-  workspaceError,
   type Effect,
   type EffectContext,
   type EffectResult,
   type Executor,
   type WorkspaceId,
 } from "../../src/index.js";
+import { RealFsOracle } from "./real-fs-oracle.js";
 
 export function mulberry32(seed: number): () => number {
   let state = seed >>> 0;
@@ -37,7 +32,11 @@ export function mulberry32(seed: number): () => number {
   };
 }
 
-/** Small shared path alphabet, including nested, file/dir reuse, odd names and `..`. */
+/**
+ * Small shared path alphabet: nested paths, a path reused as file then
+ * directory, an odd name, and `..` segments. The `..` rows exercise a
+ * DOCUMENTED divergence (the synthetic rung confines; the raw OS escapes).
+ */
 export const PARITY_PATHS = [
   "a",
   "a/b.txt",
@@ -67,64 +66,14 @@ export function generateWorkspaceSequence(seed: number, size: number): Effect[] 
   return effects;
 }
 
-/** Real-filesystem executor: the oracle for workspace semantics. */
-export class RealFsExecutor implements Executor {
-  readonly id = "real-fs";
-  readonly fidelity = 100;
-  constructor(private readonly root: string) {}
-
-  canExecute(effect: Effect): boolean {
-    return effect.kind.startsWith("workspace.");
-  }
-
-  async execute(effect: Effect, _context: EffectContext): Promise<EffectResult> {
-    const raw = pathOf(effect);
-    if (escapesWorkspace(raw)) return { ok: false, error: workspaceError(WORKSPACE_PATH_ESCAPES, raw) };
-    const rel = normalizeRelative(raw);
-    const abs = join(this.root, rel);
-    // The workspace root is a directory: list succeeds, everything else is an
-    // EISDIR-equivalent result (never a throw, never a delete of the root).
-    if (!rel) {
-      if (effect.kind === "workspace.list") return { ok: true, output: (await readdir(this.root)).sort() };
-      return { ok: false, error: workspaceError(WORKSPACE_IS_DIRECTORY, rel) };
-    }
-    try {
-      switch (effect.kind) {
-        case "workspace.read": {
-          const info = await stat(abs);
-          if (info.isDirectory()) return { ok: false, error: workspaceError(WORKSPACE_IS_DIRECTORY, rel) };
-          return { ok: true, output: new Uint8Array(await readFile(abs)) };
-        }
-        case "workspace.write": {
-          await mkdir(dirname(abs), { recursive: true });
-          await writeFile(abs, effect.content);
-          return { ok: true };
-        }
-        case "workspace.delete": {
-          const info = await stat(abs);
-          await rm(abs, { recursive: info.isDirectory() });
-          return { ok: true };
-        }
-        case "workspace.list": {
-          const info = await stat(abs);
-          if (!info.isDirectory()) return { ok: false, error: workspaceError(WORKSPACE_NOT_DIRECTORY, rel) };
-          return { ok: true, output: (await readdir(abs)).sort() };
-        }
-        default:
-          return { ok: false, error: "ESCALATION_REQUIRED" };
-      }
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === "ENOENT") return { ok: false, error: workspaceError(WORKSPACE_NOT_FOUND, rel) };
-      if (code === "ENOTDIR" || code === "EEXIST") return { ok: false, error: workspaceError(WORKSPACE_NOT_DIRECTORY, rel) };
-      if (code === "EISDIR") return { ok: false, error: workspaceError(WORKSPACE_IS_DIRECTORY, rel) };
-      return { ok: false, error: `${code ?? "ERROR"}:${rel}` };
-    }
-  }
-}
-
-function pathOf(effect: Effect): string {
-  return "path" in effect && typeof effect.path === "string" ? effect.path : "";
+/**
+ * A unique parent dir plus a workspace root inside it, so a path that escapes
+ * the root (which the raw oracle really does) stays inside the temp parent and
+ * is removed with it.
+ */
+export async function makeParityRoot(seed: number): Promise<{ parent: string; root: string }> {
+  const parent = await mkdtemp(join(tmpdir(), `synth-parity-${seed}-`));
+  return { parent, root: join(parent, "root") };
 }
 
 export interface ParityOutcome {
@@ -132,25 +81,44 @@ export interface ParityOutcome {
   kind: Effect["kind"];
   path: string;
   ok: boolean;
+  category: string;
   error?: string;
   outputBytes?: string;
+}
+
+/** Coarse error category, so raw errno and the synthetic vocabulary compare. */
+export function categoryOf(error: string | undefined): string {
+  if (!error) return "";
+  if (/ENOENT|WORKSPACE_NOT_FOUND/.test(error)) return "not-found";
+  // EEXIST: the oracle's `mkdir -p` for a write under a file hits the file,
+  // which is the same condition the synthetic rung reports as NOT_DIRECTORY.
+  if (/ENOTDIR|EEXIST|WORKSPACE_NOT_DIRECTORY/.test(error)) return "not-directory";
+  if (/EISDIR|WORKSPACE_IS_DIRECTORY/.test(error)) return "is-directory";
+  if (/EACCES|EPERM|WORKSPACE_PATH_ESCAPES/.test(error)) return "denied";
+  if (/ESCALATION_REQUIRED/.test(error)) return "escalate";
+  return error;
 }
 
 export async function runSequence(executor: Executor, effects: readonly Effect[], workspaceId: WorkspaceId): Promise<ParityOutcome[]> {
   const context = { agentId: "agt_parity" as EffectContext["agentId"], workspaceId };
   const outcomes: ParityOutcome[] = [];
   for (const effect of effects) {
-    const result = await executor.execute(effect, context);
+    const result: EffectResult = await executor.execute(effect, context);
     outcomes.push({
       id: effect.id,
       kind: effect.kind,
       path: pathOf(effect),
       ok: result.ok,
+      category: categoryOf(result.error),
       ...(result.error ? { error: result.error } : {}),
       ...(result.output !== undefined ? { outputBytes: outputString(result.output) } : {}),
     });
   }
   return outcomes;
+}
+
+function pathOf(effect: Effect): string {
+  return "path" in effect && typeof effect.path === "string" ? effect.path : "";
 }
 
 function outputString(output: unknown): string {
@@ -159,16 +127,26 @@ function outputString(output: unknown): string {
   return String(output);
 }
 
-/** Minimal, human-readable differences between two outcome streams. */
-export function diffOutcomes(expected: readonly ParityOutcome[], actual: readonly ParityOutcome[]): string[] {
-  const diffs: string[] = [];
-  for (let i = 0; i < Math.max(expected.length, actual.length); i++) {
-    const a = expected[i];
-    const b = actual[i];
-    if (!a || !b) { diffs.push(`#${i}: length mismatch`); continue; }
-    if (a.ok !== b.ok || a.error !== b.error || a.outputBytes !== b.outputBytes) {
-      diffs.push(`#${i} ${a.kind} ${a.path}: real=${JSON.stringify({ ok: a.ok, error: a.error, out: a.outputBytes })} synthetic=${JSON.stringify({ ok: b.ok, error: b.error, out: b.outputBytes })}`);
-    }
+export interface OutcomeDiff {
+  index: number;
+  /** "escape" is a documented divergence (synthetic confines, raw OS escapes). */
+  kind: "escape" | "other";
+  detail: string;
+}
+
+export function diffOutcomes(oracle: readonly ParityOutcome[], synthetic: readonly ParityOutcome[]): OutcomeDiff[] {
+  const diffs: OutcomeDiff[] = [];
+  for (let i = 0; i < Math.max(oracle.length, synthetic.length); i++) {
+    const a = oracle[i];
+    const b = synthetic[i];
+    if (!a || !b) { diffs.push({ index: i, kind: "other", detail: "length mismatch" }); continue; }
+    if (a.ok === b.ok && a.category === b.category && a.outputBytes === b.outputBytes) continue;
+    const escape = b.error !== undefined && b.error.includes("WORKSPACE_PATH_ESCAPES");
+    diffs.push({
+      index: i,
+      kind: escape ? "escape" : "other",
+      detail: `#${i} ${a.kind} ${a.path}: oracle=${JSON.stringify({ ok: a.ok, error: a.error, out: a.outputBytes })} synthetic=${JSON.stringify({ ok: b.ok, error: b.error, out: b.outputBytes })}`,
+    });
   }
   return diffs;
 }

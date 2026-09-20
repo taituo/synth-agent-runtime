@@ -17,6 +17,9 @@ export const WORKSPACE_PATH_ESCAPES = "WORKSPACE_PATH_ESCAPES";
  * instead of returning success for a path they did not honour.
  */
 export function escapesWorkspace(path: string): boolean {
+  // An absolute path is the same silent-rewrite class: the caller asked for
+  // /etc/passwd and would get workspace/etc/passwd. Reject, do not clamp.
+  if (path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path)) return true;
   let depth = 0;
   for (const raw of path.replace(/\\/g, "/").split("/")) {
     if (!raw || raw === ".") continue;
