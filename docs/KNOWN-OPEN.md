@@ -6,9 +6,7 @@ removed only when the closing work lands.
 
 ## Verification and CI
 
-- **Track 6 replay is a hand-built probe.** The replay proof uses a synthetic
-  history, not a recorded history of the real `durableAgentWorkflow`. Closing:
-  capture a real workflow history and replay it, asserting no non-determinism.
+
 
 ## Egress and artifacts
 

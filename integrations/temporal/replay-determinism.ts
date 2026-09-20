@@ -13,6 +13,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { Client, Connection } from "@temporalio/client";
 import { Worker } from "@temporalio/worker";
+import { cancelAgent, durableAgentWorkflow, getAgentState, sendMessage } from "./src/workflows.js";
 import { runTemporalWorker } from "./src/worker.js";
 
 const address = process.env.TEMPORAL_ADDRESS ?? "127.0.0.1:7243";
@@ -63,7 +64,49 @@ try {
   changedCodeError = message(error);
 }
 
-const ok = result === "ok" && sameCodeReplays && changedCodeRejected;
+// The REAL workflow, not a hand-built probe: run durableAgentWorkflow, capture
+// its actual history, and replay it against the same src/workflows.ts. A
+// non-deterministic change to the real workflow would fail this.
+const realTaskQueue = `synth-replay-real-${Date.now()}`;
+const realWorkflowsPath = fileURLToPath(new URL("./src/workflows.ts", import.meta.url));
+void runTemporalWorker({
+  workflowsPath: realWorkflowsPath,
+  activities: { runTurn: async () => ({ result: "ok", state: "idle" as const }) },
+  taskQueue: realTaskQueue,
+  address,
+  namespace,
+}).catch((error) => {
+  console.error("real worker failed", error);
+  process.exit(1);
+});
+await sleep(2_500);
+
+const realHandle = await client.workflow.start(durableAgentWorkflow, {
+  taskQueue: realTaskQueue,
+  workflowId: `replay-real-${Date.now()}`,
+  args: [{ agentId: "agt_replay_real", status: "idle", mailbox: [], updatedAt: Date.now() }],
+});
+await realHandle.signal(sendMessage, { id: "m1", role: "human", text: "replay me", createdAt: Date.now() });
+const realDeadline = Date.now() + 15_000;
+let realState = await realHandle.query(getAgentState).catch(() => undefined);
+while (Date.now() < realDeadline) {
+  realState = await realHandle.query(getAgentState).catch(() => undefined);
+  if (realState && realState.mailbox.length === 0 && realState.lastResult !== undefined) break;
+  await sleep(200);
+}
+await realHandle.signal(cancelAgent);
+await realHandle.result().catch(() => undefined);
+const realHistory = await realHandle.fetchHistory();
+let realReplays = false;
+let realError: string | undefined;
+try {
+  await Worker.runReplayHistory({ workflowsPath: realWorkflowsPath }, realHistory);
+  realReplays = true;
+} catch (error) {
+  realError = message(error);
+}
+
+const ok = result === "ok" && sameCodeReplays && changedCodeRejected && realReplays;
 console.log(
   JSON.stringify(
     {
@@ -73,6 +116,9 @@ console.log(
       sameCodeError: sameCodeError?.slice(0, 300) ?? null,
       changedCodeRejected,
       changedCodeError: changedCodeError?.slice(0, 300) ?? null,
+      realWorkflowReplays: realReplays,
+      realWorkflowError: realError?.slice(0, 300) ?? null,
+      realWorkflowEvents: realHistory.events?.length ?? null,
       ok,
     },
     null,
