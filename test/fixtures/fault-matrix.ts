@@ -5,12 +5,20 @@
  * MemoryWorkspace, no filesystem) did vs the REAL rung (gVisor sandbox via
  * KubectlSandboxBackend/KubernetesExecutor), for one injected fault, and
  * whether that difference is the one we claim. Rows that do not differentiate
- * the rungs say so explicitly rather than being dropped.
+ * the rungs say so explicitly.
  *
- * Evidence column points at the live proof/test that produced the values.
+ * A row is a CLAIM, so every row is `status: "proven"` and carries an
+ * `artifact`: a repo-relative path to the live proof or test that produced the
+ * values. `test/fault-matrix.test.ts` asserts each artifact exists (and, for
+ * the executor rows, that the synthetic behaviour it cites actually happens),
+ * rather than comparing two hand-written fields to each other.
+ *
+ * Faults we could NOT execute are not rows; they are listed in
+ * `NOT_COVERED_FAULTS` and in the suite's "not covered" report.
  */
 export type Rung = "synthetic" | "real";
 export type FaultCategory = "provider" | "executor" | "temporal";
+export type FaultStatus = "proven" | "not-covered";
 
 export interface FaultRow {
   id: string;
@@ -22,6 +30,9 @@ export interface FaultRow {
   real: string;
   /** True when the two rungs behave differently for this fault. */
   differentiates: boolean;
+  status: FaultStatus;
+  /** Repo-relative path to the proof/test that produced these values. */
+  artifact: string;
   evidence: string;
 }
 
@@ -33,7 +44,9 @@ export const FAULT_MATRIX: readonly FaultRow[] = [
     synthetic: "retry 3x, then park (waiting); recovers when upstream returns",
     real: "retry 3x, then park (waiting); recovers when upstream returns",
     differentiates: false,
-    evidence: "integrations/temporal park-live.ts + fault-scenarios always502/fail12",
+    status: "proven",
+    artifact: "integrations/temporal/park-live.ts",
+    evidence: "park-live.ts + fault-scenarios always502/fail12 (park, then recover)",
   },
   {
     id: "provider-429",
@@ -42,7 +55,9 @@ export const FAULT_MATRIX: readonly FaultRow[] = [
     synthetic: "retry (transient), then park; recovers",
     real: "retry (transient), then park; recovers",
     differentiates: false,
-    evidence: "gateway-run-turn.test.ts permanent-vs-transient HTTP classification",
+    status: "proven",
+    artifact: "integrations/temporal/test/gateway-run-turn.test.ts",
+    evidence: "gateway-run-turn.test.ts permanent-vs-transient HTTP classification (429 is transient)",
   },
   {
     id: "provider-timeout",
@@ -51,6 +66,8 @@ export const FAULT_MATRIX: readonly FaultRow[] = [
     synthetic: "abort -> retry -> park; recovers when timeout raised",
     real: "abort -> retry -> park; recovers when timeout raised",
     differentiates: false,
+    status: "proven",
+    artifact: "integrations/temporal/park-live.ts",
     evidence: "fault-scenarios GATEWAY_TIMEOUT_MS=3000 (park) + hang1",
   },
   {
@@ -60,7 +77,9 @@ export const FAULT_MATRIX: readonly FaultRow[] = [
     synthetic: "client timeout -> retry -> recover",
     real: "client timeout -> retry -> recover",
     differentiates: false,
-    evidence: "fault-scenarios hang1 (GATEWAY_TIMEOUT_MS=25000)",
+    status: "proven",
+    artifact: "integrations/temporal/test/gateway-run-turn.test.ts",
+    evidence: "gateway-run-turn.test.ts aborts a call that outlives its timeout; fault-scenarios hang1",
   },
   {
     id: "provider-garbage",
@@ -69,7 +88,9 @@ export const FAULT_MATRIX: readonly FaultRow[] = [
     synthetic: "parse error -> retry -> recover",
     real: "parse error -> retry -> recover",
     differentiates: false,
-    evidence: "fault-scenarios garbage2",
+    status: "proven",
+    artifact: "integrations/temporal/test/gateway-run-turn.test.ts",
+    evidence: "fault-scenarios garbage2; gateway-run-turn.test.ts rejects structurally invalid answers",
   },
   {
     id: "provider-slow-ok",
@@ -78,7 +99,9 @@ export const FAULT_MATRIX: readonly FaultRow[] = [
     synthetic: "heartbeat while waiting -> success",
     real: "heartbeat while waiting -> success",
     differentiates: false,
-    evidence: "live:swarm-inference (8-14s reasoning calls, heartbeat)",
+    status: "proven",
+    artifact: "integrations/temporal/swarm-inference-driver.ts",
+    evidence: "live:swarm-inference (8-14s reasoning calls, heartbeat keeps it alive)",
   },
   {
     id: "exec-success",
@@ -87,8 +110,10 @@ export const FAULT_MATRIX: readonly FaultRow[] = [
     synthetic: "ESCALATION_REQUIRED (cannot run processes)",
     real: "exit 0, stdout captured",
     differentiates: true,
+    status: "proven",
+    artifact: "integrations/kubernetes/fault-rungs.ts",
     evidence:
-      "EXECUTED 2026-09-19: integrations/kubernetes/fault-rungs.ts against live k3s/gVisor with docker.io/alpine/git pinned by digest (execSuccess true); synthetic side: test/fault-matrix.test.ts",
+      "EXECUTED 2026-09-19: fault-rungs.ts against live k3s/gVisor with alpine/git pinned by digest (execSuccess true)",
   },
   {
     id: "exec-timeout",
@@ -97,8 +122,9 @@ export const FAULT_MATRIX: readonly FaultRow[] = [
     synthetic: "ESCALATION_REQUIRED",
     real: "ok:false, EXECUTION_TIMEOUT",
     differentiates: true,
-    evidence:
-      "EXECUTED 2026-09-19: integrations/kubernetes/fault-rungs.ts against live k3s/gVisor with alpine/git pinned by digest (execTimeout expected true)",
+    status: "proven",
+    artifact: "integrations/kubernetes/fault-rungs.ts",
+    evidence: "EXECUTED 2026-09-19: fault-rungs.ts (execTimeout expected true)",
   },
   {
     id: "exec-sigkill",
@@ -107,8 +133,9 @@ export const FAULT_MATRIX: readonly FaultRow[] = [
     synthetic: "ESCALATION_REQUIRED",
     real: "ok:false (exit 137), never a false success",
     differentiates: true,
-    evidence:
-      "EXECUTED 2026-09-19: integrations/kubernetes/fault-rungs.ts (execSigkill expected true) + kill-chaos.ts (exitCode 137) against live k3s/gVisor with alpine/git pinned by digest",
+    status: "proven",
+    artifact: "integrations/kubernetes/fault-rungs.ts",
+    evidence: "EXECUTED 2026-09-19: fault-rungs.ts (execSigkill) + kill-chaos.ts (exitCode 137)",
   },
   {
     id: "worker-sigkill-mid-turn",
@@ -117,29 +144,29 @@ export const FAULT_MATRIX: readonly FaultRow[] = [
     synthetic: "activity retried after heartbeat timeout; abandoned attempt never reported success",
     real: "activity retried after heartbeat timeout; abandoned attempt never reported success",
     differentiates: false,
-    evidence: "EXECUTED 2026-09-19: integrations/temporal/restart-worker.ts (attempts [1,2], result recovered)",
+    status: "proven",
+    artifact: "integrations/temporal/restart-worker.ts",
+    evidence: "EXECUTED 2026-09-19: restart-worker.ts (attempts [1,2], result recovered)",
   },
   {
     id: "two-workers-race",
     category: "temporal",
-    fault: "two workers on the same task queue race one agent",
-    synthetic: "UNPROVEN (planned Track 6)",
-    real: "UNPROVEN (planned Track 6)",
+    fault: "two (many) workers race to own one agent; the fenced one must lose",
+    synthetic: "one lease winner; a stale generation's fenced agent write is rejected",
+    real: "one lease winner; a stale generation's fenced agent write is rejected",
     differentiates: false,
-    evidence: "NOT COVERED: planned Track 6",
-  },
-  {
-    id: "clock-jump",
-    category: "temporal",
-    fault: "host clock jumps during a turn",
-    synthetic: "not covered: no injectable clock in this repo",
-    real: "not covered: no injectable clock in this repo",
-    differentiates: false,
-    evidence: "NOT COVERED",
+    status: "proven",
+    artifact: "integrations/postgres/concurrency.ts",
+    evidence:
+      "EXECUTED 2026-09-19: integrations/postgres/concurrency.ts against live PostgreSQL (16 workers): leaseWinners=1, dbClockSkewBlocked=true, hardAgentFencing=true, stale generation A rejected, unfenced write rejected with AGENT_FENCE_REQUIRED",
   },
 ];
 
-export const REQUIRED_FAULT_IDS = [
+/** Faults from the spec that we could NOT execute; kept out of the matrix. */
+export const NOT_COVERED_FAULTS = ["clock-jump"] as const;
+
+/** Faults the suite claims to prove; each must be a `proven` row. */
+export const REQUIRED_PROVEN_FAULT_IDS = [
   "provider-502",
   "provider-429",
   "provider-timeout",
@@ -148,6 +175,5 @@ export const REQUIRED_FAULT_IDS = [
   "provider-slow-ok",
   "exec-sigkill",
   "worker-sigkill-mid-turn",
-  "clock-jump",
   "two-workers-race",
 ] as const;

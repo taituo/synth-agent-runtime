@@ -7,6 +7,8 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import {
   ExecutionBroker,
   MemoryWorkspace,
@@ -16,7 +18,7 @@ import {
   type Executor,
   type WorkspaceId,
 } from "../src/index.js";
-import { FAULT_MATRIX, REQUIRED_FAULT_IDS } from "./fixtures/fault-matrix.js";
+import { FAULT_MATRIX, NOT_COVERED_FAULTS, REQUIRED_PROVEN_FAULT_IDS } from "./fixtures/fault-matrix.js";
 
 function context(workspaceId: WorkspaceId): EffectContext {
   return { agentId: "agt_matrix" as EffectContext["agentId"], workspaceId };
@@ -32,13 +34,37 @@ function fakeRealExecutor(): Executor {
   };
 }
 
-test("the fault matrix covers every fault the spec lists", () => {
-  const ids = new Set(FAULT_MATRIX.map((row) => row.id));
-  for (const required of REQUIRED_FAULT_IDS) assert.ok(ids.has(required), `missing fault row: ${required}`);
-  // Executor faults differentiate the rungs; provider/temporal faults do not.
+test("every proven fault has a row citing an existing proof artifact", () => {
+  const byId = new Map(FAULT_MATRIX.map((row) => [row.id, row]));
+  for (const required of REQUIRED_PROVEN_FAULT_IDS) {
+    const row = byId.get(required);
+    assert.ok(row, `missing fault row: ${required}`);
+    assert.equal(row!.status, "proven", `${required}: must be proven`);
+    assert.ok(row!.evidence.length > 0, `${required}: needs evidence`);
+    assert.ok(existsSync(resolve(row!.artifact)), `${required}: artifact does not exist: ${row!.artifact}`);
+  }
+  // A fault we could not execute is not a row (no claim without evidence).
+  for (const id of NOT_COVERED_FAULTS) assert.equal(byId.has(id), false, `${id} must not be a matrix row`);
+  // The matrix only holds proven rows; nothing unproven may masquerade here.
   for (const row of FAULT_MATRIX) {
-    assert.equal(row.differentiates, row.category === "executor", `${row.id}: differentiates flag`);
-    assert.ok(row.synthetic && row.real && row.evidence, `${row.id}: fields populated`);
+    assert.equal(row.status, "proven", `${row.id}: matrix only holds proven rows`);
+    assert.ok(row.synthetic && row.real, `${row.id}: rung outcomes populated`);
+    assert.ok(row.evidence.includes("EXECUTED") || row.artifact.endsWith(".test.ts") || row.artifact.endsWith("park-live.ts") || row.artifact.endsWith("swarm-inference-driver.ts"), `${row.id}: evidence must cite an executed proof or test`);
+  }
+});
+
+test("the executor rows' synthetic claim matches the synthetic rung's real behaviour", async () => {
+  const workspace = new MemoryWorkspace();
+  const executor = new SyntheticExecutor(new Map([[workspace.id, workspace]]));
+  const broker = new ExecutionBroker([executor]);
+  const result = await broker.execute(
+    { id: "matrix-exec", kind: "process.exec", command: "echo hi" },
+    { agentId: "agt_matrix" as EffectContext["agentId"], workspaceId: workspace.id },
+  );
+  assert.equal(result.error, "ESCALATION_REQUIRED", "the synthetic rung cannot run processes");
+  for (const row of FAULT_MATRIX.filter((entry) => entry.category === "executor")) {
+    assert.match(row.synthetic, /ESCALATION_REQUIRED/, `${row.id}: matrix claim matches behaviour`);
+    assert.equal(row.differentiates, true, `${row.id}: executor faults do differentiate the rungs`);
   }
 });
 
