@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased — provider-agnostic, config-driven backends
+
+### Any OpenAI-compatible endpoint plugs in from configuration
+
+- New `src/inference/gateway/provider-config.ts`: a provider is
+  `{ id, baseUrl, apiKey?, model, profile? }`. `parseGatewayConfig` validates
+  untrusted input; `providersFromEnv` reads `SYNTH_GATEWAY_PROVIDERS` (JSON) or
+  `SYNTH_PROVIDER_<ID>_BASEURL/_MODEL/_API_KEY/_PROFILE`; `buildProviderRouter`
+  constructs one `HttpGatewayBackend` per provider and groups providers that
+  share a `profile` into one virtual model's failover routes. No provider and no
+  key is hardcoded. `opencode-go` is one provider among many.
+- `directProviderSettings(provider)` returns the `{ baseUrl, model, apiKey? }`
+  that `GatewayAgentEngine` needs to call a provider **directly** — a synthetic/
+  cheap run with no gateway server and no dependency on opencode or the Pi
+  adapter. `selectProvider(config, idOrProfile)` selects a provider/profile.
+- `integrations/temporal/src/worker-entry.ts` builds its `runTurn` from this
+  config (falls back to `GATEWAY_BASE_URL`/`GATEWAY_MODEL`).
+
+### Evidence
+
+- `test/provider-config.test.ts` (6 tests, root suite) with local fake
+  OpenAI-compatible servers: routing selects the configured provider (asserts the
+  served provider id and per-provider call counts, plus the upstream-model
+  rewrite); `opencode-go` is one profile among many; two providers sharing a
+  profile fail over in config order; a provider is swapped in by config alone
+  (same id/profile, new baseUrl — the original is not called); a synthetic run
+  reaches a declared provider directly. The direct path imports no
+  opencode/Pi/earendil module (grep). Red without `provider-config.ts` (build
+  error), green with it.
+- `docs/INFERENCE.md` documents the config; README numbers updated (root 196).
+
 ## Unreleased — quarantine the unwired modules; docs say only what is measured
 
 ### Quarantined (moved to `docs/history/museum/`, not compiled)

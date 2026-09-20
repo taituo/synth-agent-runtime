@@ -151,7 +151,7 @@ Synth Agent Runtime is independent of any particular agent harness or model prov
 
 It can be embedded underneath existing agents and coding harnesses, or used with custom workers that implement the runtime interfaces. There is no bundled agent harness: the former `PiAgentEngine` and Pi bridge had no caller and are quarantined to `docs/history/museum/` (see `docs/KNOWN-OPEN.md`); a custom worker supplies the turn body or binds the shared one.
 
-The inference gateway is provider-agnostic and exposes OpenAI-compatible Chat Completions and Responses interfaces. The gateway is tested against local mock backends; any compatible provider (or a custom endpoint) can be used instead. Provider limits are unmeasured unless a live key was present (see `docs/KNOWN-OPEN.md`).
+The inference gateway is provider-agnostic and exposes OpenAI-compatible Chat Completions and Responses interfaces. Providers are configuration, not code: `provider-config.ts` builds the router from a declared list (`{ id, baseUrl, apiKey?, model, profile? }`, from `SYNTH_GATEWAY_PROVIDERS`/`SYNTH_PROVIDER_*`), and a synthetic/cheap run can call any declared provider **directly** via `directProviderSettings()` with no opencode or Pi dependency. `opencode-go` is one profile among many. Provider limits are unmeasured unless a live key was present (see `docs/KNOWN-OPEN.md`); no provider or key is hardcoded.
 
 Provider credentials are not bundled with Synth. Deployments supply and manage their own credentials and are responsible for complying with the terms and usage policies of the provider they choose.
 
@@ -161,7 +161,7 @@ Measured under Node v22.20.0 (`node --version`), on commit `HEAD`:
 
 ```text
 npm test  (root suite)
-190 passed / 0 failed
+196 passed / 0 failed
 
 npm test --prefix integrations/temporal  (durable workflow + turn body + graph harness)
 89 passed / 0 failed

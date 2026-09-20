@@ -6,6 +6,14 @@ removed only when the closing work lands.
 
 ## Runtime and deploy
 
+- **Per-run provider selection is an API, not yet threaded through the turn
+  config.** `provider-config.ts` exposes `selectProvider`/`directProviderSettings`
+  so a run can pick a provider/profile, and the worker selects one provider at
+  startup. A single worker does not yet route different agents to different
+  providers per turn: `DurableTurnConfig` carries the model but not a provider
+  id. Closing: add a provider/profile id to `DurableTurnConfig` and have the
+  activity resolve it per turn (one worker, many providers).
+
 - **Pi is quarantined, not wired.** `PiAgentEngine` and
   `integrations/pi-runtime-bridge/` had no caller and are in
   `docs/history/museum/`. Re-wiring them as the harness would need the Pi
