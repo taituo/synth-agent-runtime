@@ -87,20 +87,6 @@ removed only when the closing work lands.
 
 ## Egress and artifacts
 
-- **Workspace sync still flattens symlinks.** The git transport preserves mode
-  120000, but `WorkspaceSynchronizer`/`KubectlSandboxBackend.writeFile` write
-  regular bytes, and `integrations/kubernetes/git-transport-live.ts` computes
-  `syncBackKind` yet excludes it from `ok`. Closing: symlink-aware
-  write/list-git-changes and include the sync-back kind in the proof's `ok`.
-- **Blob store: access model decided, lifecycle partly wired.** The decision is
-  in `docs/BLOB-STORE.md`: within one trust domain the digest is the capability
-  (unguessable, integrity-verified on read), and across tenants
-  `GuardedBlobStore` + `TenantBlobPolicy` enforce isolation (with `stat` not
-  leaking existence). `list`/`prune` exist and are tested. Still open:
-  automatic GC wired from the artifact index's reachable set, a per-tenant write
-  quota, and read auditing. Closing: a scheduled retention job, a `put` size
-  ceiling, and an audit event on `get`.
-
 
 ## Gym scoring isolation
 
@@ -133,6 +119,17 @@ removed only when the closing work lands.
   capability. Closing: a corpus on the order of 100+ items, balanced across
   classes, with labels agreed by more than one annotator and the ambiguous set
   reported separately.
+  **Progress (2026-09-20):** `corpusCoverage()` reports the scorable count,
+  class balance and `benchmarkReady` (false), and `annotationAgreement()` with
+  `secondAnnotatorLabel()` runs an explicit ambiguity procedure: a deterministic
+  second pass that must agree with the recorded label, with disagreements
+  reported as needing a human tie-break and excluded from the gate. Tests pin
+  both, including that the corpus must not claim to be benchmark-ready.
+  **Still open, and blocked on resources rather than code:** the 100+ balanced
+  set needs licensed real texts across all three classes (social posts cannot be
+  legally scraped) and a *human* second annotator; a synthetic-only expansion
+  would measure template-following and is the kind of tuning this entry exists
+  to prevent, so it was not done.
 
 ## Inference and scheduling
 

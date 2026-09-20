@@ -238,31 +238,121 @@ export class TenantBlobPolicy implements BlobAccessPolicy {
 }
 
 /**
+ * Write quota: a per-blob size ceiling and a per-tenant cumulative ceiling. It
+ * is a small counter owned by the caller (a guard cannot know prior usage from
+ * a content-addressed store without listing it), so a restart resets it; a
+ * deployment that needs durable accounting persists `usage()`.
+ */
+export interface BlobWriteQuota {
+  /** Throws `BLOB_QUOTA_EXCEEDED:blob:*` or `:tenant:*` when the write is too large. */
+  check(tenantId: string | undefined, bytes: number): void;
+  /** Record a committed write (call only when the object is new; dedup adds nothing). */
+  commit(tenantId: string | undefined, bytes: number): void;
+}
+
+export interface TenantWriteQuotaOptions {
+  /** Largest single object accepted. */
+  maxBytesPerBlob?: number;
+  /** Largest cumulative bytes accepted for one tenant (or the shared pool). */
+  maxBytesPerTenant?: number;
+}
+
+export class TenantWriteQuota implements BlobWriteQuota {
+  readonly #used = new Map<string, number>();
+  constructor(private readonly options: TenantWriteQuotaOptions = {}) {}
+
+  #key(tenantId: string | undefined): string {
+    return tenantId ?? "<shared>";
+  }
+
+  check(tenantId: string | undefined, bytes: number): void {
+    const { maxBytesPerBlob, maxBytesPerTenant } = this.options;
+    if (maxBytesPerBlob !== undefined && bytes > maxBytesPerBlob) {
+      throw new Error(`BLOB_QUOTA_EXCEEDED:blob:${bytes}>${maxBytesPerBlob}`);
+    }
+    if (maxBytesPerTenant !== undefined) {
+      const used = this.#used.get(this.#key(tenantId)) ?? 0;
+      if (used + bytes > maxBytesPerTenant) throw new Error(`BLOB_QUOTA_EXCEEDED:tenant:${used + bytes}>${maxBytesPerTenant}`);
+    }
+  }
+
+  commit(tenantId: string | undefined, bytes: number): void {
+    const key = this.#key(tenantId);
+    this.#used.set(key, (this.#used.get(key) ?? 0) + bytes);
+  }
+
+  usage(tenantId: string | undefined): number {
+    return this.#used.get(this.#key(tenantId)) ?? 0;
+  }
+}
+
+/** One access decision, emitted on read and write. */
+export interface BlobAuditEvent {
+  op: "read" | "write";
+  digest: string;
+  outcome: "allowed" | "denied" | "not-found";
+  principal?: BlobPrincipal;
+  at: number;
+}
+
+export type BlobAuditSink = (event: BlobAuditEvent) => void;
+
+export interface GuardedBlobStoreOptions {
+  quota?: BlobWriteQuota;
+  audit?: BlobAuditSink;
+  now?: () => number;
+}
+
+/**
  * A {@link BlobStore} view that consults a policy. Bind a principal with
  * `forPrincipal`; `stat` returns undefined rather than leaking the existence of
- * a blob the principal may not read.
+ * a blob the principal may not read. Optionally enforces a write quota and
+ * emits an audit event for every read and write.
  */
 export class GuardedBlobStore implements BlobStore {
   constructor(
     private readonly inner: BlobStore,
     private readonly policy: BlobAccessPolicy,
     private readonly principal?: BlobPrincipal,
+    private readonly options: GuardedBlobStoreOptions = {},
   ) {}
 
+  #emit(event: Omit<BlobAuditEvent, "at">): void {
+    this.options.audit?.({ ...event, ...(this.principal ? { principal: this.principal } : {}), at: (this.options.now ?? Date.now)() });
+  }
+
   forPrincipal(principal: BlobPrincipal): GuardedBlobStore {
-    return new GuardedBlobStore(this.inner, this.policy, principal);
+    return new GuardedBlobStore(this.inner, this.policy, principal, this.options);
   }
 
   async put(bytes: Uint8Array, options: PutBlobOptions = {}): Promise<BlobRef> {
     const digest = digestOf(bytes);
-    if (!this.policy.authorize({ op: "write", digest, principal: this.principal })) throw new Error(`BLOB_FORBIDDEN:write:${digest}`);
-    return this.inner.put(bytes, { ...options, ...(this.principal?.tenantId ? { tenantId: this.principal.tenantId } : {}) });
+    if (!this.policy.authorize({ op: "write", digest, principal: this.principal })) {
+      this.#emit({ op: "write", digest, outcome: "denied" });
+      throw new Error(`BLOB_FORBIDDEN:write:${digest}`);
+    }
+    // Dedup adds no bytes: charge only when the object is new.
+    const existing = await this.inner.stat(digest).catch(() => undefined);
+    if (!existing) {
+      this.options.quota?.check(this.principal?.tenantId, bytes.byteLength);
+    }
+    const ref = await this.inner.put(bytes, { ...options, ...(this.principal?.tenantId ? { tenantId: this.principal.tenantId } : {}) });
+    if (!existing) this.options.quota?.commit(this.principal?.tenantId, bytes.byteLength);
+    this.#emit({ op: "write", digest: ref.digest, outcome: "allowed" });
+    return ref;
   }
 
   async get(digest: string): Promise<Uint8Array> {
     const ref = await this.inner.stat(digest);
-    if (!ref) throw new Error(`BLOB_NOT_FOUND:${digest}`);
-    if (!this.policy.authorize({ op: "read", digest: ref.digest, ref, principal: this.principal })) throw new Error(`BLOB_FORBIDDEN:read:${digest}`);
+    if (!ref) {
+      this.#emit({ op: "read", digest, outcome: "not-found" });
+      throw new Error(`BLOB_NOT_FOUND:${digest}`);
+    }
+    if (!this.policy.authorize({ op: "read", digest: ref.digest, ref, principal: this.principal })) {
+      this.#emit({ op: "read", digest: ref.digest, outcome: "denied" });
+      throw new Error(`BLOB_FORBIDDEN:read:${digest}`);
+    }
+    this.#emit({ op: "read", digest: ref.digest, outcome: "allowed" });
     return this.inner.get(ref.digest);
   }
 

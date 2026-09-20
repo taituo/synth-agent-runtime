@@ -38,13 +38,20 @@ neither in `keep` nor younger than `olderThanMs`, reporting `removed` and
 which digests are still referenced (including the `producedFrom` chain), so the
 caller supplies `keep`.
 
-## What is still open
+## Lifecycle wiring
 
-- **Automatic GC wiring.** `prune` exists and is tested, but nothing schedules
-  it from the artifact index's reachable set. Closing: a retention job that
-  walks the index and prunes on an interval.
-- **Write quota / rate limit.** Any caller with a valid principal can write, so
-  a runaway producer can fill the disk. Closing: a per-tenant write quota, or a
-  size ceiling enforced at `put`.
-- **Read auditing.** There is no record of who resolved which digest. Closing:
-  emit an audit event on `GuardedBlobStore.get`, if the threat model needs it.
+- **GC from the index's reachable set.** `src/artifacts/retention.ts` exports
+  `reachableDigests(index)` (every recorded artifact plus its `producedFrom`
+  ancestry, including referenced-but-unrecorded digests, so a missing index
+  entry cannot cause a live blob to be deleted) and
+  `sweepUnreferencedBlobs({ store, index, olderThanMs })`, which calls
+  `prune` with that set. Scheduling is the caller's job; the sweep is
+  deterministic and unit-tested.
+- **Write quota.** `TenantWriteQuota` enforces a per-blob size ceiling and a
+  per-tenant cumulative ceiling; `GuardedBlobStore.put` checks it only when the
+  object is new (dedup does not charge twice) and does not charge a rejected
+  write. The counter is in-memory and resets on restart; a deployment that needs
+  durable accounting persists `usage()`.
+- **Read auditing.** `GuardedBlobStore` emits a `BlobAuditEvent`
+  (`op`, `digest`, `outcome` allowed/denied/not-found, `principal`, `at`) on
+  every `get`, and on `put`, through the optional `audit` sink.

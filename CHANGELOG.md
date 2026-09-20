@@ -397,6 +397,16 @@ local-runtime-state.ts` (used by the k8s mixed-chain proof).
   than leaking existence, and writes require a principal. `list`/`prune` add a
   lifecycle primitive (reachability is the caller's job). Decision, rationale
   and remaining gaps in `docs/BLOB-STORE.md`.
+- **The three lifecycle gaps named in `docs/BLOB-STORE.md` are closed.**
+  `reachableDigests` + `sweepUnreferencedBlobs` (`src/artifacts/retention.ts`)
+  wire `prune` to the artifact index's reachable set, including the
+  `producedFrom` ancestry and referenced-but-unrecorded digests, with an
+  optional grace period. `TenantWriteQuota` enforces a per-blob size ceiling and
+  a per-tenant cumulative ceiling in `GuardedBlobStore.put` (new objects only,
+  so dedup is not charged twice, and a rejected write is not charged). Read
+  auditing emits a `BlobAuditEvent` (op, digest, outcome allowed/denied/
+  not-found, principal, at) on every `get` and `put`. The quota counter is
+  in-memory; durable accounting is the caller's if needed.
 
 ### Lane scheduler: a lower band can no longer be starved
 
@@ -450,6 +460,111 @@ local-runtime-state.ts` (used by the k8s mixed-chain proof).
   completion marker the hidden test prints only after its assertions. `assert`
   is frozen before agent code loads, and a hidden test that runs no assertions
   is `skipped`/`errored`, never `passed`.
+
+### Gym end-to-end runner: plant the bug, run both arms, harvest, score
+
+- **The scoring half of the gym now has a runner half.** `src/gym/task.ts`
+  materializes a checked-in task fixture (`test/fixtures/gym-tasks/<repo>/<slug>/`)
+  into a **committed bugged checkout**: clone the pinned commit from the local
+  fixture cache, plant the read-only visible test, apply `bug.patch`, and commit.
+  `baseRepoDir` is therefore the bug, not clean upstream — an unrelated no-op
+  patch scores `passed` against the clean commit and `failed` against the bugged
+  one, which is the trap this step exists to avoid. `goldenReversePatch` produces
+  the bug's own reverse patch, which scores `passed`. The first real task is `he`
+  `hex-decode` (hex numeric character references decoded in base 10).
+- **`src/gym/tools.ts`** is the agent tool surface (`list_files`, `read_file`,
+  `write_file`, `replace_in_file`, `run_visible_test`, `finish`) defined over an
+  `EffectRunner` so the identical definitions run over a local temp dir or the
+  `ExecutionBroker`; `write_file`/`replace_in_file` refuse test files and runner
+  config, and an unknown tool is a recoverable observation rather than a crash.
+  The prompt advertises every tool, so a model cannot silently reach for one the
+  harness does not have.
+- **`src/gym/harvest.ts`** takes the patch from git (`git add -A` + `git diff
+  --cached HEAD`) with `node_modules` explicitly excluded, so sandbox-only side
+  effects never travel with the scored patch.
+- **`src/gym/attempt.ts`** is the single shared loop both arms call; the only
+  injected difference is the runner and the turn. It returns the milestone's
+  record (five outcomes, requested/served model, substitution flag, wall time,
+  call count, protected paths touched) and exposes scoring as one injectable seam.
+- Plain turn (direct gateway), durable `gymAttemptWorkflow` (park/backoff shape,
+  sandbox broker + `KubernetesExecutor`), and `integrations/gym/run-gym.ts` whose
+  `--dry-run` completes the whole pipeline at **zero model calls**. A transient
+  turn failure (5xx, 429, timeout) is surfaced as a structured `GymFailure`, so
+  the durable activity throws and Temporal retries then parks on the server's
+  `Retry-After` hint while the plain arm does neither. A malformed/truncated
+  model reply is `malformed`, not `transient`: the runner re-asks it exactly
+  once (`maxReasks`, default 1) on a budget separate from the durable retry
+  path, so a stochastic formatting slip recovers but a model that reliably emits
+  bad JSON cannot consume the retry allowance every turn.
+  `integrations/gym/p2-faults.ts`
+  runs the per-arm fault matrix (502, 429, timeout, worker restart, SIGKILL)
+  with a fresh fault proxy per arm so a one-shot fault is not consumed by the
+  first arm. The durable arm's workflow input now carries the gateway `apiKey`
+  too, so an authenticated gateway sees the same request from both arms; without
+  it the plain arm sent `Authorization` and the durable arm did not, varying more
+  than durability. Note the provider-fault rows (502/429/timeout) are
+  retry-policy rows, not durability evidence: the plain arm is a no-retry single
+  shot, so they measure "has any retry at all". The process-fault rows are the
+  durability evidence.
+- **Work-product checkpoints close the "control-plane durability is not
+  work-product durability" gap found by the fault matrix.** A SIGKILLed worker
+  used to leave the retried activity re-materializing the pinned bugged checkout,
+  discarding the agent's edits (observed: a resumed attempt reading the bugged
+  source at turn 0 and producing a 0-byte patch). `src/gym/checkpoint.ts` saves a
+  `git diff` patch plus the transcript after every turn as a content-addressed
+  blob (pointer file for discovery, previous digest as `producedFrom` for
+  provenance), and `runGymAttempt` restores the latest checkpoint and resumes
+  from the next turn. A patch is O(delta) per turn rather than a full-repo
+  bundle, which is the right unit for in-progress state; the git transport's
+  mode/symlink fidelity remains for final egress. The SIGKILL measurement shows
+  **re-application, not re-derivation**: a checkpoint can already contain the
+  finished fix, so a resumed attempt that only calls `finish` scores `passed`.
+  The stronger claim — the resumed attempt makes new edits rather than replaying
+  — is measured by `stronger claim: with a non-fixing checkpoint the resumed
+  attempt must make the edit` in `test/gym-checkpoint.test.ts`, not by the
+  headline 4/4.
+- **The gym pass decision is now unforgeable: it is made where the agent's code
+  cannot run, reach or observe it.** `src/gym/scoring.ts` runs the agent
+  module in a separate worker that is given one input per request and never sees
+  an expected output or a secret; the verifier (which never loads agent code)
+  holds the test vectors and decides by comparing returned values. The child's
+  exit code is not consulted, so `process.exit(0)` before assertions is
+  `errored`, not `passed`, and there is no `GYM_HIDDEN_NONCE` in the child's
+  environment to read. Zero cases is `errored`, never a vacuous pass. The
+  fixture's held-out vectors live in `hidden.cases.json`; a task with them always
+  uses the isolated scorer. Regression tests pin the exact fifth-round forges
+  (nonce read, early exit, constant stub, assert mutation) and the control
+  confirms the legacy in-process scorer still passes the early-exit forge while
+  the isolated scorer rejects it.
+- **Combined-tree decision: the isolated verifier is the gym's pass decision.**
+  Main's harness scorer and this one were merged and initially collided: a plain
+  held-out test scored by the harness scorer is `errored`, so the golden control
+  failed (rejects-everything). The two are not equivalent. The harness scorer
+  places `check`/`complete` in the clone and runs agent code in the same process
+  as the hidden test, so agent code can `import` the harness, record its own
+  passing checks, call `complete()`, and exit before the real checks run —
+  executed against the merged dist, that scores `passed` with the bug unfixed.
+  A same-process decision cannot be sound when the adversary runs in that
+  process. `runGymAttempt` therefore routes every scored task through
+  `isolatedScoreGymPatch` (held-out cases, agent code in a worker that never
+  sees the expected outputs or a secret) and a task without cases is `errored`,
+  not silently handed to the harness scorer. Main's `scoreGymPatch` remains a
+  library for its own hidden-test-file tests; it is not the runner's decision.
+- **The isolated worker is now filesystem-sandboxed against the ground truth.**
+  Review round six ONE-b: the worker ran unsandboxed on the same host, so agent
+  code located the verifier's cwd through `/proc/<ppid>/cwd`, read the held-out
+  vectors (`hidden.cases.json`) off disk, and passed every case with the bug
+  untouched. The worker now runs under Node's permission model with `fs` reads
+  allowed only inside the scoring work directory (the clone and the worker
+  script); the fixture tree and `/proc/<ppid>` are outside it and denied, and if
+  the runtime has no permission model the scorer refuses to run rather than fail
+  open. Permanent regressions: `FORGE 5` (read the vectors by absolute path) and
+  `FORGE 5b` (the exact `/proc/<ppid>/cwd` route against the real `he/hex-decode`
+  vectors), plus a regression that a case-less task is `errored` rather than
+  falling back to the exit-code scorer (round-six FOUR). The signing-oracle
+  forgery against the same-process harness scorer (`ONE-a`) is covered at the
+  gym-decision level by `FORGE 4`; that library remains the reason it is not the
+  decision.
 
 ### Model visibility: never guess which model answered
 
@@ -534,6 +649,19 @@ local-runtime-state.ts` (used by the k8s mixed-chain proof).
   (`integrations/kubernetes/git-transport-live.ts`, `npm run git-transport`)
   round-trips the pinned commander repo through a sandbox exec that modifies it
   and gets the same tree hash back (`a2fd30e2…`), with all three shapes intact.
+- **The workspace sync path preserves symlinks now too, closing the gap the
+  sentence above used to name.** `WorkspaceSynchronizer` materializes source and
+  overlay symlinks with `writeSymlink` instead of following them into regular
+  bytes; `SandboxBackend` gained `writeSymlink`/`readSymlink` and `listGitChanges`
+  reports `symlink`; `syncBack` records a link in the `MemoryWorkspace` rather
+  than the bytes it points at. The live proof previously computed
+  `workspaceSyncKindForSymlink` and excluded it from `ok`, and because the
+  sandbox committed its changes `git status` against HEAD saw none, so it
+  measured nothing (`null`, `ok:true`). It now creates an uncommitted symlink and
+  requires `workspaceSyncKindForSymlink === "symlink"`, and checks commander's
+  own `tests/fixtures/another-dir/pm` link inbound. Live gVisor run:
+  `inboundSymlinkPreserved:true`, `workspaceSyncKindForSymlink:"symlink"`,
+  `workspaceSyncTarget:"regular-new.txt"`, `ok:true`.
 
 ### Priority lanes wired into the gateway request path
 

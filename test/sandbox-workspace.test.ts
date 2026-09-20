@@ -18,8 +18,9 @@ import { MemoryWorkspace } from "../src/workspace/memory-workspace.js";
  */
 class FakeSandboxBackend implements SandboxBackend {
   readonly files = new Map<string, Uint8Array>();
+  readonly symlinks = new Map<string, string>();
   readonly dirs = new Set<string>([""]);
-  readonly calls = { create: 0, destroy: 0, exec: 0, readFile: 0, writeFile: 0, removePath: 0 };
+  readonly calls = { create: 0, destroy: 0, exec: 0, readFile: 0, writeFile: 0, writeSymlink: 0, readSymlink: 0, removePath: 0 };
   #nextId = 0;
 
   async create(resourceClass: KubernetesResourceClass): Promise<SandboxIdentity> {
@@ -28,7 +29,7 @@ class FakeSandboxBackend implements SandboxBackend {
     return { id, namespace: "fake", podName: id, resourceClassId: resourceClass.id, createdAt: Date.now() };
   }
   async destroy(): Promise<void> { this.calls.destroy++; }
-  async reset(): Promise<void> { this.files.clear(); this.dirs.clear(); this.dirs.add(""); }
+  async reset(): Promise<void> { this.files.clear(); this.symlinks.clear(); this.dirs.clear(); this.dirs.add(""); }
   async verifyReset(): Promise<boolean> { return true; }
   async exec(_sandbox: SandboxIdentity, request: SandboxExecRequest): Promise<SandboxExecResult> {
     this.calls.exec++;
@@ -66,13 +67,29 @@ class FakeSandboxBackend implements SandboxBackend {
     if (!bytes) throw new Error(`ENOENT ${path}`);
     return bytes.slice();
   }
+  async writeSymlink(_sandbox: SandboxIdentity, path: string, target: string): Promise<void> {
+    this.calls.writeSymlink++;
+    this.symlinks.set(path, target);
+    const parts = path.split("/");
+    for (let i = 1; i < parts.length; i++) this.dirs.add(parts.slice(0, i).join("/"));
+  }
+  async readSymlink(_sandbox: SandboxIdentity, path: string): Promise<string> {
+    this.calls.readSymlink++;
+    const target = this.symlinks.get(path);
+    if (target === undefined) throw new Error(`ENOENT ${path}`);
+    return target;
+  }
   async removePath(_sandbox: SandboxIdentity, path: string): Promise<void> {
     this.calls.removePath++;
     this.files.delete(path);
+    this.symlinks.delete(path);
     this.dirs.delete(path);
   }
-  async listGitChanges(): Promise<Array<{ path: string; deleted: boolean }>> {
-    return [...this.files.keys()].map((path) => ({ path, deleted: false }));
+  async listGitChanges(): Promise<Array<{ path: string; deleted: boolean; symlink?: boolean }>> {
+    return [
+      ...[...this.files.keys()].map((path) => ({ path, deleted: false })),
+      ...[...this.symlinks.keys()].map((path) => ({ path, deleted: false, symlink: true })),
+    ];
   }
 }
 

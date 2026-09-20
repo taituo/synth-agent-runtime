@@ -1,0 +1,8 @@
+{
+  "repo": "he",
+  "commit": "36afe179392226cf1b6ccdb16ebbb7a5a844d93a",
+  "slug": "hex-decode",
+  "seed": 1,
+  "visibleTestPath": "test/visible.test.mjs",
+  "hiddenTestPath": "hidden.test.mjs"
+}

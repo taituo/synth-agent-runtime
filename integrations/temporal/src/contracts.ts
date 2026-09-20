@@ -39,13 +39,22 @@ export interface DurableAgentState {
 export interface DurableToolSpec {
   name: string;
   /** The execution-rung effect kind this tool maps to. */
-  effect: "workspace.read" | "workspace.write" | "workspace.list" | "workspace.delete" | "process.exec";
+  effect: "workspace.read" | "workspace.write" | "workspace.replace" | "workspace.list" | "workspace.delete" | "process.exec";
   /** Argument name carrying the path for `workspace.*`; default `path`. */
   pathArg?: string;
   /** Argument name carrying the content for `workspace.write`; default `content`. */
   contentArg?: string;
+  /** Argument name carrying the old text for `workspace.replace`; default `old_text`. */
+  oldTextArg?: string;
+  /** Argument name carrying the new text for `workspace.replace`; default `new_text`. */
+  newTextArg?: string;
   /** Argument name carrying the command for `process.exec`; default `command`. */
   commandArg?: string;
+  /**
+   * A FIXED command for `process.exec`, for a tool the model invokes with no
+   * command argument (e.g. the gym's `run_visible_test`). Overrides `commandArg`.
+   */
+  command?: string;
   /** Argument name carrying the working directory for `process.exec`; default `cwd`. */
   cwdArg?: string;
   /** Argument name carrying the timeout in ms for `process.exec`; default `timeoutMs`. */

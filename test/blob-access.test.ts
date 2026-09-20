@@ -13,7 +13,9 @@ import {
   GuardedBlobStore,
   SharedTrustDomainPolicy,
   TenantBlobPolicy,
+  TenantWriteQuota,
   type BlobAccessPolicy,
+  type BlobAuditEvent,
 } from "../src/index.js";
 
 test("tenant policy: the owner reads, another tenant cannot, and existence is not leaked", async () => {
@@ -74,6 +76,48 @@ test("prune removes unreferenced objects and keeps the reachable ones", async ()
     const young = await store.put(new TextEncoder().encode("young"));
     const agePrune = await store.prune({ olderThanMs: 60_000, keep: [keep.digest] });
     assert.equal(agePrune.removed.includes(young.digest), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("write quota: per-blob ceiling, per-tenant ceiling, and dedup does not charge twice", async () => {
+  const root = await mkdtemp(join(tmpdir(), "blob-quota-"));
+  try {
+    const quota = new TenantWriteQuota({ maxBytesPerBlob: 5, maxBytesPerTenant: 8 });
+    const store = new GuardedBlobStore(new FileSystemBlobStore(root), new SharedTrustDomainPolicy(), { tenantId: "t" }, { quota });
+    const four = new TextEncoder().encode("aaaa");
+    await store.put(four);
+    await store.put(four);
+    assert.equal(quota.usage("t"), 4, "identical content is deduplicated and charged once");
+    await assert.rejects(store.put(new TextEncoder().encode("bbbbbb")), /BLOB_QUOTA_EXCEEDED:blob/);
+    await store.put(new TextEncoder().encode("bbbb"));
+    assert.equal(quota.usage("t"), 8);
+    await assert.rejects(store.put(new TextEncoder().encode("c")), /BLOB_QUOTA_EXCEEDED:tenant/);
+    assert.equal(quota.usage("t"), 8, "a rejected write must not be charged");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("read auditing records allowed, denied and not-found reads with the principal", async () => {
+  const root = await mkdtemp(join(tmpdir(), "blob-audit-"));
+  try {
+    const events: BlobAuditEvent[] = [];
+    const store = new GuardedBlobStore(new FileSystemBlobStore(root), new TenantBlobPolicy(), undefined, {
+      audit: (event) => events.push(event),
+    });
+    const alice = store.forPrincipal({ tenantId: "alice" });
+    const ref = await alice.put(new TextEncoder().encode("report"));
+    await alice.get(ref.digest);
+    await assert.rejects(store.forPrincipal({ tenantId: "bob" }).get(ref.digest), /BLOB_FORBIDDEN:read/);
+    await assert.rejects(alice.get(`sha256:${"0".repeat(64)}`), /BLOB_NOT_FOUND/);
+
+    const reads = events.filter((event) => event.op === "read");
+    assert.deepEqual(reads.map((event) => event.outcome), ["allowed", "denied", "not-found"]);
+    assert.equal(reads[0]?.principal?.tenantId, "alice", "the audit event names who read");
+    assert.equal(reads[1]?.principal?.tenantId, "bob");
+    assert.ok(reads.every((event) => typeof event.digest === "string" && typeof event.at === "number"));
   } finally {
     await rm(root, { recursive: true, force: true });
   }

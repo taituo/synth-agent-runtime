@@ -1,0 +1,10 @@
+{
+  "cases": [
+    { "module": "./he.js", "call": "decode", "args": ["&#x41;"], "expect": "A", "label": "hex ascii" },
+    { "module": "./he.js", "call": "decode", "args": ["&#x20AC;"], "expect": "\u20AC", "label": "hex euro" },
+    { "module": "./he.js", "call": "decode", "args": ["&#x1F600;"], "expect": "\uD83D\uDE00", "label": "hex emoji" },
+    { "module": "./he.js", "call": "decode", "args": ["&#x1D306;"], "expect": "\uD834\uDF06", "label": "hex astral" },
+    { "module": "./he.js", "call": "decode", "args": ["&#65;"], "expect": "A", "label": "decimal reference still works" },
+    { "module": "./he.js", "call": "decode", "args": ["&amp;"], "expect": "&", "label": "named entity still works" }
+  ]
+}

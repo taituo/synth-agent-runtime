@@ -263,6 +263,14 @@ export function buildToEffect(tools: readonly DurableToolSpec[]): NonNullable<Ga
         return { id, kind: "workspace.read", path: arg(spec.pathArg ?? "path") ?? "" };
       case "workspace.write":
         return { id, kind: "workspace.write", path: arg(spec.pathArg ?? "path") ?? "", content: arg(spec.contentArg ?? "content") ?? "" };
+      case "workspace.replace":
+        return {
+          id,
+          kind: "workspace.replace",
+          path: arg(spec.pathArg ?? "path") ?? "",
+          oldText: arg(spec.oldTextArg ?? "old_text") ?? "",
+          newText: arg(spec.newTextArg ?? "new_text") ?? "",
+        };
       case "workspace.delete":
         return { id, kind: "workspace.delete", path: arg(spec.pathArg ?? "path") ?? "" };
       case "workspace.list": {
@@ -270,7 +278,9 @@ export function buildToEffect(tools: readonly DurableToolSpec[]): NonNullable<Ga
         return path === undefined ? { id, kind: "workspace.list" } : { id, kind: "workspace.list", path };
       }
       case "process.exec": {
-        const command = arg(spec.commandArg ?? "command") ?? "";
+        // A fixed command (e.g. the gym's `run_visible_test`) is not taken from
+        // the model's arguments; the tool name already implies the command.
+        const command = spec.command ?? arg(spec.commandArg ?? "command") ?? "";
         const cwd = arg(spec.cwdArg ?? "cwd");
         const timeout = call.arguments[spec.timeoutArg ?? "timeoutMs"];
         return {

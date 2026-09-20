@@ -20,6 +20,8 @@
     "scorer:isolation-probe": "node scripts/scorer-isolation-probe.mjs",
     "live:litellm-failover": "integrations/temporal/node_modules/.bin/tsx scripts/litellm-failover-live.ts",
     "live:lane-gateway": "integrations/temporal/node_modules/.bin/tsx scripts/lane-gateway-live.ts",
+    "gym:dry-run": "integrations/temporal/node_modules/.bin/tsx integrations/gym/run-gym.ts --dry-run",
+    "gym:run": "integrations/temporal/node_modules/.bin/tsx integrations/gym/run-gym.ts",
     "live:proof": "node scripts/live-proof.mjs",
     "live:proofs": "node scripts/live-proofs.mjs"
   },
