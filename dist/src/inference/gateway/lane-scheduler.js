@@ -79,7 +79,15 @@ export class LaneScheduler {
         const next = this.#takeNext();
         if (next)
             this.#inFlight++;
-        return next?.request;
+        return next ? { ticket: next.ticket, request: next.request } : undefined;
+    }
+    /** Drop a queued request (e.g. its waiter gave up). Returns whether it was queued. */
+    cancel(ticket) {
+        const index = this.#queue.findIndex((entry) => entry.ticket === ticket);
+        if (index < 0)
+            return false;
+        this.#queue.splice(index, 1);
+        return true;
     }
     #takeNext() {
         if (this.#queue.length === 0)
@@ -121,5 +129,65 @@ export class LaneScheduler {
     }
     lane(id) {
         return this.#lanes.get(id);
+    }
+}
+/** An admission failure that carries the server's `Retry-After` hint in ms. */
+export function laneError(reason, retryAfterMs) {
+    const error = new Error(`LANE_${reason.toUpperCase()}: retry after ${retryAfterMs}ms`);
+    error.retryAfterMs = retryAfterMs;
+    error.laneReason = reason;
+    return error;
+}
+/**
+ * Gateway policy that admits requests through a {@link LaneScheduler}.
+ *
+ * `authorize` either admits immediately, rejects with a `Retry-After` hint, or
+ * waits (bounded by the lane's `maxWaitMs`) for a slot to free. The server must
+ * call `release()` when an authorized request finishes; that frees the slot and
+ * admits the next queued request in band order.
+ */
+export class PriorityLanePolicy {
+    #scheduler;
+    #defaultLane;
+    #now;
+    #waiters = new Map();
+    constructor(scheduler, options = {}) {
+        this.#scheduler = scheduler;
+        this.#defaultLane = options.defaultLane ?? "batch";
+        this.#now = options.now ?? Date.now;
+    }
+    async authorize(principal) {
+        const lane = principal.lane ?? this.#defaultLane;
+        const decision = this.#scheduler.admit({ lane, tenantId: principal.tenantId, key: principal.subject, at: this.#now() });
+        if (decision.outcome === "admit")
+            return;
+        if (decision.outcome === "reject")
+            throw laneError(decision.reason, decision.retryAfterMs);
+        const maxWaitMs = this.#scheduler.lane(lane)?.maxWaitMs ?? 0;
+        await new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+                this.#waiters.delete(decision.ticket);
+                this.#scheduler.cancel(decision.ticket);
+                reject(laneError("deadline", maxWaitMs));
+            }, Math.max(1, maxWaitMs));
+            timer.unref?.();
+            this.#waiters.set(decision.ticket, { resolve: () => { clearTimeout(timer); resolve(); } });
+        });
+    }
+    release() {
+        const next = this.#scheduler.release();
+        if (!next)
+            return;
+        const waiter = this.#waiters.get(next.ticket);
+        if (waiter) {
+            this.#waiters.delete(next.ticket);
+            waiter.resolve();
+        }
+    }
+    pending() {
+        return this.#scheduler.pending();
+    }
+    inFlight() {
+        return this.#scheduler.inFlight();
     }
 }

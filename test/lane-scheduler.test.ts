@@ -45,8 +45,8 @@ test("band ordering: release picks the highest band, not the earliest arrival", 
   scheduler.admit(request("batch", "low-early"));
   scheduler.admit(request("interactive", "high-late"));
   // Freeing the slot must admit the interactive request first.
-  assert.equal(scheduler.release()?.key, "high-late");
-  assert.equal(scheduler.release()?.key, "low-early");
+  assert.equal(scheduler.release()?.request.key, "high-late");
+  assert.equal(scheduler.release()?.request.key, "low-early");
   assert.equal(scheduler.release(), undefined);
 });
 
@@ -79,8 +79,8 @@ test("weighted fair-share within a band tracks the configured weights", () => {
   for (let i = 0; i < 400; i++) {
     const next = scheduler.release();
     if (!next) break;
-    admitted[next.lane] = (admitted[next.lane] ?? 0) + 1;
-    scheduler.admit(request(next.lane, `${next.lane}-${i}`));
+    admitted[next.request.lane] = (admitted[next.request.lane] ?? 0) + 1;
+    scheduler.admit(request(next.request.lane, `${next.request.lane}-${i}`));
   }
   const ratio = admitted.heavy! / admitted.light!;
   assert.ok(ratio > 2.4 && ratio < 3.6, `expected ~3:1, got ${admitted.heavy}:${admitted.light}`);
@@ -95,7 +95,7 @@ test("band priority beats weight: a heavy low band waits behind a light high ban
   scheduler.admit(request("high", "seed"));
   scheduler.admit(request("low", "low1"));
   scheduler.admit(request("high", "high1"));
-  assert.equal(scheduler.release()?.lane, "high");
+  assert.equal(scheduler.release()?.request.lane, "high");
 });
 
 test("a queued request reports an estimated Retry-After", () => {

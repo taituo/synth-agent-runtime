@@ -3,12 +3,20 @@ export interface GatewayPrincipal {
     subject: string;
     allowedModels?: readonly string[];
     requestsPerMinute?: number;
+    /** Priority lane for this principal (see lane-scheduler.ts). Defaults to the lowest band. */
+    lane?: string;
 }
 export interface GatewayAuthenticator {
     authenticate(request: Request): Promise<GatewayPrincipal | undefined> | GatewayPrincipal | undefined;
 }
 export interface GatewayTenantPolicy {
     authorize(principal: GatewayPrincipal, model: string): Promise<void> | void;
+    /**
+     * Optional: called once a request that was authorized has finished, so a
+     * policy that admitted it can free the slot and admit the next queued
+     * request (see PriorityLanePolicy).
+     */
+    release?(principal: GatewayPrincipal): Promise<void> | void;
 }
 export declare class StaticBearerAuthenticator implements GatewayAuthenticator {
     #private;

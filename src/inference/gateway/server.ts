@@ -86,6 +86,9 @@ export function createInferenceGateway(options: {
     const onAbort = () => abort.abort(new Error("gateway client disconnected"));
     req.once("aborted", onAbort);
     res.once("close", () => { if (!res.writableEnded) onAbort(); });
+    // Set once a request has been admitted, so the finally block frees its
+    // lane slot and admits the next queued request.
+    let admittedPrincipal: GatewayPrincipal | undefined;
     try {
       const url = requestUrl(req);
       if (req.method === "GET" && url.pathname === "/health") {
@@ -131,6 +134,7 @@ export function createInferenceGateway(options: {
             return;
           }
           await options.tenantPolicy?.authorize(principal, model);
+          admittedPrincipal = principal;
           forwardedHeaders.set("x-synth-tenant", principal.tenantId);
           forwardedHeaders.set("x-synth-subject", principal.subject);
         }
@@ -169,7 +173,15 @@ export function createInferenceGateway(options: {
       }
       if (!res.headersSent) {
         const message = error instanceof Error ? error.message : String(error);
-        res.statusCode = message.startsWith("MODEL_FORBIDDEN:") ? 403 : message.startsWith("RATE_LIMITED:") ? 429 : 400;
+        const rateLimited = message.startsWith("RATE_LIMITED:") || message.startsWith("LANE_");
+        res.statusCode = message.startsWith("MODEL_FORBIDDEN:") ? 403 : rateLimited ? 429 : 400;
+        // Propagate the server's retry hint downstream so a caller (including
+        // our own durable agent) can honour the real window instead of backing
+        // off blindly.
+        const retryAfterMs = (error as { retryAfterMs?: unknown }).retryAfterMs;
+        if (typeof retryAfterMs === "number" && Number.isFinite(retryAfterMs)) {
+          res.setHeader("retry-after", String(Math.ceil(Math.max(0, retryAfterMs) / 1000)));
+        }
         res.setHeader("content-type", "application/json");
         res.end(JSON.stringify({ error: { message } }));
       } else if (!res.destroyed) {
@@ -177,6 +189,7 @@ export function createInferenceGateway(options: {
       }
     } finally {
       req.off("aborted", onAbort);
+      if (admittedPrincipal) await options.tenantPolicy?.release?.(admittedPrincipal);
     }
   });
   return {

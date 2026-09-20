@@ -40,6 +40,10 @@ export type AdmissionDecision = {
     reason: AdmissionRejection;
     retryAfterMs: number;
 };
+export interface ReleasedAdmission {
+    ticket: string;
+    request: AdmissionRequest;
+}
 export interface LaneSchedulerOptions {
     /** Concurrent admissions allowed before requests queue or reject. */
     capacity: number;
@@ -70,8 +74,36 @@ export declare class LaneScheduler {
      * caller is responsible for honouring the returned request (or calling
      * `release` again if it was cancelled).
      */
-    release(): AdmissionRequest | undefined;
+    release(): ReleasedAdmission | undefined;
+    /** Drop a queued request (e.g. its waiter gave up). Returns whether it was queued. */
+    cancel(ticket: string): boolean;
     pending(): readonly AdmissionRequest[];
     inFlight(): number;
     lane(id: LaneId): LaneSpec | undefined;
+}
+/** An admission failure that carries the server's `Retry-After` hint in ms. */
+export declare function laneError(reason: AdmissionRejection, retryAfterMs: number): Error;
+export interface PriorityLanePolicyOptions {
+    defaultLane?: LaneId;
+    now?: () => number;
+}
+/**
+ * Gateway policy that admits requests through a {@link LaneScheduler}.
+ *
+ * `authorize` either admits immediately, rejects with a `Retry-After` hint, or
+ * waits (bounded by the lane's `maxWaitMs`) for a slot to free. The server must
+ * call `release()` when an authorized request finishes; that frees the slot and
+ * admits the next queued request in band order.
+ */
+export declare class PriorityLanePolicy {
+    #private;
+    constructor(scheduler: LaneScheduler, options?: PriorityLanePolicyOptions);
+    authorize(principal: {
+        tenantId: string;
+        subject: string;
+        lane?: string;
+    }): Promise<void>;
+    release(): void;
+    pending(): readonly AdmissionRequest[];
+    inFlight(): number;
 }

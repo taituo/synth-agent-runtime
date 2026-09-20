@@ -2,6 +2,26 @@
 
 ## 1.0.0-rc.1 — abort-safety fix folded in, git ref/remote argument-injection fixed
 
+### Priority lanes wired into the gateway request path
+
+- **Scarce subscription quota had no scheduling decision.** Added a pure,
+  clock-injected `LaneScheduler` (`src/inference/gateway/lane-scheduler.ts`):
+  strictly-ordered priority bands, deficit weighted round-robin fair-share
+  within a band, queue-or-reject with a lane `maxWaitMs` deadline, and a
+  `retryAfterMs` estimate. A `PriorityLanePolicy` admits each gateway request
+  through it; `GatewayPrincipal` gained an optional `lane`, and
+  `GatewayTenantPolicy` an optional `release()` hook. The gateway server now
+  frees the slot when an authorized request finishes (so the next queued request
+  is admitted in band order) and propagates the lane's `retryAfterMs` as an HTTP
+  `Retry-After` header on a 429. This is the first time the scheduler can affect
+  a real request: the live proof (`npm run live:lane-gateway`) starts the real
+  gateway in front of a slow backend and fires concurrent requests tagged to
+  different lanes — a batch request holds the single slot, a later interactive
+  request overtakes an earlier queued batch one (completed 1227 ms vs 1827 ms),
+  and a request past its 150 ms lane deadline is rejected `429` with
+  `Retry-After: 1`. Failing-first: forcing FIFO in the scheduler made the live
+  proof report `interactiveOvertookBatch: false`.
+
 ### Synthetic rung parity with the real filesystem
 
 - **The synthetic rung (fidelity 0, `MemoryWorkspace`) returned `ok:true` where

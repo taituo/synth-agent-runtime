@@ -14,6 +14,7 @@ export * from "./durability/local-memory.js";
 export * from "./durability/temporal-adapter.js";
 export * from "./inference/gateway/types.js";
 export * from "./inference/gateway/lane-scheduler.js";
+export * from "./inference/gateway/tenant-policy.js";
 export * from "./inference/gateway/server.js";
 export * from "./adapters/pi/pi-engine.js";
 export * from "./execution/resource-class.js";
