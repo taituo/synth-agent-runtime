@@ -22,3 +22,4 @@ Recorded incrementally. A row is only added once that fault's run completed.
 | # | fault | plain arm | durable arm | differentiated |
 |---|---|---|---|---|
 | 1 | 502 (first request) | errored, 1 call, 28 ms | passed, 8 calls, 39.5 s, 358 B | **yes** |
+| 2 | 429 + `Retry-After` x3 | errored, 1 call, 31 ms | passed, 8 calls, 65.7 s, 358 B | **yes** |
