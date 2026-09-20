@@ -21,6 +21,11 @@ export interface GymAttemptActivityInput {
   runner?: "local" | "sandbox";
   /** Per-model-request timeout. */
   gatewayTimeoutMs?: number;
+  /**
+   * Stable key for work-product checkpoints. The same value on the retried
+   * activity makes it resume from the last checkpoint instead of the base.
+   */
+  checkpointKey?: string;
   /** Sandbox image pinned by digest (git-capable), for runner="sandbox". */
   image: string;
   namespace?: string;

@@ -42,7 +42,31 @@ export async function runGymAttempt(options) {
     let requestedModel = null;
     let servedModel = null;
     let modelSubstituted = false;
-    for (let turnIndex = 0; turnIndex < maxTurns; turnIndex++) {
+    let startTurnIndex = 0;
+    let resumedFromTurn;
+    let lastCheckpointDigest;
+    if (options.checkpoint && options.checkpointKey) {
+        const saved = await options.checkpoint.load(options.checkpointKey);
+        if (saved) {
+            if (saved.patchText.trim().length > 0) {
+                const patchPath = ".gym-checkpoint.patch";
+                await runner.write(patchPath, saved.patchText);
+                const applied = await runner.exec(`git apply ${patchPath}`, { cwd: task.repoDir });
+                await runner.exec(`rm -f ${patchPath}`, { cwd: task.repoDir });
+                if (applied.code !== 0)
+                    throw new Error(`failed to restore checkpoint patch: ${applied.stderr || applied.stdout}`);
+            }
+            transcript.push(...saved.transcript);
+            startTurnIndex = saved.turnIndex;
+            resumedFromTurn = saved.turnIndex;
+            lastCheckpointDigest = saved.digest;
+            if (saved.requestedModel)
+                requestedModel = saved.requestedModel;
+            if (saved.servedModel !== undefined)
+                servedModel = saved.servedModel;
+        }
+    }
+    for (let turnIndex = startTurnIndex; turnIndex < maxTurns; turnIndex++) {
         if (now() - startedAt > deadlineMs) {
             timedOut = true;
             break;
@@ -92,6 +116,22 @@ export async function runGymAttempt(options) {
         }
         if (finished)
             break;
+        if (options.checkpoint && options.checkpointKey) {
+            try {
+                const checkpointPatch = await harvestPatch(runner, { repoDir: task.repoDir, baseRef: "HEAD" });
+                lastCheckpointDigest = await options.checkpoint.save(options.checkpointKey, {
+                    turnIndex: turnIndex + 1,
+                    patchText: checkpointPatch,
+                    transcript: [...transcript],
+                    requestedModel,
+                    servedModel,
+                    ...(lastCheckpointDigest ? { parentDigest: lastCheckpointDigest } : {}),
+                });
+            }
+            catch {
+                // A checkpoint failure only weakens resume; it must not fail the attempt.
+            }
+        }
         if (now() - startedAt > deadlineMs) {
             timedOut = true;
             break;
@@ -144,6 +184,7 @@ export async function runGymAttempt(options) {
         callCount,
         turns,
         reasks,
+        ...(resumedFromTurn !== undefined ? { resumedFromTurn } : {}),
         protectedPathsTouched,
         patch,
         score,

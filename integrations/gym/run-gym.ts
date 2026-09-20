@@ -281,10 +281,11 @@ async function runDurableWorkflow(
     ...(process.env.SYNTH_RUNTIME_CLASS ? { runtimeClassName: process.env.SYNTH_RUNTIME_CLASS } : {}),
     ...(process.env.SYNTH_FIXTURE_REPOS ? { fixtureCacheDir: process.env.SYNTH_FIXTURE_REPOS } : {}),
   };
+  const workflowId = `gym-${materialized.task.slug}-${Date.now().toString(36)}`;
   const handle = await client.workflow.start("gymAttemptWorkflow", {
     taskQueue: process.env.SYNTH_GYM_TASK_QUEUE ?? "synth-agent-runtime",
-    workflowId: `gym-${materialized.task.slug}-${Date.now().toString(36)}`,
-    args: [input],
+    workflowId,
+    args: [{ ...input, checkpointKey: workflowId }],
     workflowExecutionTimeout: "2 hours",
   });
   const output = (await handle.result()) as Omit<ArmResult, "arm" | "patchBytes"> & { detail?: string; error?: string };

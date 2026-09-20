@@ -12,6 +12,7 @@
  */
 import type { GymOutcome, GymScore } from "./scoring.js";
 import { type EffectRunner, type GymToolCall, type GymToolDefinition } from "./tools.js";
+import type { GymCheckpointStore } from "./checkpoint.js";
 import type { MaterializedGymTask } from "./task.js";
 export interface GymTranscriptEntry {
     role: "assistant" | "tool";
@@ -61,6 +62,15 @@ export interface RunGymAttemptOptions {
     score?: GymScorer;
     /** Hard cap on model turns. Default 8. */
     maxTurns?: number;
+    /**
+     * Durable work-product checkpoints. When set with `checkpointKey`, the loop
+     * saves a patch+transcript checkpoint after every turn and, if a checkpoint
+     * already exists for the key, restores it and resumes from there instead of
+     * re-running from the pinned base. This is what makes a retried activity
+     * continue the agent's work rather than re-materialize the bugged checkout.
+     */
+    checkpoint?: GymCheckpointStore;
+    checkpointKey?: string;
     /**
      * How many times a malformed (non-JSON / bad tool-call protocol) reply may be
      * re-asked within one attempt. Default 1: enough for a stochastic slip, not
@@ -114,6 +124,8 @@ export interface GymAttemptRecord {
     turns: number;
     /** Malformed-reply re-asks consumed (bounded by `maxReasks`). */
     reasks: number;
+    /** When resuming, the turn index the attempt continued from. */
+    resumedFromTurn?: number;
     protectedPathsTouched: string[];
     patch: string;
     score: GymScore;

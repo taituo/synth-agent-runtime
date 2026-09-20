@@ -99,7 +99,7 @@ async function loadTemporalClient(): Promise<{ Client: any; Connection: any }> {
   throw new Error("@temporalio/client unavailable");
 }
 
-function workflowInput(args: Args, taskDir: string, workDir: string, baseUrl: string, runner: "local" | "sandbox") {
+function workflowInput(args: Args, taskDir: string, workDir: string, baseUrl: string, runner: "local" | "sandbox", checkpointKey: string) {
   return {
     agentId: "gym-p2-fault",
     taskDir,
@@ -110,6 +110,7 @@ function workflowInput(args: Args, taskDir: string, workDir: string, baseUrl: st
     deadlineMs: args.deadlineMs,
     runner,
     gatewayTimeoutMs: args.gatewayTimeoutMs,
+    checkpointKey,
     image: "",
     ...(process.env.SYNTH_FIXTURE_REPOS ? { fixtureCacheDir: process.env.SYNTH_FIXTURE_REPOS } : {}),
   };
@@ -173,10 +174,11 @@ async function runDurableOnce(args: Args, baseUrl: string, workDir: string, faul
   try {
     await sleep(5_000);
 
+    const workflowId = `gym-fault-${Date.now().toString(36)}`;
     const handle = await client.workflow.start("gymAttemptWorkflow", {
       taskQueue,
-      workflowId: `gym-fault-${Date.now().toString(36)}`,
-      args: [workflowInput(args, task.taskDir, workDir, baseUrl, "local")],
+      workflowId,
+      args: [workflowInput(args, task.taskDir, workDir, baseUrl, "local", workflowId)],
       workflowExecutionTimeout: "1 hour",
     });
 

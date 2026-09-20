@@ -41,6 +41,17 @@
   runs the per-arm fault matrix (502, 429, timeout, worker restart, SIGKILL)
   with a fresh fault proxy per arm so a one-shot fault is not consumed by the
   first arm.
+- **Work-product checkpoints close the "control-plane durability is not
+  work-product durability" gap found by the fault matrix.** A SIGKILLed worker
+  used to leave the retried activity re-materializing the pinned bugged checkout,
+  discarding the agent's edits (observed: a resumed attempt reading the bugged
+  source at turn 0 and producing a 0-byte patch). `src/gym/checkpoint.ts` saves a
+  `git diff` patch plus the transcript after every turn as a content-addressed
+  blob (pointer file for discovery, previous digest as `producedFrom` for
+  provenance), and `runGymAttempt` restores the latest checkpoint and resumes
+  from the next turn. A patch is O(delta) per turn rather than a full-repo
+  bundle, which is the right unit for in-progress state; the git transport's
+  mode/symlink fidelity remains for final egress.
 
 ### Artifact handoff by reference, with provenance and a flat history
 

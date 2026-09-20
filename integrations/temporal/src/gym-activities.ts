@@ -4,8 +4,9 @@
  * supplies the park/backoff durability; this file supplies the model call
  * (direct gateway) and the sandbox tool surface.
  */
+import { join } from "node:path";
 import { ApplicationFailure, Context as ActivityContext } from "@temporalio/activity";
-import { createGatewayGymTurn, loadGymTask, localEffectRunner, materializeGymTask, runGymAttempt, type EffectRunner } from "../../../src/index.js";
+import { BlobGymCheckpointStore, createGatewayGymTurn, FileSystemBlobStore, loadGymTask, localEffectRunner, materializeGymTask, runGymAttempt, type EffectRunner } from "../../../src/index.js";
 import { buildSandboxRunner } from "../../gym/sandbox.js";
 import type { GymAttemptActivities, GymAttemptActivityInput, GymAttemptActivityOutput } from "./gym-contracts.js";
 
@@ -58,12 +59,19 @@ export function createGymActivities(): GymAttemptActivities {
             trace.push(`assistant: ${(result.content ?? JSON.stringify(result.toolCalls)).slice(0, 500)}`);
             return result;
           };
+          const checkpointDir = process.env.SYNTH_GYM_CHECKPOINT_DIR ?? "/tmp/opencode/gym-checkpoints";
+          const checkpoint = new BlobGymCheckpointStore(
+            new FileSystemBlobStore(join(checkpointDir, "blobs")),
+            join(checkpointDir, "pointers"),
+          );
           const record = await runGymAttempt({
             task: materialized,
             runner,
             turn: tracedTurn,
             maxTurns: input.maxTurns,
             deadlineMs: input.deadlineMs,
+            checkpoint,
+            ...(input.checkpointKey ? { checkpointKey: input.checkpointKey } : {}),
             onTool: ({ call, observation }) => {
               if (call.name === "read_file") {
                 const bugged = observation.includes("parseInt(hexDigits, 10)");

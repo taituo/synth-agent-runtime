@@ -14,6 +14,7 @@ import type { GymOutcome, GymScore } from "./scoring.js";
 import { isTampering, patchTargetPaths, scoreGymPatch, PROTECTED_PATTERNS } from "./scoring.js";
 import { buildGymSystemPrompt, buildGymUserPrompt, createGymTools, GYM_TOOL_DEFINITIONS, type EffectRunner, type GymToolCall, type GymToolDefinition } from "./tools.js";
 import { harvestPatch } from "./harvest.js";
+import type { GymCheckpointStore } from "./checkpoint.js";
 import type { MaterializedGymTask } from "./task.js";
 
 export interface GymTranscriptEntry {
@@ -71,6 +72,15 @@ export interface RunGymAttemptOptions {
   /** Hard cap on model turns. Default 8. */
   maxTurns?: number;
   /**
+   * Durable work-product checkpoints. When set with `checkpointKey`, the loop
+   * saves a patch+transcript checkpoint after every turn and, if a checkpoint
+   * already exists for the key, restores it and resumes from there instead of
+   * re-running from the pinned base. This is what makes a retried activity
+   * continue the agent's work rather than re-materialize the bugged checkout.
+   */
+  checkpoint?: GymCheckpointStore;
+  checkpointKey?: string;
+  /**
    * How many times a malformed (non-JSON / bad tool-call protocol) reply may be
    * re-asked within one attempt. Default 1: enough for a stochastic slip, not
    * enough for a model that reliably emits bad JSON to burn the budget.
@@ -120,6 +130,8 @@ export interface GymAttemptRecord {
   turns: number;
   /** Malformed-reply re-asks consumed (bounded by `maxReasks`). */
   reasks: number;
+  /** When resuming, the turn index the attempt continued from. */
+  resumedFromTurn?: number;
   protectedPathsTouched: string[];
   patch: string;
   score: GymScore;
@@ -171,8 +183,30 @@ export async function runGymAttempt(options: RunGymAttemptOptions): Promise<GymA
   let requestedModel: string | null = null;
   let servedModel: string | null = null;
   let modelSubstituted = false;
+  let startTurnIndex = 0;
+  let resumedFromTurn: number | undefined;
+  let lastCheckpointDigest: string | undefined;
 
-  for (let turnIndex = 0; turnIndex < maxTurns; turnIndex++) {
+  if (options.checkpoint && options.checkpointKey) {
+    const saved = await options.checkpoint.load(options.checkpointKey);
+    if (saved) {
+      if (saved.patchText.trim().length > 0) {
+        const patchPath = ".gym-checkpoint.patch";
+        await runner.write(patchPath, saved.patchText);
+        const applied = await runner.exec(`git apply ${patchPath}`, { cwd: task.repoDir });
+        await runner.exec(`rm -f ${patchPath}`, { cwd: task.repoDir });
+        if (applied.code !== 0) throw new Error(`failed to restore checkpoint patch: ${applied.stderr || applied.stdout}`);
+      }
+      transcript.push(...saved.transcript);
+      startTurnIndex = saved.turnIndex;
+      resumedFromTurn = saved.turnIndex;
+      lastCheckpointDigest = saved.digest;
+      if (saved.requestedModel) requestedModel = saved.requestedModel;
+      if (saved.servedModel !== undefined) servedModel = saved.servedModel;
+    }
+  }
+
+  for (let turnIndex = startTurnIndex; turnIndex < maxTurns; turnIndex++) {
     if (now() - startedAt > deadlineMs) {
       timedOut = true;
       break;
@@ -218,6 +252,21 @@ export async function runGymAttempt(options: RunGymAttemptOptions): Promise<GymA
       options.onTool?.({ turnIndex, call, ok: toolResult.ok, observation: toolResult.observation });
     }
     if (finished) break;
+    if (options.checkpoint && options.checkpointKey) {
+      try {
+        const checkpointPatch = await harvestPatch(runner, { repoDir: task.repoDir, baseRef: "HEAD" });
+        lastCheckpointDigest = await options.checkpoint.save(options.checkpointKey, {
+          turnIndex: turnIndex + 1,
+          patchText: checkpointPatch,
+          transcript: [...transcript],
+          requestedModel,
+          servedModel,
+          ...(lastCheckpointDigest ? { parentDigest: lastCheckpointDigest } : {}),
+        });
+      } catch {
+        // A checkpoint failure only weakens resume; it must not fail the attempt.
+      }
+    }
     if (now() - startedAt > deadlineMs) {
       timedOut = true;
       break;
@@ -269,6 +318,7 @@ export async function runGymAttempt(options: RunGymAttemptOptions): Promise<GymA
     callCount,
     turns,
     reasks,
+    ...(resumedFromTurn !== undefined ? { resumedFromTurn } : {}),
     protectedPathsTouched,
     patch,
     score,
