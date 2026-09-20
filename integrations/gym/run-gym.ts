@@ -48,6 +48,8 @@ interface ArmResult {
    * `temporal` would be false.
    */
   role?: "control" | "temporal";
+  /** The boundary this arm actually ran in, carried from the workflow output. */
+  isolation?: "unisolated" | "gvisor";
   outcome: string;
   requestedModel: string | null;
   servedModel: string | null;
@@ -237,6 +239,7 @@ async function runLivePlain(
     return {
       arm: "plain",
       role: "control",
+      isolation: describeGymRunner(runnerKind).isolation,
       outcome: record.outcome,
       requestedModel: record.requestedModel,
       servedModel: record.servedModel,
@@ -317,6 +320,7 @@ async function runDurableWorkflow(
   return {
     arm: "durable",
     role: "temporal",
+    isolation: output.isolation ?? describeGymRunner(runnerKind).isolation,
     outcome: output.outcome,
     requestedModel: output.requestedModel,
     servedModel: output.servedModel,

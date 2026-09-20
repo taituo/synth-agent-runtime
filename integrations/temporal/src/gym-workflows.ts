@@ -30,8 +30,13 @@ const { runGymAttemptActivity } = proxyActivities<GymAttemptActivities>({
 });
 
 function errored(input: GymAttemptActivityInput, message: string): GymAttemptActivityOutput {
+  // Label the boundary even on a refusal. Inlined (rather than importing the
+  // runner binding) to keep this workflow-isolate module free of non-local
+  // imports; the activity sets the same field on success.
+  const isolation = (input.runner ?? "sandbox") === "sandbox" ? "gvisor" : "unisolated";
   return {
     arm: "durable",
+    isolation,
     outcome: "errored",
     requestedModel: input.model,
     servedModel: null,

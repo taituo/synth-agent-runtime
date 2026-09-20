@@ -12,7 +12,8 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
-const TEMPORAL_DIR = fileURLToPath(new URL("../../integrations/temporal/", import.meta.url));
+const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
+const TEMPORAL_DIR = join(REPO_ROOT, "integrations", "temporal");
 const TSX = join(TEMPORAL_DIR, "node_modules", ".bin", "tsx");
 
 interface RunResult {
@@ -58,3 +59,20 @@ for (const driver of DRIVERS) {
     assert.match(result.output, /skipped/);
   });
 }
+
+test("p2-faults.ts: a scored run on the local runner is refused with exit 2", async (t) => {
+  if (!(await tsxAvailable())) return t.skip("tsx not installed");
+  // Same skip contract as run-gym.ts: a refusal is exit 2, not an exit-1 crash.
+  let code = 0;
+  let output = "";
+  try {
+    const result = await execFileAsync(TSX, ["integrations/gym/p2-faults.ts", "--fault", "502", "--runner", "local"], { cwd: REPO_ROOT, env: process.env });
+    output = `${result.stdout}${result.stderr}`;
+  } catch (error) {
+    const e = error as { code?: number; stdout?: string; stderr?: string };
+    code = e.code ?? 1;
+    output = `${e.stdout ?? ""}${e.stderr ?? ""}`;
+  }
+  assert.equal(code, 2, `expected the refusal to exit 2, got ${code}: ${output}`);
+  assert.match(output, /unisolated|skipped/, `refusal must be labelled: ${output}`);
+});

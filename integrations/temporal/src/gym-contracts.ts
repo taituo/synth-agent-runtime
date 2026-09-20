@@ -41,6 +41,11 @@ export interface GymAttemptActivityInput {
 
 export interface GymAttemptActivityOutput {
   arm: "durable";
+  /**
+   * The boundary the attempt actually had. `unisolated` is set even when the
+   * attempt is refused, so the artifact never presents a host run as isolated.
+   */
+  isolation?: "unisolated" | "gvisor";
   outcome: "passed" | "failed" | "tampered" | "timed-out" | "errored" | "skipped";
   requestedModel: string | null;
   servedModel: string | null;

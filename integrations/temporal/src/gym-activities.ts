@@ -6,10 +6,16 @@
  *
  * NOTE: the recorded fault matrix used `runner=local` for both arms; the sandbox
  * branch here is the isolated option, proven live by `sandbox-live.ts`.
+ *
+ * This is the ENFORCEMENT point, not just the drivers: a scored attempt may not
+ * run on the local host runner, because model-authored code there can read the
+ * held-out vectors. A direct `gymAttemptWorkflow` start with `runner:"local"`
+ * (bypassing the drivers) is refused here as a non-retryable failure, and the
+ * output is labelled `unisolated` either way.
  */
 import { join } from "node:path";
 import { ApplicationFailure, Context as ActivityContext } from "@temporalio/activity";
-import { BlobGymCheckpointStore, DEFAULT_GATEWAY_RETRY, createGatewayGymTurn, FileSystemBlobStore, loadGymTask, localEffectRunner, materializeGymTask, runGymAttempt, type EffectRunner } from "../../../src/index.js";
+import { BlobGymCheckpointStore, DEFAULT_GATEWAY_RETRY, createGatewayGymTurn, describeGymRunner, FileSystemBlobStore, loadGymTask, localEffectRunner, materializeGymTask, runGymAttempt, type EffectRunner } from "../../../src/index.js";
 import { buildSandboxRunner } from "../../gym/sandbox.js";
 import type { GymAttemptActivities, GymAttemptActivityInput, GymAttemptActivityOutput } from "./gym-contracts.js";
 
@@ -24,13 +30,23 @@ export function createGymActivities(): GymAttemptActivities {
         }
       }, 15_000);
       try {
+        // Refuse BEFORE materializing or spending a model call: a direct
+        // workflow start must not be able to run a scored attempt unisolated.
+        const binding = describeGymRunner(input.runner ?? "sandbox");
+        if (!binding.scoredAllowed) {
+          throw ApplicationFailure.nonRetryable(
+            `refusing to score a run on the "${binding.kind}" runner: it is unisolated and model-authored code ` +
+              `can read the held-out vectors on the host. Start the workflow with runner:"sandbox" (gVisor).`,
+            "GymUnisolatedScoredRun",
+          );
+        }
         const task = await loadGymTask(input.taskDir);
         const materialized = await materializeGymTask({
           task,
           workDir: input.workDir,
           ...(input.fixtureCacheDir ? { fixtureCacheDir: input.fixtureCacheDir } : {}),
         });
-        const useSandbox = (input.runner ?? "sandbox") === "sandbox";
+        const useSandbox = binding.kind === "sandbox";
         const sandbox = useSandbox
           ? await buildSandboxRunner({
               repoDir: materialized.repoDir,
@@ -103,6 +119,7 @@ export function createGymActivities(): GymAttemptActivities {
           }
           return {
             arm: "durable",
+            isolation: binding.isolation,
             outcome: record.outcome,
             requestedModel: record.requestedModel,
             servedModel: record.servedModel,

@@ -35,6 +35,7 @@ import {
   materializeGymTask,
   parseGymRunner,
   runGymAttempt,
+  UnisolatedScoredRunError,
   type EffectRunner,
   type GymRunnerKind,
 } from "../../src/index.js";
@@ -51,6 +52,8 @@ interface ArmResult {
   arm: "plain" | "durable";
   /** `control` = plain loop, no runtime; `temporal` = the `gymAttemptWorkflow`. */
   role?: "control" | "temporal";
+  /** The boundary this arm actually ran in, carried from the workflow output. */
+  isolation?: "unisolated" | "gvisor";
   outcome: string;
   callCount: number;
   turns: number;
@@ -200,6 +203,7 @@ async function runPlainOnce(args: Args, baseUrl: string, workDir: string): Promi
     return {
       arm: "plain",
       role: "control",
+      isolation: describeGymRunner(args.runner).isolation,
       outcome: record.outcome,
       callCount: record.callCount,
       turns: record.turns,
@@ -283,6 +287,7 @@ async function runDurableOnce(args: Args, baseUrl: string, workDir: string, faul
       return {
         arm: "durable",
         role: "temporal",
+        isolation: describeGymRunner(args.runner).isolation,
         outcome: "harness-timeout",
         callCount: 0,
         turns: 0,
@@ -309,6 +314,7 @@ async function runDurableOnce(args: Args, baseUrl: string, workDir: string, faul
     return {
       arm: "durable",
       role: "temporal",
+      isolation: output.isolation ?? describeGymRunner(args.runner).isolation,
       outcome: output.outcome,
       callCount: output.callCount,
       turns: output.turns,
@@ -346,6 +352,7 @@ async function runPlainKilled(args: Args, baseUrl: string, workDir: string, sign
     return {
       arm: "plain",
       role: "control",
+      isolation: describeGymRunner(args.runner).isolation,
       outcome: "lost",
       callCount: 0,
       turns: 0,
@@ -443,6 +450,12 @@ async function main(): Promise<number> {
 main()
   .then((code) => process.exit(code))
   .catch((error) => {
+    // Same skip contract as run-gym.ts: a refusal is a distinct exit 2, never a
+    // pass and never an undifferentiated crash (exit 1).
+    if (error instanceof UnisolatedScoredRunError) {
+      console.log(JSON.stringify({ ok: false, skipped: true, unisolated: true, reason: error.message }, null, 2));
+      process.exit(2);
+    }
     console.error(error);
     process.exit(1);
   });
