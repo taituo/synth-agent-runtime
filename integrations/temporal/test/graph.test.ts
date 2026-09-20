@@ -151,6 +151,33 @@ test("executeGraph composes a nested graph through a child node", async () => {
   assert.deepEqual(calls, ["turn:before", "child:sub", "activity:tick", "activity:tail", "turn:after"]);
 });
 
+test("executeGraph resumes after continue-as-new without re-running journaled nodes", async () => {
+  const { calls, handlers } = countingHandlers();
+  const graph: GraphStep = {
+    id: "root",
+    kind: "sequence",
+    steps: [
+      { id: "a", kind: "turn", agentId: "a", messages: [] },
+      { id: "loop", kind: "loop", maxIterations: 10, until: { path: "b.result.count", equals: 5 }, body: { id: "b", kind: "turn", agentId: "b", messages: [] } },
+    ],
+  };
+  const scope = newGraphScope();
+  // First run: the workflow continues-as-new after three completed nodes.
+  await assert.rejects(
+    executeGraph(graph, handlers, scope, () => {
+      if (scope.completed.length >= 3) throw new Error("continue-as-new");
+    }),
+    /continue-as-new/,
+  );
+  // The resumed run carries the same scope: completed nodes are skipped and the
+  // loop restarts at the first iteration that was not journaled.
+  const result = await executeGraph(graph, handlers, scope);
+  assert.equal(calls.filter((call) => call === "a").length, 1, "the completed 'a' must not re-run after continue-as-new");
+  assert.equal(calls.filter((call) => call === "b").length, 5, "the loop resumes at iteration 2 and reaches 5 total");
+  assert.equal(scope.completed.filter((id) => id === "b").length, 5, "the journaled loop iterations are not duplicated");
+  assert.equal(result.value, scope.results["loop"]);
+});
+
 test("executeGraph calls onNode after every completed node", async () => {
   const { handlers } = countingHandlers();
   const seen: string[] = [];

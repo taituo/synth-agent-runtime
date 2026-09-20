@@ -86,16 +86,21 @@ export async function runGraphWorkflow(input: GraphWorkflowInput): Promise<Graph
     updatedAt: Date.now(),
   };
   let cancelled = false;
+  // Newly executed nodes this run. Nodes restored from the journal after a
+  // continue-as-new do not count, so a resumed run gets a full threshold's worth
+  // of new nodes instead of continuing-as-new after the first one.
+  let completedThisRun = 0;
   setHandler(cancelGraph, () => { cancelled = true; });
   setHandler(getGraphState, () => clone(state));
 
   try {
-    await executeGraph(input.graph, handlers, scope, (current) => {
+    await executeGraph(input.graph, handlers, scope, () => {
       state.updatedAt = Date.now();
       // A cancel signal is observed at the next node boundary, so a loop stops
       // within one iteration instead of running to completion.
       if (cancelled) throw new GraphCancelled();
-      if (current.completed.length >= CONTINUE_AS_NEW_AFTER_NODES) throw new ContinueAsNewGraph();
+      completedThisRun += 1;
+      if (completedThisRun >= CONTINUE_AS_NEW_AFTER_NODES) throw new ContinueAsNewGraph();
     });
     state.status = "completed";
   } catch (error) {

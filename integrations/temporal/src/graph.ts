@@ -59,10 +59,17 @@ export interface GraphScope {
   iteration: number;
   /** Node ids in completion order, for observability and continue-as-new. */
   completed: string[];
+  /**
+   * Completed node occurrences, keyed by a deterministic execution path (see
+   * `executeGraph`). A continue-as-new carries this, so the resumed run skips
+   * work already done instead of re-running the whole graph. Values live in
+   * `results`; the journal only records which occurrences are complete.
+   */
+  journal: Record<string, true>;
 }
 
 export function newGraphScope(): GraphScope {
-  return { results: {}, iteration: 0, completed: [] };
+  return { results: {}, iteration: 0, completed: [], journal: {} };
 }
 
 export function resolvePath(root: unknown, path: string): unknown {
@@ -80,23 +87,36 @@ export function matchesCondition(condition: GraphCondition, results: Record<stri
 
 /**
  * Execute one step and its descendants, recording each result in the scope.
- * `onNode` runs after every node completes; the workflow uses it to observe
- * cancellation and the continue-as-new threshold between nodes.
+ * `onNode` runs after every newly executed node completes; the workflow uses it
+ * to observe cancellation and the continue-as-new threshold between nodes.
+ *
+ * `path` is the node's deterministic occurrence key (structure position plus
+ * loop iteration). `journal` records the occurrences already complete: when a
+ * continue-as-new resumes, `executeGraph` finds them and returns the carried
+ * result without calling the handler again. A cache-hit result carries the
+ * value but not `children`/`iterations`; only the value is consumed downstream.
  */
 export async function executeGraph(
   step: GraphStep,
   handlers: GraphHandlers,
   scope: GraphScope,
   onNode?: (scope: GraphScope) => void,
+  path: string = step.id,
 ): Promise<StepResult> {
-  const result = await runStep(step, handlers, scope, onNode);
+  // Defensive for a scope persisted before the journal existed.
+  scope.journal ??= {};
+  if (scope.journal[path] === true) {
+    return { nodeId: step.id, value: scope.results[step.id] };
+  }
+  const result = await runStep(step, handlers, scope, onNode, path);
   scope.results[step.id] = result.value;
   scope.completed.push(step.id);
+  scope.journal[path] = true;
   onNode?.(scope);
   return result;
 }
 
-async function runStep(step: GraphStep, handlers: GraphHandlers, scope: GraphScope, onNode?: (scope: GraphScope) => void): Promise<StepResult> {
+async function runStep(step: GraphStep, handlers: GraphHandlers, scope: GraphScope, onNode: ((scope: GraphScope) => void) | undefined, path: string): Promise<StepResult> {
   switch (step.kind) {
     case "turn":
       return { nodeId: step.id, value: await handlers.turn(step) };
@@ -106,27 +126,39 @@ async function runStep(step: GraphStep, handlers: GraphHandlers, scope: GraphSco
       return { nodeId: step.id, value: await handlers.child(step) };
     case "sequence": {
       const children: StepResult[] = [];
-      for (const child of step.steps) children.push(await executeGraph(child, handlers, scope, onNode));
+      for (let i = 0; i < step.steps.length; i++) {
+        const child = step.steps[i]!;
+        children.push(await executeGraph(child, handlers, scope, onNode, `${path}/${i}:${child.id}`));
+      }
       return { nodeId: step.id, value: children.at(-1)?.value, children };
     }
     case "fanout": {
       // Parallel children, joined when all complete. Temporal makes this
       // deterministic; a unit test asserts call counts, not completion order.
-      const children = await Promise.all(step.steps.map((child) => executeGraph(child, handlers, scope, onNode)));
+      const children = await Promise.all(step.steps.map((child, i) => executeGraph(child, handlers, scope, onNode, `${path}/${i}:${child.id}`)));
       return { nodeId: step.id, value: children.map((child) => child.value), children };
     }
     case "branch": {
-      const chosen = matchesCondition(step.condition, scope.results) ? step.then : step.else;
+      const takenThen = matchesCondition(step.condition, scope.results);
+      const chosen = takenThen ? step.then : step.else;
       if (!chosen) return { nodeId: step.id, value: undefined };
-      const child = await executeGraph(chosen, handlers, scope, onNode);
+      const child = await executeGraph(chosen, handlers, scope, onNode, `${path}/${takenThen ? "then" : "else"}:${chosen.id}`);
       return { nodeId: step.id, value: child.value, children: [child] };
     }
     case "loop": {
+      // Resume at the first iteration not already journaled. A continue-as-new
+      // can preempt the `until` check immediately after a body node completes,
+      // so re-evaluate it against the carried last result before running more.
+      let start = 0;
+      while (start < step.maxIterations && scope.journal[`${path}#${start}/${step.body.id}`] === true) start++;
+      if (start > 0 && matchesCondition(step.until, scope.results)) {
+        return { nodeId: step.id, value: scope.results[step.body.id], iterations: start, children: [] };
+      }
       const children: StepResult[] = [];
-      let iterations = 0;
-      for (let i = 0; i < step.maxIterations; i++) {
+      let iterations = start;
+      for (let i = start; i < step.maxIterations; i++) {
         scope.iteration = i;
-        children.push(await executeGraph(step.body, handlers, scope, onNode));
+        children.push(await executeGraph(step.body, handlers, scope, onNode, `${path}#${i}/${step.body.id}`));
         iterations = i + 1;
         if (matchesCondition(step.until, scope.results)) break;
       }
