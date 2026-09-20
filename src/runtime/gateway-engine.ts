@@ -8,9 +8,9 @@ import type { AgentEngine, AgentEngineContext } from "./agent-engine.js";
  *
  * One turn is: send the turn's messages to an OpenAI-compatible gateway, then
  * execute the tool calls the model asked for through the execution rung
- * (`AgentEngineContext.executeEffect`), and return the outcome. Both the
- * in-process driver (`AgentRuntime`) and the durable `runTurn` activity call
- * this engine; neither is allowed to hand-roll the model HTTP call.
+ * (`AgentEngineContext.executeEffect`), and return the outcome. The durable
+ * `runTurn` activity and any direct caller share this engine; neither is
+ * allowed to hand-roll the model HTTP call.
  */
 
 export interface GatewayToolCall {

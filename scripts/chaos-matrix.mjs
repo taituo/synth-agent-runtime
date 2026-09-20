@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 
 const suites = [
   "dist/test/chaos.test.js",
-  "dist/test/v04.test.js",
+  "dist/test/durable-stores.test.js",
   "dist/test/kubernetes.test.js",
   "dist/test/postgres.test.js",
 ];

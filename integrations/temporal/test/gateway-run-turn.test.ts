@@ -1,9 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import type { AgentId } from "../../../src/core/ids.js";
-import { LocalMemoryDurability } from "../../../src/durability/local-memory.js";
-import type { AgentEngine } from "../../../src/runtime/agent-engine.js";
-import { AgentRuntime } from "../../../src/runtime/agent-runtime.js";
+import type { AgentId, WorkspaceId } from "../../../src/core/ids.js";
+import type { AgentEngine, AgentEngineContext } from "../../../src/runtime/agent-engine.js";
 import { createGatewayAgentEngine } from "../../../src/runtime/gateway-engine.js";
 import type { DurableMailboxMessage } from "../src/contracts.js";
 import {
@@ -257,7 +255,7 @@ test("runTurn invokes the shared engine body and makes no HTTP call of its own",
   ]);
 });
 
-test("the durable activity and the in-process driver run the same engine body", async () => {
+test("the durable activity and a direct caller run the same engine body", async () => {
   const bodies: string[] = [];
   let engineRuns = 0;
   const body = createGatewayAgentEngine({
@@ -282,19 +280,20 @@ test("the durable activity and the in-process driver run the same engine body", 
   const runTurn = createGatewayRunTurn({ baseUrl: "http://gw.test", model: "m", heartbeat: () => {}, engine });
   await runTurn({ agentId: "agt_shared", messages: [message("event one")] });
 
-  // In-process path: AgentRuntime.run with the same engine.
-  const runtime = new AgentRuntime(new LocalMemoryDurability());
-  const workspace = await runtime.createWorkspace();
-  await runtime.spawn({
-    id: "agt_shared" as AgentId,
+  // Direct (non-Temporal) path: exactly what an in-process driver does with the
+  // shared body. The workflow is the runtime, but the body is not Temporal-only.
+  const context: AgentEngineContext = {
+    agentId: "agt_shared" as AgentId,
+    workspaceId: "temporal:agt_shared" as WorkspaceId,
     definition: { id: "def", inferenceProfile: { id: "m", model: "m" } },
-    engine,
-    workspace,
-  });
-  await runtime.send("agt_shared" as AgentId, "event one");
-  await runtime.run("agt_shared" as AgentId);
+    inferenceProfile: { id: "m", model: "m" },
+    signal: new AbortController().signal,
+    emitOutput: () => {},
+    emitTool: () => {},
+  };
+  await engine.run([{ id: "m1", role: "human", text: "event one", createdAt: 1 }], context);
 
-  assert.equal(engineRuns, 2, "both drivers must go through the one shared body");
-  assert.equal(bodies.length, 2, "both drivers must reach the gateway through that body");
-  assert.equal(bodies[0], bodies[1], "the shared body must build the same request for both drivers");
+  assert.equal(engineRuns, 2, "both callers must go through the one shared body");
+  assert.equal(bodies.length, 2, "both callers must reach the gateway through that body");
+  assert.equal(bodies[0], bodies[1], "the shared body must build the same request for both callers");
 });

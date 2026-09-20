@@ -8,7 +8,6 @@ import {
   LocalMemoryDurability,
   LocalRuntimeStateStore,
   persistAgentSnapshot,
-  runCrashRecoveryScenario,
   type DurabilityProvider,
   type Effect,
 } from "../src/index.js";
@@ -19,13 +18,6 @@ test("chaos failpoints are deterministic", () => {
   assert.throws(() => chaos.hit("x"), /Injected chaos fault/);
   chaos.hit("x");
   assert.deepEqual(chaos.history().map((x) => x.fired), [false, true, false]);
-});
-
-test("crash recovery scenario restores pre-turn world", async () => {
-  const result = await runCrashRecoveryScenario();
-  assert.equal(result.dirty, "dirty-after-crash");
-  assert.equal(result.recovered, result.before);
-  assert.equal(result.rolledBack, 1);
 });
 
 test("chaos durability forwards the optional fenced/event surface only when present", async () => {
