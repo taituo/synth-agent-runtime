@@ -306,6 +306,7 @@ export function defaultEffectReplayMode(effect: Effect): EffectReplayMode {
     case "workspace.read":
     case "workspace.write":
     case "workspace.delete":
+    case "workspace.symlink":
     case "workspace.list":
     case "process.exec":
       return "attempt-local";

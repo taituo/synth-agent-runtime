@@ -10,6 +10,7 @@ export interface WorkspaceSnapshot {
     id: WorkspaceId;
     revision?: WorkspaceRevision;
     overlay: ReadonlyMap<string, Uint8Array>;
+    links?: ReadonlyMap<string, string>;
     deleted: ReadonlySet<string>;
     changed: ReadonlySet<string>;
 }
@@ -32,6 +33,14 @@ export declare class MemoryWorkspace {
     } | undefined>;
     readText(path: string): Promise<string | undefined>;
     write(path: string, content: Uint8Array | string): void;
+    /**
+     * Create a symlink, validating that its target resolves INSIDE the workspace.
+     * This is the caller that puts the symlink-containment policy in force: an
+     * escaping target (absolute, climbing out, or via an intermediate symlinked
+     * directory) is rejected with the shared WORKSPACE_PATH_ESCAPES error, the
+     * same as a traversing write. A dangling target is a valid link and is kept.
+     */
+    symlink(path: string, target: string): void;
     delete(path: string): void;
     listDir(path?: string): Promise<string[]>;
     changedPaths(): string[];

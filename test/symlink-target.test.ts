@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { NativeGitSource, escapesWorkspace, resolveSymlinkTarget } from "../src/index.js";
+import { MemoryWorkspace, NativeGitSource, SyntheticExecutor, escapesWorkspace, resolveSymlinkTarget } from "../src/index.js";
 import { FixtureUnavailableError, REAL_REPOS, repoCachePath } from "./fixtures/real-repos.js";
 
 test("regression: the raw-target check is wrong for relative in-repo links", () => {
@@ -48,10 +48,55 @@ test("a chain is followed with a depth limit, and cycles are rejected", () => {
   assert.equal((deep as { reason?: string }).reason, "too-deep");
 });
 
+test("a symlinked intermediate directory that escapes is rejected", () => {
+  // `d` is a symlink out of the workspace; `d/secret.txt` escapes even though
+  // the leaf `secret.txt` is not itself a link.
+  const outside = (p: string) => (p === "d" ? "../outside" : undefined);
+  const result = resolveSymlinkTarget("link", "d/secret.txt", outside);
+  assert.equal(result.ok, false, "an intermediate symlinked dir that escapes must be rejected");
+  assert.equal((result as { reason?: string }).reason, "escapes");
+
+  // An in-workspace intermediate symlinked directory is followed.
+  const inside = (p: string) => (p === "d" ? "sub" : undefined);
+  const followed = resolveSymlinkTarget("link", "d/secret.txt", inside);
+  assert.equal(followed.ok, true);
+  assert.equal((followed as { resolved: string }).resolved, "sub/secret.txt");
+});
+
 test("a dangling link is a valid link and is kept, not resolved-and-failed", () => {
   const result = resolveSymlinkTarget("a/link", "../missing/target", () => undefined);
   assert.equal(result.ok, true);
   assert.equal((result as { resolved: string }).resolved, "missing/target");
+});
+
+test("MemoryWorkspace.symlink puts the containment policy in force (the caller)", async () => {
+  const workspace = new MemoryWorkspace();
+  workspace.write("target.txt", "content");
+  workspace.symlink("link.txt", "target.txt");
+  assert.equal((await workspace.stat("link.txt"))?.kind, "symlink");
+  assert.equal(new TextDecoder().decode(await workspace.read("link.txt")), "content", "read follows the link");
+
+  // An in-workspace symlinked directory is followed.
+  workspace.write("sub/secret.txt", "s");
+  workspace.symlink("d", "sub");
+  workspace.symlink("link2", "d/secret.txt");
+  assert.equal(new TextDecoder().decode(await workspace.read("link2")), "s");
+
+  // Escaping targets are rejected at creation, so no escaping link can exist.
+  assert.throws(() => workspace.symlink("bad", "/etc/passwd"), /WORKSPACE_PATH_ESCAPES/);
+  assert.throws(() => workspace.symlink("bad2", "../outside"), /WORKSPACE_PATH_ESCAPES/);
+  assert.throws(() => workspace.symlink("d2", "../outside"), /WORKSPACE_PATH_ESCAPES/);
+});
+
+test("the workspace.symlink effect enforces containment through the executor", async () => {
+  const workspace = new MemoryWorkspace();
+  const executor = new SyntheticExecutor(new Map([[workspace.id, workspace]]));
+  const ctx = { agentId: "a" as never, workspaceId: workspace.id };
+  await executor.execute({ id: "w", kind: "workspace.write", path: "target.txt", content: "c" }, ctx);
+  assert.equal((await executor.execute({ id: "s", kind: "workspace.symlink", path: "link.txt", target: "target.txt" }, ctx)).ok, true);
+  const bad = await executor.execute({ id: "b", kind: "workspace.symlink", path: "bad", target: "/etc/passwd" }, ctx);
+  assert.equal(bad.ok, false);
+  assert.match(bad.error ?? "", /WORKSPACE_PATH_ESCAPES/);
 });
 
 test("verified against the real pinned commander fixture", async (t) => {

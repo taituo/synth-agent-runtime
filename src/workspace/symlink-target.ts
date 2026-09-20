@@ -72,22 +72,42 @@ export function resolveSymlinkTarget(
   options: ResolveSymlinkOptions = {},
 ): SymlinkTargetResolution {
   const maxDepth = options.maxDepth ?? DEFAULT_MAX_DEPTH;
+  if (isAbsoluteTarget(target)) return { ok: false, reason: "escapes", linkPath, target };
   const visited = new Set<string>();
-  let currentLink = segments(linkPath).join("/");
-  let currentTarget = target;
+  // Resolve target from the link's parent, following EVERY component that is
+  // itself a symlink — not only the leaf. A path like `d/secret.txt` where `d`
+  // is a symlink to outside the workspace escapes on a real filesystem, and
+  // checking only the leaf would miss it.
+  let dir = segments(linkPath).slice(0, -1);
+  let pending = target.replace(/\\/g, "/").split("/");
+  let followed = 0;
 
-  for (let followed = 0; followed < maxDepth; followed++) {
-    const step = resolveLinkTarget(currentLink, currentTarget);
-    if (step.escapes || step.resolved === undefined) {
-      return { ok: false, reason: "escapes", linkPath: currentLink, target: currentTarget };
+  while (pending.length > 0) {
+    const raw = pending.shift()!;
+    if (!raw || raw === ".") continue;
+    if (raw === "..") {
+      if (dir.length === 0) return { ok: false, reason: "escapes", linkPath, target };
+      dir = dir.slice(0, -1);
+      continue;
     }
-    const resolved = step.resolved;
-    if (visited.has(resolved)) return { ok: false, reason: "cycle", linkPath: resolved };
-    visited.add(resolved);
-    const nextTarget = readLink?.(resolved);
-    if (nextTarget === undefined) return { ok: true, resolved }; // dangling or terminal: keep it
-    currentLink = resolved;
-    currentTarget = nextTarget;
+    const candidate = [...dir, raw].join("/");
+    const linkTarget = readLink?.(candidate);
+    if (linkTarget === undefined) {
+      dir = [...dir, raw]; // a regular component (or a dangling leaf): keep it
+      continue;
+    }
+    if (visited.has(candidate)) return { ok: false, reason: "cycle", linkPath: candidate };
+    visited.add(candidate);
+    followed++;
+    if (followed > maxDepth) return { ok: false, reason: "too-deep", linkPath: candidate };
+    const step = resolveLinkTarget(candidate, linkTarget);
+    if (step.escapes || step.resolved === undefined) {
+      return { ok: false, reason: "escapes", linkPath: candidate, target: linkTarget };
+    }
+    // The link's target is workspace-relative; resolve it from the root and
+    // continue with whatever components remained after this one.
+    dir = [];
+    pending = [...segments(step.resolved), ...pending];
   }
-  return { ok: false, reason: "too-deep", linkPath: currentLink };
+  return { ok: true, resolved: dir.join("/") };
 }

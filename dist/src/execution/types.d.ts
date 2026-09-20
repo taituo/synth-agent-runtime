@@ -15,6 +15,11 @@ export type Effect = {
     path: string;
 } | {
     id: string;
+    kind: "workspace.symlink";
+    path: string;
+    target: string;
+} | {
+    id: string;
     kind: "workspace.list";
     path?: string;
 } | {

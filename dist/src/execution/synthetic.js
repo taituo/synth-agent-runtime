@@ -61,6 +61,19 @@ export class SyntheticExecutor {
                 workspace.delete(p);
                 return { ok: true };
             }
+            case "workspace.symlink": {
+                if (!p)
+                    return { ok: false, error: workspaceError(WORKSPACE_IS_DIRECTORY, p) };
+                try {
+                    workspace.symlink(p, effect.target);
+                    return { ok: true };
+                }
+                catch {
+                    // The workspace validates the target; an escaping target is rejected
+                    // with the shared error rather than a silently-rewritten link.
+                    return { ok: false, error: workspaceError(WORKSPACE_PATH_ESCAPES, p) };
+                }
+            }
             case "workspace.list": {
                 if (!p)
                     return { ok: true, output: await workspace.listDir("") };

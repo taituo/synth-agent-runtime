@@ -1,5 +1,7 @@
 import { newArtifactId, newWorkspaceId } from "../core/ids.js";
+import { WORKSPACE_PATH_ESCAPES, escapesWorkspace } from "../execution/workspace-errors.js";
 import { normalizeRelative } from "./source.js";
+import { resolveSymlinkTarget } from "./symlink-target.js";
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
 function equalBytes(a, b) {
@@ -16,6 +18,7 @@ export class MemoryWorkspace {
     id;
     source;
     #overlay = new Map();
+    #links = new Map();
     #deleted = new Set();
     #changed = new Set();
     // Directories created implicitly by writing a file beneath them. A real
@@ -34,6 +37,13 @@ export class MemoryWorkspace {
             return over.slice();
         if (this.#isDeleted(p))
             return undefined;
+        const link = this.#links.get(p);
+        if (link !== undefined) {
+            // Follow the link like a real filesystem does; an escaping or dangling
+            // target reads as absent.
+            const resolution = resolveSymlinkTarget(p, link, (candidate) => this.#links.get(normalizeRelative(candidate)));
+            return resolution.ok ? this.read(resolution.resolved) : undefined;
+        }
         if (!this.source)
             return undefined;
         const info = await this.source.stat(p);
@@ -56,6 +66,8 @@ export class MemoryWorkspace {
             return { kind: "directory" };
         if (this.#overlay.has(p))
             return { kind: "file" };
+        if (this.#links.has(p))
+            return { kind: "symlink" };
         for (const key of this.#overlay.keys())
             if (key.startsWith(`${p}/`))
                 return { kind: "directory" };
@@ -96,6 +108,26 @@ export class MemoryWorkspace {
         for (let i = 1; i < parts.length; i++)
             this.#dirs.add(parts.slice(0, i).join("/"));
     }
+    /**
+     * Create a symlink, validating that its target resolves INSIDE the workspace.
+     * This is the caller that puts the symlink-containment policy in force: an
+     * escaping target (absolute, climbing out, or via an intermediate symlinked
+     * directory) is rejected with the shared WORKSPACE_PATH_ESCAPES error, the
+     * same as a traversing write. A dangling target is a valid link and is kept.
+     */
+    symlink(path, target) {
+        const p = normalizeRelative(path);
+        if (!p)
+            throw new Error("Cannot create a symlink at the workspace root");
+        if (escapesWorkspace(p))
+            throw new Error(`${WORKSPACE_PATH_ESCAPES}:${p}`);
+        const readLink = (candidate) => this.#links.get(normalizeRelative(candidate));
+        if (!resolveSymlinkTarget(p, target, readLink).ok)
+            throw new Error(`${WORKSPACE_PATH_ESCAPES}:${p}`);
+        this.#links.set(p, target);
+        this.#deleted.delete(p);
+        this.#changed.add(p);
+    }
     delete(path) {
         const p = normalizeRelative(path);
         if (!p)
@@ -116,6 +148,10 @@ export class MemoryWorkspace {
         for (const dir of [...this.#dirs]) {
             if (dir === p || dir.startsWith(`${p}/`))
                 this.#dirs.delete(dir);
+        }
+        for (const link of [...this.#links.keys()]) {
+            if (link === p || link.startsWith(`${p}/`))
+                this.#links.delete(link);
         }
     }
     async listDir(path = "") {
@@ -145,6 +181,14 @@ export class MemoryWorkspace {
             if (name)
                 names.add(name);
         }
+        for (const link of this.#links.keys()) {
+            if (dir && !link.startsWith(`${dir}/`))
+                continue;
+            const rel = dir ? link.slice(dir.length + 1) : link;
+            const name = rel.split("/")[0];
+            if (name)
+                names.add(name);
+        }
         for (const p of this.#deleted) {
             const parent = p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
             if (parent === dir)
@@ -160,6 +204,7 @@ export class MemoryWorkspace {
             id: this.id,
             revision: await this.source?.revision(),
             overlay: new Map([...this.#overlay].map(([k, v]) => [k, v.slice()])),
+            links: new Map(this.#links),
             deleted: new Set(this.#deleted),
             changed: new Set(this.#changed),
         };
@@ -169,12 +214,14 @@ export class MemoryWorkspace {
             throw new Error(`Workspace snapshot ${snapshot.id} does not belong to ${this.id}`);
         }
         this.#overlay = new Map([...snapshot.overlay].map(([k, v]) => [k, v.slice()]));
+        this.#links = new Map(snapshot.links ?? []);
         this.#deleted = new Set(snapshot.deleted);
         this.#changed = new Set(snapshot.changed);
     }
     fork() {
         const child = new MemoryWorkspace({ source: this.source });
         child.#overlay = new Map([...this.#overlay].map(([k, v]) => [k, v.slice()]));
+        child.#links = new Map(this.#links);
         child.#deleted = new Set(this.#deleted);
         child.#changed = new Set(this.#changed);
         return child;

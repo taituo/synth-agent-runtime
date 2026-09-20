@@ -5,6 +5,7 @@ export type Effect =
   | { id: string; kind: "workspace.read"; path: string }
   | { id: string; kind: "workspace.write"; path: string; content: Uint8Array | string }
   | { id: string; kind: "workspace.delete"; path: string }
+  | { id: string; kind: "workspace.symlink"; path: string; target: string }
   | { id: string; kind: "workspace.list"; path?: string }
   | { id: string; kind: "process.exec"; command: string; cwd?: string; env?: Record<string, string>; timeoutMs?: number; resourceClass?: string }
   | { id: string; kind: "workflow.run"; name: string; input: unknown }
