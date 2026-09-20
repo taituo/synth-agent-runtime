@@ -11,9 +11,9 @@ export const CORPUS_CLASSES = ["news", "social_post", "incident"] as const;
 /**
  * Accuracy gate for the messy corpus. MEASURED, not guessed.
  *
- * Baseline (2026-09-19, `muse-spark-1.3-contributor` via the local gateway):
+ * Baseline (2026-09-20, `muse-spark-1.3-contributor` via the local gateway):
  * 12/12 = 1.0. The four NVD CVE descriptions were reclassified from `incident`
- * to `news` on 2026-09-19: a CVE is factual institutional reporting, which the
+ * to `news` on 2026-09-20: a CVE is factual institutional reporting, which the
  * triage prompt's own definition calls `news`, not "an operational alert about
  * a system failure or degradation that needs action". The earlier 0.6 gate
  * existed only to absorb that labelling error, so it was replaced. The gate is
@@ -22,7 +22,7 @@ export const CORPUS_CLASSES = ["news", "social_post", "incident"] as const;
  * a new date.
  */
 export const CORPUS_ACCURACY_GATE = 0.9;
-export const CORPUS_BASELINE = "2026-09-19: 12/12 = 1.0 (muse-spark-1.3-contributor), after CVE relabel to news";
+export const CORPUS_BASELINE = "2026-09-20: 12/12 = 1.0 (muse-spark-1.3-contributor), after CVE relabel to news";
 
 export interface CorpusTurn {
   plantedKinds: ReadonlyArray<string | null>;

@@ -41,7 +41,7 @@ export const MESSY_EVENTS: readonly CorpusItem[] = [
     source: CVE("CVE-2021-44228"),
     license: "Public Domain (US Government work, NVD)",
     provenance: "real",
-    note: "reclassified 2026-09-19: a CVE description is factual institutional reporting (news), not an alert about our own system degrading",
+    note: "reclassified 2026-09-20: a CVE description is factual institutional reporting (news), not an alert about our own system degrading",
   },
   {
     id: "cve-xz",
@@ -51,7 +51,7 @@ export const MESSY_EVENTS: readonly CorpusItem[] = [
     source: CVE("CVE-2024-3094"),
     license: "Public Domain (US Government work, NVD)",
     provenance: "real",
-    note: "reclassified 2026-09-19: factual vulnerability report, not an operational alert about our system",
+    note: "reclassified 2026-09-20: factual vulnerability report, not an operational alert about our system",
   },
   {
     id: "cve-heartbleed",
@@ -61,7 +61,7 @@ export const MESSY_EVENTS: readonly CorpusItem[] = [
     source: CVE("CVE-2014-0160"),
     license: "Public Domain (US Government work, NVD)",
     provenance: "real",
-    note: "reclassified 2026-09-19: factual vulnerability report, not an operational alert about our system",
+    note: "reclassified 2026-09-20: factual vulnerability report, not an operational alert about our system",
   },
   {
     id: "cve-smb",
@@ -71,7 +71,7 @@ export const MESSY_EVENTS: readonly CorpusItem[] = [
     source: CVE("CVE-2017-0144"),
     license: "Public Domain (US Government work, NVD)",
     provenance: "real",
-    note: "reclassified 2026-09-19: factual vulnerability report, not an operational alert about our system",
+    note: "reclassified 2026-09-20: factual vulnerability report, not an operational alert about our system",
   },
   {
     id: "wiki-artemis",
