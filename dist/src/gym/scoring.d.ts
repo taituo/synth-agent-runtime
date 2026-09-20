@@ -1,4 +1,4 @@
-export type GymOutcome = "passed" | "failed" | "tampered" | "timed-out" | "errored";
+export type GymOutcome = "passed" | "failed" | "tampered" | "timed-out" | "errored" | "skipped";
 export interface GymScore {
     outcome: GymOutcome;
     /** Paths the patch touched (repo-relative). */
@@ -34,6 +34,11 @@ export interface ScoreGymPatchOptions {
     hiddenTestPath: string;
     /** Where to place the hidden test inside the clone (default `hidden.test.mjs`). */
     hiddenTestDest?: string;
+    /**
+     * How many passing subtests the hidden test must report to score `passed`.
+     * A run with fewer (including zero) is not a pass. Default 1.
+     */
+    expectedHiddenTests?: number;
     timeoutMs?: number;
     nodeBin?: string;
 }

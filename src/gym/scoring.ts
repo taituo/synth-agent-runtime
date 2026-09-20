@@ -1,21 +1,30 @@
 /**
- * Gym scoring: turn an agent's PATCH into one of five explicit outcomes.
+ * Gym scoring: turn an agent's PATCH into one of six explicit outcomes.
  *
  * Cheating is the primary adversary, so the score comes from applying the
  * patch to a FRESH checkout of the pinned commit and running a HELD-OUT test
  * the agent never sees. Anything the agent did to its own sandbox (installed
  * packages, edited configs, touched the runner) does not travel with the patch.
  * A patch that touches test files or runner config is `tampered`, not `failed`.
+ *
+ * `passed` is NOT "node exited 0". The hidden test imports the agent-controlled
+ * module, so agent code runs before the assertions; a top-level `process.exit(0)`
+ * or an `assert` monkeypatch would otherwise score green. `passed` therefore
+ * requires a real TAP summary with the expected number of passing tests and zero
+ * failures, the assert module is frozen before agent code loads, and a run that
+ * executes no tests is `skipped`/`errored`, never `passed`.
  */
 import { execFile, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { copyFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-export type GymOutcome = "passed" | "failed" | "tampered" | "timed-out" | "errored";
+export type GymOutcome = "passed" | "failed" | "tampered" | "timed-out" | "errored" | "skipped";
 
 export interface GymScore {
   outcome: GymOutcome;
@@ -114,9 +123,58 @@ export interface ScoreGymPatchOptions {
   hiddenTestPath: string;
   /** Where to place the hidden test inside the clone (default `hidden.test.mjs`). */
   hiddenTestDest?: string;
+  /**
+   * How many passing subtests the hidden test must report to score `passed`.
+   * A run with fewer (including zero) is not a pass. Default 1.
+   */
+  expectedHiddenTests?: number;
   timeoutMs?: number;
   nodeBin?: string;
 }
+
+interface TapSummary {
+  present: boolean;
+  tests: number;
+  pass: number;
+  fail: number;
+  skipped: number;
+}
+
+/** Parse the TAP summary `node --test` prints. `present` is the "did it finish?" signal. */
+function parseTap(output: string): TapSummary {
+  const num = (pattern: RegExp): number => {
+    const match = pattern.exec(output);
+    return match ? Number(match[1]) : 0;
+  };
+  const tests = num(/^# tests (\d+)$/m);
+  const pass = num(/^# pass (\d+)$/m);
+  const fail = num(/^# fail (\d+)$/m);
+  const skipped = num(/^# skipped (\d+)$/m);
+  return { present: /^# (tests|pass) \d+$/m.test(output), tests, pass, fail, skipped };
+}
+
+/**
+ * Freeze `node:assert` before the agent's module loads. The hidden test imports
+ * the agent's code, so the agent could otherwise replace `assert.equal` with a
+ * no-op and pass every assertion. This runs as a preload in the test process
+ * (and is inherited by `node --test`'s children via NODE_OPTIONS).
+ */
+const FREEZE_ASSERT_PRELOAD = [
+  'import assert from "node:assert";',
+  'import strict from "node:assert/strict";',
+  "function freeze(mod) {",
+  "  try {",
+  "    for (const key of Object.keys(mod)) {",
+  "      const d = Object.getOwnPropertyDescriptor(mod, key);",
+  "      if (d && d.writable) Object.defineProperty(mod, key, { ...d, writable: false, configurable: false });",
+  "    }",
+  "    Object.freeze(mod);",
+  "  } catch { /* already frozen or non-configurable */ }",
+  "}",
+  "freeze(assert);",
+  "freeze(strict);",
+  "",
+].join("\n");
 
 interface RunResult {
   code: number | null;
@@ -127,13 +185,22 @@ interface RunResult {
 }
 
 /** Run the held-out test and capture its exit code explicitly (never assume 0). */
-function runNodeTest(node: string, args: string[], cwd: string, timeoutMs: number): Promise<RunResult> {
+function runNodeTest(
+  node: string,
+  args: string[],
+  cwd: string,
+  timeoutMs: number,
+  preloadUrl: string,
+  nonce: string,
+): Promise<RunResult> {
   return new Promise((resolve) => {
     // If the scorer itself runs under `node --test`, the child would inherit
     // NODE_TEST_CONTEXT and, believing it is a test child rather than the runner,
     // silently skip every file and exit 0. Strip it so the held-out test really runs.
     const env = { ...process.env };
     delete env.NODE_TEST_CONTEXT;
+    env.GYM_HIDDEN_NONCE = nonce;
+    if (preloadUrl) env.NODE_OPTIONS = [env.NODE_OPTIONS, `--import ${preloadUrl}`].filter(Boolean).join(" ");
     const child = spawn(node, args, { cwd, env });
     let stdout = "";
     let stderr = "";
@@ -158,7 +225,8 @@ function runNodeTest(node: string, args: string[], cwd: string, timeoutMs: numbe
 export async function scoreGymPatch(options: ScoreGymPatchOptions): Promise<GymScore> {
   const hiddenDest = options.hiddenTestDest ?? "hidden.test.mjs";
   const touchedPaths = await patchTargetPaths(options.patchText);
-  if (isTampering(touchedPaths) || touchedPaths.includes(hiddenDest)) {
+  const hitsHidden = touchedPaths.some((path) => path === hiddenDest || path.startsWith(`${hiddenDest}/`));
+  if (isTampering(touchedPaths) || hitsHidden) {
     return { outcome: "tampered", touchedPaths, detail: `patch touches protected paths: ${touchedPaths.join(", ")}` };
   }
 
@@ -176,15 +244,36 @@ export async function scoreGymPatch(options: ScoreGymPatchOptions): Promise<GymS
     }
     await execFileAsync("git", ["-C", clone, "apply", patchFile]);
 
-    await copyFile(options.hiddenTestPath, join(clone, hiddenDest));
+    const preloadPath = join(work, "freeze-assert.mjs");
+    await writeFile(preloadPath, FREEZE_ASSERT_PRELOAD);
+    try {
+      await copyFile(options.hiddenTestPath, join(clone, hiddenDest));
+    } catch (error) {
+      return { outcome: "errored", touchedPaths, detail: `hidden test could not be placed at ${hiddenDest}: ${(error as Error).message}` };
+    }
 
+    const expected = options.expectedHiddenTests ?? 1;
+    // `node --test` marks a test file that calls process.exit(0) before running
+    // its assertions as a passing subtest (exit 0 is all the parent sees). The
+    // hidden test prints a per-run nonce only after its assertions, and a pass
+    // requires that marker, so an early exit cannot masquerade as success.
+    const nonce = randomUUID();
+    const completion = `GYM_HIDDEN_COMPLETE ${nonce}`;
     const node = options.nodeBin ?? process.execPath;
-    const run = await runNodeTest(node, ["--test", hiddenDest], clone, options.timeoutMs ?? 60_000);
+    const run = await runNodeTest(node, ["--test", hiddenDest], clone, options.timeoutMs ?? 60_000, pathToFileURL(preloadPath).href, nonce);
     const output = `${run.stdout}\n${run.stderr}`;
     if (run.timedOut) return { outcome: "timed-out", touchedPaths, hiddenOutput: output };
-    if (run.code === 0) return { outcome: "passed", touchedPaths, hiddenOutput: output };
-    if (/# fail [1-9]/.test(output) || /not ok /.test(output)) return { outcome: "failed", touchedPaths, hiddenOutput: output };
-    return { outcome: "errored", touchedPaths, detail: `hidden test could not run: ${output.slice(0, 400)}` };
+
+    const tap = parseTap(output);
+    const completed = output.includes(completion);
+    if (tap.fail > 0 || /not ok /.test(output)) return { outcome: "failed", touchedPaths, hiddenOutput: output };
+    if (run.code !== 0) return { outcome: "errored", touchedPaths, detail: `hidden test process exited ${run.code} with no failing assertion`, hiddenOutput: output };
+    if (completed && tap.pass >= expected) return { outcome: "passed", touchedPaths, hiddenOutput: output };
+    if (!tap.present && !completed) {
+      return { outcome: "errored", touchedPaths, detail: `hidden test produced no TAP summary and no completion marker (exit ${run.code}); an early exit is not a pass`, hiddenOutput: output };
+    }
+    if (tap.pass === 0) return { outcome: "skipped", touchedPaths, detail: "hidden test executed no assertions", hiddenOutput: output };
+    return { outcome: "errored", touchedPaths, detail: `hidden test did not complete its assertions (pass ${tap.pass} of ${expected} expected)`, hiddenOutput: output };
   } finally {
     await rm(work, { recursive: true, force: true });
   }
