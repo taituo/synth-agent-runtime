@@ -131,3 +131,4 @@ the retried activity continued from.
 |---|---|---|---|---|---|
 | 1 | lost | **passed** | 2 | 2 | 358 B |
 | 2 | lost | **passed** | 6 | 1 | 358 B |
+| 3 | lost | **passed** | 5 | 2 | 358 B |
