@@ -10,6 +10,7 @@
  * forwarded unchanged to UPSTREAM.
  *
  *   MODE=502      the faulted requests get an HTTP 502
+ *   MODE=429      the faulted requests get an HTTP 429 with a Retry-After hint
  *   MODE=garbage  the faulted requests get HTTP 200 with a reply that is not JSON
  *   MODE=hang     the faulted requests are accepted and never answered
  *   FAIL_FIRST=N  fault the first N completion requests (default 2); use a huge
@@ -21,8 +22,10 @@ import { pathToFileURL } from "node:url";
 export interface FlakyGatewayOptions {
   upstream: string;
   port: number;
-  mode: "502" | "garbage" | "hang";
+  mode: "502" | "429" | "garbage" | "hang";
   failFirst: number;
+  /** Retry-After seconds advertised by MODE=429. */
+  retryAfterSeconds?: number;
 }
 
 async function readBody(req: IncomingMessage): Promise<Buffer> {
@@ -47,6 +50,11 @@ export function startFlakyGateway(options: FlakyGatewayOptions) {
         if (options.mode === "garbage") {
           res.writeHead(200, { "content-type": "application/json" });
           res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: "Sorry, I can't help with that." } }] }));
+          return;
+        }
+        if (options.mode === "429") {
+          res.writeHead(429, { "content-type": "text/plain", "retry-after": String(options.retryAfterSeconds ?? 1) });
+          res.end("injected rate limit");
           return;
         }
         res.writeHead(502, { "content-type": "text/plain" });

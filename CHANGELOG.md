@@ -2,6 +2,32 @@
 
 ## 1.0.0-rc.1 — abort-safety fix folded in, git ref/remote argument-injection fixed
 
+### Gym end-to-end runner: plant the bug, run both arms, harvest, score
+
+- **The scoring half of the gym now has a runner half.** `src/gym/task.ts`
+  materializes a checked-in task fixture (`test/fixtures/gym-tasks/<repo>/<slug>/`)
+  into a **committed bugged checkout**: clone the pinned commit from the local
+  fixture cache, plant the read-only visible test, apply `bug.patch`, and commit.
+  `baseRepoDir` is therefore the bug, not clean upstream — an unrelated no-op
+  patch scores `passed` against the clean commit and `failed` against the bugged
+  one, which is the trap this step exists to avoid. `goldenReversePatch` produces
+  the bug's own reverse patch, which scores `passed`. The first real task is `he`
+  `hex-decode` (hex numeric character references decoded in base 10).
+- **`src/gym/tools.ts`** is the agent tool surface (`list_files`, `read_file`,
+  `write_file`, `run_visible_test`, `finish`) defined over an `EffectRunner` so
+  the identical definitions run over a local temp dir or the `ExecutionBroker`;
+  `write_file` refuses test files and runner config.
+- **`src/gym/harvest.ts`** takes the patch from git (`git add -A` + `git diff
+  --cached HEAD`) with `node_modules` explicitly excluded, so sandbox-only side
+  effects never travel with the scored patch.
+- **`src/gym/attempt.ts`** is the single shared loop both arms call; the only
+  injected difference is the runner and the turn. It returns the milestone's
+  record (five outcomes, requested/served model, substitution flag, wall time,
+  call count, protected paths touched) and exposes scoring as one injectable seam.
+- Plain turn (direct gateway), durable `gymAttemptWorkflow` (park/backoff shape,
+  sandbox broker + `KubernetesExecutor`), and `integrations/gym/run-gym.ts` whose
+  `--dry-run` completes the whole pipeline at **zero model calls**.
+
 ### Artifact handoff by reference, with provenance and a flat history
 
 - **Artifacts now carry provenance and can be handed onward without bytes

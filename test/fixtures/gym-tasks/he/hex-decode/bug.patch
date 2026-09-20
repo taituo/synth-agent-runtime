@@ -1,0 +1,13 @@
+diff --git a/he.js b/he.js
+index 14a58e9..ef9dbe6 100644
+--- a/he.js
++++ b/he.js
+@@ -283,7 +283,7 @@
+ 				if (strict && !semicolon) {
+ 					parseError('character reference was not terminated by a semicolon');
+ 				}
+-				codePoint = parseInt(hexDigits, 16);
++				codePoint = parseInt(hexDigits, 10);
+ 				return codePointToSymbol(codePoint, strict);
+ 			}
+ 
