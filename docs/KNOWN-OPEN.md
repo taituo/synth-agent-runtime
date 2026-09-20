@@ -33,9 +33,9 @@ removed only when the closing work lands.
   Closing: run the worker in an OS-level sandbox with only the clone
   bind-mounted and no host `/tmp` (a mount namespace, `unshare`/`bwrap`, or the
   existing gVisor rung), so confinement does not depend on a builtin allowlist.
-  Until then, the scorer must not persist expected values, case data or secrets
-  anywhere a path from the worker can name — a SQLite file would reopen the
-  forgery channel.
+  Plan and measured feasibility: `docs/SCORER-SANDBOX.md`. Until then, the
+  scorer must not persist expected values, case data or secrets anywhere a path
+  from the worker can name — a SQLite file would reopen the forgery channel.
 
 ## Measurement
 
