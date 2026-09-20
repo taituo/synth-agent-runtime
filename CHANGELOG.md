@@ -2,6 +2,25 @@
 
 ## 1.0.0-rc.1 — abort-safety fix folded in, git ref/remote argument-injection fixed
 
+### Artifact handoff by reference, with provenance and a flat history
+
+- **Artifacts now carry provenance and can be handed onward without bytes
+  crossing a boundary.** `BlobRef`/`ArtifactRef` gained `producedBy` and
+  `producedFrom` (input digests), stored in the blob store's sidecar and
+  round-tripped by `stat`. A new `InMemoryArtifactIndex` is queryable by digest,
+  producer and input digest, and `walkProvenance` returns a **report** — nodes
+  with `known`, plus `gaps`/`truncated`/`intact` — rather than a bare digest
+  list, so a broken chain (an ancestor named by `producedFrom` but never
+  recorded) is distinguishable from an intact one instead of silently giving
+  false confidence. `createReviewRef`/`listReviewRefs` expose a producer's
+  commit at a fully-qualified `refs/synth/<agent>/<run>` a reviewer can fetch
+  and diff. The live proof (`npm run live:handoff`) has agent A produce an
+  artifact and agent B — a **different workflow** — receive only the reference
+  by signal, read exactly those bytes by digest, and derive a new artifact whose
+  `producedFrom` points back at A; the provenance chain B→A→input is walkable,
+  and the Temporal history size stays **flat** (delta 12–23 bytes) across a 1 KiB
+  vs 4 MiB artifact — the assertion that actually tests "never inline content".
+
 ### Artifact egress: content-addressed blob store and git transport
 
 - **Getting artifacts out of a sandboxed run had one weak path** (the inline
