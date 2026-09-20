@@ -6,6 +6,20 @@ removed only when the closing work lands.
 
 ## Runtime and deploy
 
+- **Pi is quarantined, not wired.** `PiAgentEngine` and
+  `integrations/pi-runtime-bridge/` had no caller and are in
+  `docs/history/museum/`. Re-wiring them as the harness would need the Pi
+  packages (not in this repo) and would have to route turns through the shared
+  `GatewayAgentEngine`/`runTurn` path rather than a second turn body. Until then
+  the provider path is a direct OpenAI-compatible backend. Closing: a
+  `harness-1`-scale change with the Pi session as an `AgentEngine` whose model
+  calls go through the one turn body, plus a live proof.
+- **`src/workspace/transaction.ts` is uncalled but protected.**
+  `WorkspaceTransaction`/`withWorkspaceTransaction` have no caller (test or
+  production). The task boundary protects `src/workspace`, so it was kept rather
+  than quarantined. Closing: wire it into the turn's workspace commit path or
+  quarantine it with the boundary lifted.
+
 - **The graph harness is not fully live-proven.** `docs/HARNESS.md`'s graph
   workflow runs loops, fan-out/join and branches; the loop+join path has a live
   SIGKILL/restart proof (`graph-restart`). Still only unit-tested: child

@@ -1,5 +1,15 @@
 # v0.9 external-fix second review
 
+> **Runtime consolidation (2026-09-20).** Temporal is the single durable engine
+> and the shared `GatewayAgentEngine` is the one turn body. The homegrown
+> `AgentRuntime`, `DurableTurn`/`transactional-turn`, `TemporalDurabilityProvider`,
+> `EffectReconciler`, `AgentRunner`/`LeasedAgentRunner`, `CommandCoordinator`,
+> `EffectPolicy` and orchestration `Supervisor` were deleted (`CHANGELOG.md`,
+> Unreleased); the in-memory/JSON durability stores, the world implementations
+> and the chaos modules were quarantined to `docs/history/museum/`. References
+> below to those APIs are historical. The root `README.md`, `docs/TEMPORAL.md`,
+> `docs/HARNESS.md` and `docs/KNOWN-OPEN.md` describe the current shape.
+
 > **Status: historical snapshot.** This is a point-in-time review of the
 > v0.9 → v0.9.1 audit cycle. Its closing "Remaining release evidence"
 > section describes what was still required before `1.0.0-rc.1` at the time

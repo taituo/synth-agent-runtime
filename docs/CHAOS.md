@@ -1,5 +1,9 @@
 # Chaos and failure testing
 
+> **Quarantined (2026-09-20).** The `src/chaos/*` modules and their test had no
+> production caller and were moved to `docs/history/museum/`. This document is
+> retained as design history; the fault-injection harness is not wired.
+
 v0.7 combines deterministic failpoints with real process-death contracts and opt-in live external failure tests.
 
 ## Deterministic failpoints

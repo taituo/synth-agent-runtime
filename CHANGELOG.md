@@ -1,5 +1,46 @@
 # Changelog
 
+## Unreleased — quarantine the unwired modules; docs say only what is measured
+
+### Quarantined (moved to `docs/history/museum/`, not compiled)
+
+Every module below had zero non-test, non-barrel callers; each was moved out of
+the tree and removed from `src/index.ts`.
+
+- `src/chaos/faults.ts`, `src/chaos/wrappers.ts` — only `test/chaos.test.ts`
+  named them. The one load-bearing assertion (a fault after an external effect
+  leaves the receipt uncertain and blocks replay) was ported to
+  `test/durable-stores.test.ts` with a plain throwing executor.
+- `src/durability/local-memory.ts`, `src/durability/json-file-durability.ts`,
+  `src/durability/json-file-runtime-state.ts` — in-memory/JSON durability stores
+  with no production caller (Postgres is the store).
+- `src/world/in-memory-world.ts`, `src/world/json-file-world.ts` — world
+  implementations with no production caller. `src/world/types.ts` (the
+  `WorldStore` interface) and the Postgres-backed store remain; Postgres task and
+  artifact CAS is still covered by `test/postgres.test.ts`.
+- `src/adapters/pi/pi-engine.ts`, `integrations/pi-runtime-bridge/`,
+  `integrations/pi-synthetic-git-prototype/` — the Pi engine and bridge had no
+  caller at all (the bridge was not imported anywhere). Chosen: **quarantine**,
+  not wire — the bar's provider path is a direct OpenAI-compatible backend
+  (`providers-1`), and wiring Pi would require the Pi packages, which are not in
+  this repo. A precise re-wire spec is in `docs/KNOWN-OPEN.md`.
+
+Kept: `src/postgres/*` (and its concurrency/fencing proof), `src/execution`,
+`src/workspace`, `src/inference`, `src/gym`, `src/control-plane/{lease,mailbox}`
+(interfaces used by `PostgresDistributedControlStore`), `src/durability/
+local-runtime-state.ts` (used by the k8s mixed-chain proof).
+
+### Docs
+
+- Finished the consolidation banner across the remaining pre-consolidation docs
+  (`MAP`, `SPEC`, `SUPER`, `SECOND-REVIEW`); `CHAOS.md`/`WORLD.md` now carry a
+  quarantine banner; `docs/README.md` labels each doc current or historical and
+  indexes `HARNESS.md`.
+- Removed the live `LeasedAgentRunner`/`AgentRuntime` instructions from
+  `UPGRADE.md`/`INTEGRATION.md`; README's Pi claim now states the adapter is
+  quarantined. README numbers updated to the measured root 190, Temporal 89,
+  syntax 81 files / 3 shell.
+
 ## Unreleased — the Temporal graph harness: loops, fan-out/join, branches
 
 ### A durable composition layer around the agent leaf

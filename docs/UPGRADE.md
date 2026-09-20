@@ -26,7 +26,7 @@ psql "$SYNTH_POSTGRES_URL" -f deploy/postgres/003_release_hardening.sql
 
 Deploy all control-plane replicas with v0.9 before treating hard fencing as a production invariant. A mixed fleet with older writers is not considered hard-fenced.
 
-Run distributed agents through `LeasedAgentRunner`; it passes the active lease resource, owner, and fencing token to `AgentRuntime.run()`. If you call `AgentRuntime.run()` directly against a PostgreSQL agent that has already entered fenced ownership, later unfenced state writes will be rejected.
+Agent-state writes carry a fencing generation. `DurabilityProvider.putAgentFenced()` validates the owner, the fencing token and the lease's PostgreSQL-clock expiry atomically against `synth_leases`, so a stale writer is rejected with `AGENT_FENCE_REJECTED`. The `LeasedAgentRunner`/`AgentRuntime` helpers that used to pass the lease generation are gone with the deleted runtime; the store-level fence remains and is covered by `test/postgres-control.test.ts` and the live 32-worker proof.
 
 ## Custom implementations
 

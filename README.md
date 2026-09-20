@@ -20,7 +20,7 @@ Synth is **not an agent framework, prompt library, or a new model SDK**. Existin
 
 The broader goal is to make agents behave more like normal distributed workloads: cheap to create, safe to interrupt, recoverable after failure, movable between execution environments, and able to continue working independently of the client that started them.
 
-**Current release: `1.0.0-rc.1`.** The release candidate has been exercised against real PostgreSQL concurrency, a pinned Pi integration, Kubernetes with gVisor isolation, and a live external inference provider. Remaining work toward `1.0.0` is primarily operational hardening and sustained production-shape testing rather than a change to the core runtime model.
+**Current release: `1.0.0-rc.1`.** The release candidate was exercised against real PostgreSQL concurrency, a pinned Pi checkout E2E, Kubernetes with gVisor isolation, and a live external inference provider. The tree has since been consolidated — the homegrown control plane was deleted and the Pi adapter/bridge was quarantined as unwired — so the evidence that holds today is the suites and live proofs listed below and in `docs/KNOWN-OPEN.md`; the original RC run is documented in `docs/RELEASE-GATE.md` and `docs/history/`.
 
 > **Release-candidate status.** This tree folds together the external v0.9
 > audit fixes, the second review's cross-replica race fixes (atomic agent
@@ -149,9 +149,9 @@ Clients / OpenCode / Pi / Temporal client
 
 Synth Agent Runtime is independent of any particular agent harness or model provider.
 
-It can be embedded underneath existing agents and coding harnesses, or used with custom workers that implement the runtime interfaces. Pi and OpenCode-related paths are included as integrations and have been used for end-to-end validation, but neither is required to use the runtime.
+It can be embedded underneath existing agents and coding harnesses, or used with custom workers that implement the runtime interfaces. There is no bundled agent harness: the former `PiAgentEngine` and Pi bridge had no caller and are quarantined to `docs/history/museum/` (see `docs/KNOWN-OPEN.md`); a custom worker supplies the turn body or binds the shared one.
 
-The inference gateway is provider-agnostic and exposes OpenAI-compatible Chat Completions and Responses interfaces. OpenCode Go is one provider path that has been tested against the runtime; other compatible or custom providers can be used instead.
+The inference gateway is provider-agnostic and exposes OpenAI-compatible Chat Completions and Responses interfaces. The gateway is tested against local mock backends; any compatible provider (or a custom endpoint) can be used instead. Provider limits are unmeasured unless a live key was present (see `docs/KNOWN-OPEN.md`).
 
 Provider credentials are not bundled with Synth. Deployments supply and manage their own credentials and are responsible for complying with the terms and usage policies of the provider they choose.
 
@@ -161,14 +161,14 @@ Measured under Node v22.20.0 (`node --version`), on commit `HEAD`:
 
 ```text
 npm test  (root suite)
-200 passed / 0 failed
+190 passed / 0 failed
 
 npm test --prefix integrations/temporal  (durable workflow + turn body + graph harness)
 89 passed / 0 failed
 
 npm run integrations:syntax
-88 TypeScript integration files / 0 syntax diagnostics
-4 shell files / syntax OK
+81 TypeScript integration files / 0 syntax diagnostics
+3 shell files / syntax OK
 
 integrations/opencode-http-gateway: npm test
 3 passed / 0 failed  (abort-safety contract)
@@ -180,10 +180,12 @@ concurrency and fencing under **32** concurrent workers, a real pinned Pi
 checkout E2E, a real Kubernetes + gVisor pod-kill, and a full
 external-provider matrix (unknown-model/malformed/missing-model errors,
 abort-survival, `previous_response_id` continuation, tool calls, 3-way
-concurrency) against a live subscription-backed gateway. `npm run
-live:proof` / `node scripts/live-proofs.mjs` run the same checks and report
-**SKIP** (not PASS) for whichever of these require infrastructure/credentials
-this environment doesn't have.
+concurrency) against a live subscription-backed gateway. (The Pi adapter is now
+quarantined as unwired; the pinned Pi checkout E2E was a real run of the
+memory-workspace path, see `docs/PI-E2E.md`.) `npm run live:proof` /
+`node scripts/live-proofs.mjs` run the same checks and report **SKIP** (not
+PASS) for whichever of these require infrastructure/credentials this
+environment doesn't have.
 
 ## Start here
 
@@ -194,17 +196,11 @@ npm test --prefix integrations/temporal
 npm run live:proof
 ```
 
-Start with `docs/MAP.md` for a plain-language map of the layers (model / provider /
-gateway / backend / profile / execution rung / runtime / Pi) and what each is not.
-For the design and failure rules, read:
-
-1. `docs/ARCHITECTURE.md`
-2. `docs/DISTRIBUTED.md`
-3. `docs/HARDENING.md`
-4. `docs/POSTGRES.md`
-5. `docs/RECOVERY.md`
-6. `docs/CODE-REVIEW.md`
-7. `docs/RELEASE-GATE.md`
+Current docs: `docs/TEMPORAL.md` (the runtime), `docs/HARNESS.md` (the graph
+harness), `docs/POSTGRES.md`, `docs/INFERENCE.md`, and `docs/KNOWN-OPEN.md`.
+`docs/ARCHITECTURE.md`, `docs/DISTRIBUTED.md`, `docs/HARDENING.md`,
+`docs/RECOVERY.md`, `docs/TRANSACTIONS.md`, `docs/SUPER.md`, `docs/CHAOS.md` and
+`docs/WORLD.md` are retained as design history; each carries a banner.
 
 `docs/` holds every other design/subsystem doc (see `docs/README.md` for the
 full index). All prior release documentation (the v0.1–v0.8 root Markdown

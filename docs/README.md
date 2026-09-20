@@ -11,24 +11,30 @@
 > the current runtime is described in the root `README.md`, `docs/TEMPORAL.md`,
 > and `docs/KNOWN-OPEN.md`. The Postgres stores (leases/fencing, effect
 > receipts, mailbox cursors, world revisions) are the durability that remains.
+> Unwired modules were quarantined to `history/museum/`: the in-memory/JSON
+> durability stores, the in-memory/JSON world implementations, the chaos
+> harness, `PiAgentEngine`/the Pi bridge, and the vendored Pi prototype. See
+> `/tmp/opencode/orch/quarantine-report.md` for the module→caller→verdict table.
 
 Start with the root [`README.md`](../README.md) and [`CHANGELOG.md`](../CHANGELOG.md).
 Everything below is design/subsystem detail, in rough reading order.
 
 ## Core design
 
+- [`HARNESS.md`](HARNESS.md) — **canonical, current**: the Temporal graph harness (loops, fan-out/join, branches, child workflows).
 - [`MAP.md`](MAP.md) — plain-language map of the layers and what each is not.
-- [`SPEC.md`](SPEC.md) — full behavioral specification.
-- [`ARCHITECTURE.md`](ARCHITECTURE.md) — runtime layers and invariants.
-- [`DISTRIBUTED.md`](DISTRIBUTED.md) — control-plane distribution model.
-- [`WORLD.md`](WORLD.md), [`TRANSACTIONS.md`](TRANSACTIONS.md) — durable world state and transactional turns.
-- [`SUPER.md`](SUPER.md) — supervisor/orchestration.
+- [`SPEC.md`](SPEC.md) — *historical*: v0.2 design spec; superseded by the root `README.md`.
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — *historical*: pre-consolidation runtime layers and invariants.
+- [`DISTRIBUTED.md`](DISTRIBUTED.md) — *historical*: deleted control-plane distribution model.
+- [`WORLD.md`](WORLD.md) — *historical*: the in-memory/JSON world implementations are quarantined; `src/world/types.ts` and the Postgres store remain.
+- [`TRANSACTIONS.md`](TRANSACTIONS.md) — *historical*: the deleted transactional turn.
+- [`SUPER.md`](SUPER.md) — *historical*: the deleted orchestration supervisor.
 
 ## Hardening and review
 
 - [`HARDENING.md`](HARDENING.md) — agent-state fencing, lease model.
 - [`RECOVERY.md`](RECOVERY.md) — crash/SIGKILL recovery.
-- [`CHAOS.md`](CHAOS.md) — chaos-testing harness.
+- [`CHAOS.md`](CHAOS.md) — *historical*: the `src/chaos/*` harness is quarantined (no production caller).
 - [`CODE-REVIEW.md`](CODE-REVIEW.md) — *historical snapshot* (point-in-time v0.9 review); prioritized findings from the backward code review, with pointers to current status.
 - [`SECOND-REVIEW.md`](SECOND-REVIEW.md) — *historical snapshot*; external-audit second-review findings (SR-P1/SR-P2) from the v0.9 → v0.9.1 audit cycle.
 - [`RELEASE-GATE.md`](RELEASE-GATE.md) — **canonical, current**: checklist gating `1.0.0` GA.
@@ -38,7 +44,7 @@ Everything below is design/subsystem detail, in rough reading order.
 - [`POSTGRES.md`](POSTGRES.md) — PostgreSQL durability/distributed-state backend.
 - [`KUBERNETES.md`](KUBERNETES.md) — Kubernetes + gVisor execution backend design.
 - [`KUBERNETES-RUN.md`](KUBERNETES-RUN.md) — real, executed run guide: install gVisor, wire it into k3s, prove isolation, run the kill contract.
-- [`TEMPORAL.md`](TEMPORAL.md) — Temporal durability adapter.
+- [`TEMPORAL.md`](TEMPORAL.md) — **canonical, current**: the Temporal runtime (workflow, signals/queries, retry/park semantics, redelivery rule).
 - [`SESSION-SUPERVISOR.md`](SESSION-SUPERVISOR.md) — durable supervisor for interactive agent sessions (separate Temporal deployment).
 - [`BLOB-STORE.md`](BLOB-STORE.md) — content-addressed store: access model (digest-as-capability, tenant isolation) and lifecycle.
 - [`GIT-PUSH-CREDENTIALS.md`](GIT-PUSH-CREDENTIALS.md) — scoped, one-shot sandbox push grants for git-as-transport, and the residual risk.

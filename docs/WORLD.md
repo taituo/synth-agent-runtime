@@ -1,5 +1,10 @@
 # Durable project world
 
+> **Partly quarantined (2026-09-20).** The in-memory and JSON-file `WorldStore`
+> implementations were moved to `docs/history/museum/`; `src/world/types.ts`
+> (the `WorldStore` interface) and the Postgres-backed store remain. This
+> document is retained as design history.
+
 The project world is the canonical specification/task/artifact context; chat transcript is not the source of truth.
 
 ## Project revision

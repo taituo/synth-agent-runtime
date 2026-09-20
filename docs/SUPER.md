@@ -1,5 +1,15 @@
 # Supervisor orchestration
 
+> **Runtime consolidation (2026-09-20).** Temporal is the single durable engine
+> and the shared `GatewayAgentEngine` is the one turn body. The homegrown
+> `AgentRuntime`, `DurableTurn`/`transactional-turn`, `TemporalDurabilityProvider`,
+> `EffectReconciler`, `AgentRunner`/`LeasedAgentRunner`, `CommandCoordinator`,
+> `EffectPolicy` and orchestration `Supervisor` were deleted (`CHANGELOG.md`,
+> Unreleased); the in-memory/JSON durability stores, the world implementations
+> and the chaos modules were quarantined to `docs/history/museum/`. References
+> below to those APIs are historical. The root `README.md`, `docs/TEMPORAL.md`,
+> `docs/HARNESS.md` and `docs/KNOWN-OPEN.md` describe the current shape.
+
 `Supervisor` is a graph/orchestration helper above `AgentRuntime`; it is not a special LLM species.
 
 `delegate()` creates a task, forks the supervisor's workspace, spawns a child and records `supervises` and `delegates_to` relations. `fanOut()` creates multiple workers. `assignReviewer()` creates a reviewer and records a `reviews` edge.

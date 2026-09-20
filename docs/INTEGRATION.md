@@ -47,7 +47,7 @@ The existing v0.7 Kubernetes/gVisor resource classes and warm-pool integration r
 
 ## v0.9 ownership integration
 
-For multi-replica agent execution, route runs through `LeasedAgentRunner`. Custom lease stores must implement `validateLease()`. Custom distributed durability stores should implement `putAgentFenced()` so stale generations are rejected atomically with the state mutation.
+Durable execution is Temporal's job now: `durableAgentWorkflow` owns the agent loop and runs turns through the shared `GatewayAgentEngine`. Custom distributed durability stores should implement `putAgentFenced()` so stale generations are rejected atomically with the state mutation, and custom lease stores `validateLease()`; the store-level fence is covered by `test/postgres-control.test.ts`.
 
 ## Git-backed workspace trust boundary
 
