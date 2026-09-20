@@ -1,179 +1,257 @@
 /**
- * Durable-arm activity: build the runner (sandbox when `runner=sandbox`, else
- * local), run the SHARED `runGymAttempt`, and return the plain record shape. The
- * workflow around it supplies the park/backoff durability; this file supplies
- * the model call (direct gateway) and the tool surface.
+ * The gym's durable activities, one turn per activity.
  *
- * NOTE: the recorded fault matrix used `runner=local` for both arms; the sandbox
- * branch here is the isolated option, proven live by `sandbox-live.ts`.
+ *   gymPrepareActivity  materialize the bugged task on the host; build the gym
+ *                       system/user prompts and the serializable tool surface.
+ *   runTurn             ONE model turn through the runtime's one body,
+ *                       `GatewayAgentEngine`, with the gym's `turnConfig`
+ *                       (`buildToEffect`) and the sandbox rung's `executeEffect`.
+ *                       Harvest the agent's patch and checkpoint it.
+ *   gymScoreActivity    apply the final patch to a fresh clone of the bugged
+ *                       commit and score it against the held-out vectors.
  *
- * This is the ENFORCEMENT point, not just the drivers: a scored attempt may not
- * run on the local host runner, because model-authored code there can read the
- * held-out vectors. A direct `gymAttemptWorkflow` start with `runner:"local"`
- * (bypassing the drivers) is refused here as a non-retryable failure, and the
- * output is labelled `unisolated` either way.
+ * The workflow owns the loop and the transcript; the workspace survives between
+ * activities through the persistent rung (see `sandbox.ts`), restored from the
+ * attempt checkpoint if the worker restarted.
  */
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { ApplicationFailure, Context as ActivityContext } from "@temporalio/activity";
-import { BlobGymCheckpointStore, DEFAULT_GATEWAY_RETRY, createGatewayGymTurn, describeGymRunner, FileSystemBlobStore, loadGymTask, localEffectRunner, materializeGymTask, runGymAttempt, type EffectRunner } from "../../../src/index.js";
-import { buildSandboxRunner } from "../../gym/sandbox.js";
-import type { AgentActivities, RunTurnInput, RunTurnResult } from "./contracts.js";
-import type { GymAttemptActivities, GymAttemptActivityInput, GymAttemptActivityOutput } from "./gym-contracts.js";
+import {
+  BlobGymCheckpointStore,
+  buildGymSystemPrompt,
+  buildGymUserPrompt,
+  createGatewayAgentEngine,
+  describeGymRunner,
+  FileSystemBlobStore,
+  harvestPatch,
+  isolatedScoreGymPatch,
+  loadGymTask,
+  materializeGymTask,
+  parseGymToolCalls,
+  type AgentEngineContext,
+  type GatewayTurnOutcome,
+  type GymScore,
+} from "../../../src/index.js";
+import { getPersistentSandboxRunner, hasPersistentSandboxRunner } from "../../gym/sandbox.js";
+import { buildToEffect } from "./gateway-run-turn.js";
+import type { DurableToolSpec } from "./contracts.js";
+import type {
+  GymActivities,
+  GymAttemptActivityInput,
+  GymAttemptActivityOutput,
+  GymPreparedAttempt,
+  GymScoreActivityInput,
+  GymTranscriptMessage,
+  GymTurnActivityInput,
+  GymTurnActivityResult,
+} from "./gym-contracts.js";
 
-/**
- * The gym's durable activities.
- *
- * `runGymAttemptActivity` runs one whole attempt (plant -> the shared loop ->
- * harvest -> score). `runTurn` is the activity the runtime's
- * `durableAgentWorkflow` proxies: it carries the attempt parameters in the
- * mailbox message and runs the same attempt, so the gym's durable arm is
- * `gymAttemptWorkflow` (orchestrator) -> `durableAgentWorkflow` (agent) ->
- * `runTurn` (this) -> the shared turn body `GatewayAgentEngine` -> the sandbox
- * rung's `process.exec`.
- */
-export function createGymActivities(): GymAttemptActivities & Pick<AgentActivities, "runTurn"> {
-  const runGymAttemptActivity = async (input: GymAttemptActivityInput): Promise<GymAttemptActivityOutput> => {
-      const heartbeat = setInterval(() => {
-        try {
-          ActivityContext.current().heartbeat();
-        } catch {
-          // not inside an activity (unit use): nothing to heartbeat
-        }
-      }, 15_000);
-      try {
-        // Refuse BEFORE materializing or spending a model call: a direct
-        // workflow start must not be able to run a scored attempt unisolated.
-        const binding = describeGymRunner(input.runner ?? "sandbox");
-        if (!binding.scoredAllowed) {
-          throw ApplicationFailure.nonRetryable(
-            `refusing to score a run on the "${binding.kind}" runner: it is unisolated and model-authored code ` +
-              `can read the held-out vectors on the host. Start the workflow with runner:"sandbox" (gVisor).`,
-            "GymUnisolatedScoredRun",
-          );
-        }
-        const task = await loadGymTask(input.taskDir);
-        const materialized = await materializeGymTask({
-          task,
-          workDir: input.workDir,
-          ...(input.fixtureCacheDir ? { fixtureCacheDir: input.fixtureCacheDir } : {}),
-        });
-        const useSandbox = binding.kind === "sandbox";
-        const sandbox = useSandbox
-          ? await buildSandboxRunner({
-              repoDir: materialized.repoDir,
-              image: input.image,
-              ...(input.namespace ? { namespace: input.namespace } : {}),
-              ...(input.kubectlContext ? { kubectlContext: input.kubectlContext } : {}),
-              ...(input.runtimeClassName ? { runtimeClassName: input.runtimeClassName } : {}),
-              agentId: input.agentId,
-            })
-          : undefined;
-        try {
-          const runner: EffectRunner = sandbox ? sandbox.runner : localEffectRunner(materialized.repoDir);
-          const turn = createGatewayGymTurn({
-            baseUrl: input.gatewayBaseUrl,
-            model: input.model,
-            ...(input.apiKey ? { apiKey: input.apiKey } : {}),
-            ...(input.gatewayTimeoutMs ? { timeoutMs: input.gatewayTimeoutMs } : {}),
-            ...(input.retryMaxAttempts && input.retryMaxAttempts > 1
-              ? { retry: { ...DEFAULT_GATEWAY_RETRY, maxAttempts: input.retryMaxAttempts } }
-              : {}),
-          });
-          // Capture the trace so a worker-death run can be diagnosed: the first
-          // read_file shows which workspace state the (re)started activity saw.
-          const trace: string[] = [];
-          try {
-            trace.push(`activity attempt=${ActivityContext.current().info.attempt} startedAt=${new Date().toISOString()}`);
-          } catch {
-            trace.push("activity attempt=unknown");
-          }
-          const tracedTurn: typeof turn = async (turnInput) => {
-            const result = await turn(turnInput);
-            trace.push(`assistant: ${(result.content ?? JSON.stringify(result.toolCalls)).slice(0, 500)}`);
-            return result;
-          };
-          const checkpointDir = process.env.SYNTH_GYM_CHECKPOINT_DIR ?? "/tmp/opencode/gym-checkpoints";
-          const checkpoint = new BlobGymCheckpointStore(
-            new FileSystemBlobStore(join(checkpointDir, "blobs")),
-            join(checkpointDir, "pointers"),
-          );
-          const record = await runGymAttempt({
-            task: materialized,
-            runner,
-            turn: tracedTurn,
-            maxTurns: input.maxTurns,
-            deadlineMs: input.deadlineMs,
-            checkpoint,
-            // run_visible_test must invoke the Pod's own node, not the host path
-            // the Pod cannot see (which is a 127 "not found").
-            ...(useSandbox ? { visibleTestNodeBin: "node" } : {}),
-            ...(input.checkpointKey ? { checkpointKey: input.checkpointKey } : {}),
-            onTool: ({ call, observation }) => {
-              if (call.name === "read_file") {
-                const bugged = observation.includes("parseInt(hexDigits, 10)");
-                const fixed = observation.includes("parseInt(hexDigits, 16)");
-                trace.push(`tool read_file(${String(call.arguments?.path ?? "")}): workspace=${bugged ? "BUGGED" : fixed ? "FIXED" : "unknown"}`);
-              } else {
-                trace.push(`tool ${call.name}: ${observation.slice(0, 300)}`);
-              }
-            },
-          });
-          // A transient turn failure must THROW so Temporal's activity retry and
-          // the workflow's park/backoff engage. Returning an `errored` record
-          // would make the durable arm behave exactly like the plain one.
-          if (record.failure?.transient && (record.outcome === "errored" || record.outcome === "timed-out")) {
-            throw ApplicationFailure.create({
-              message: record.failure.message,
-              type: "GymTransient",
-              details: record.failure.retryAfterMs !== undefined ? [{ retryAfterMs: record.failure.retryAfterMs }] : [],
-            });
-          }
-          return {
-            arm: "durable",
-            isolation: binding.isolation,
-            outcome: record.outcome,
-            requestedModel: record.requestedModel,
-            servedModel: record.servedModel,
-            modelSubstituted: record.modelSubstituted,
-            wallTimeMs: record.wallTimeMs,
-            callCount: record.callCount,
-            turns: record.turns,
-            httpAttempts: record.httpAttempts,
-            protectedPathsTouched: record.protectedPathsTouched,
-            patchBytes: record.patch.length,
-            ...(record.resumedFromTurn !== undefined ? { resumedFromTurn: record.resumedFromTurn } : {}),
-            trace: trace.slice(0, 60),
-            ...(record.score.detail ? { detail: record.score.detail } : {}),
-            ...(record.error ? { error: record.error } : {}),
-          };
-        } finally {
-          await sandbox?.close();
-        }
-      } finally {
-        clearInterval(heartbeat);
-      }
+function heartbeatFor(): () => void {
+  return () => {
+    try {
+      ActivityContext.current().heartbeat();
+    } catch {
+      // not inside an activity (unit use): nothing to heartbeat
+    }
   };
+}
 
-  return {
-    runGymAttemptActivity,
-    async runTurn(input: RunTurnInput): Promise<RunTurnResult> {
-      // The attempt parameters travel in the mailbox message; the durable
-      // workflow owns the mailbox, the activity is pure compute.
-      const text = input.messages[0]?.text;
-      if (typeof text !== "string" || text.length === 0) {
+/** The gym tool surface, mapped to execution-rung effects for the engine. */
+function gymToolSpecs(visibleTestPath: string): DurableToolSpec[] {
+  return [
+    { name: "list_files", effect: "workspace.list", pathArg: "path" },
+    { name: "read_file", effect: "workspace.read", pathArg: "path" },
+    { name: "write_file", effect: "workspace.write", pathArg: "path", contentArg: "content" },
+    { name: "replace_in_file", effect: "workspace.replace", pathArg: "path", oldTextArg: "old_text", newTextArg: "new_text" },
+    // The tool name implies the command; the model passes no argument.
+    { name: "run_visible_test", effect: "process.exec", command: `node --test ${visibleTestPath}` },
+    // `finish` has no rung mapping: the engine records it as refused and the
+    // workflow reads it off the turn's tool calls to stop the loop.
+  ];
+}
+
+function renderTranscriptEntry(entry: GymTranscriptMessage): string {
+  return entry.role === "assistant" ? entry.content : `Observation from ${entry.name ?? "tool"}:\n${entry.content}`;
+}
+
+function checkpointStore(): BlobGymCheckpointStore {
+  const dir = process.env.SYNTH_GYM_CHECKPOINT_DIR ?? "/tmp/opencode/gym-checkpoints";
+  return new BlobGymCheckpointStore(new FileSystemBlobStore(join(dir, "blobs")), join(dir, "pointers"));
+}
+
+export function createGymActivities(): GymActivities {
+  const gymPrepareActivity = async (input: GymAttemptActivityInput): Promise<GymPreparedAttempt> => {
+    const heartbeat = setInterval(heartbeatFor(), 15_000);
+    try {
+      const binding = describeGymRunner(input.runner ?? "sandbox");
+      if (!binding.scoredAllowed) {
         throw ApplicationFailure.nonRetryable(
-          "the gym runTurn activity requires the attempt parameters as the first mailbox message",
-          "GymMissingAttemptParams",
+          `refusing to score a run on the "${binding.kind}" runner: it is unisolated and model-authored code ` +
+            `can read the held-out vectors on the host. Start the workflow with runner:"sandbox" (gVisor).`,
+          "GymUnisolatedScoredRun",
         );
       }
-      let params: GymAttemptActivityInput;
+      const task = await loadGymTask(input.taskDir);
+      const materialized = await materializeGymTask({
+        task,
+        workDir: input.workDir,
+        ...(input.fixtureCacheDir ? { fixtureCacheDir: input.fixtureCacheDir } : {}),
+      });
+      let visibleTestContent = "";
       try {
-        params = JSON.parse(text) as GymAttemptActivityInput;
+        visibleTestContent = await readFile(materialized.visibleTestPath, "utf8");
       } catch {
-        throw ApplicationFailure.nonRetryable("the gym runTurn parameters are not JSON", "GymBadAttemptParams");
+        // A missing visible test is not fatal; the scorer still decides.
       }
-      const output = await runGymAttemptActivity(params);
-      return { result: output, state: "completed" };
-    },
+      return {
+        attempt: input,
+        repoDir: materialized.repoDir,
+        baseRepoDir: materialized.baseRepoDir,
+        visibleTestPath: task.visibleTestPath,
+        systemPrompt: buildGymSystemPrompt(task.visibleTestPath),
+        userPrompt: buildGymUserPrompt({ visibleTestPath: task.visibleTestPath, visibleTestContent }),
+        tools: gymToolSpecs(task.visibleTestPath),
+        checkpointKey: input.checkpointKey ?? `${input.agentId}-${materialized.bugCommit}`,
+      };
+    } finally {
+      clearInterval(heartbeat);
+    }
   };
+
+  const runTurn = async (input: GymTurnActivityInput): Promise<GymTurnActivityResult> => {
+    const heartbeat = setInterval(heartbeatFor(), 15_000);
+    try {
+      const { prepared, transcript } = input;
+      const attempt = prepared.attempt;
+      const binding = describeGymRunner(attempt.runner ?? "sandbox");
+      if (!binding.scoredAllowed) {
+        throw ApplicationFailure.nonRetryable(
+          `refusing to score a run on the "${binding.kind}" runner: it is unisolated and model-authored code ` +
+            `can read the held-out vectors on the host. Start the workflow with runner:"sandbox" (gVisor).`,
+          "GymUnisolatedScoredRun",
+        );
+      }
+      const key = prepared.checkpointKey;
+      const cold = !hasPersistentSandboxRunner(key);
+      const sandbox = await getPersistentSandboxRunner({
+        repoDir: prepared.repoDir,
+        image: attempt.image,
+        ...(attempt.namespace ? { namespace: attempt.namespace } : {}),
+        ...(attempt.kubectlContext ? { kubectlContext: attempt.kubectlContext } : {}),
+        ...(attempt.runtimeClassName ? { runtimeClassName: attempt.runtimeClassName } : {}),
+        agentId: attempt.agentId,
+        key,
+      });
+      const checkpoint = checkpointStore();
+      // A cold cache means a fresh worker process: restore the agent's work
+      // product (the checkpointed patch) before the turn, so the transcript and
+      // the workspace agree.
+      if (cold) {
+        const saved = await checkpoint.load(key);
+        if (saved && saved.patchText.trim().length > 0) {
+          const restorePath = ".gym-restore.patch";
+          await sandbox.runner.write(restorePath, saved.patchText);
+          const applied = await sandbox.runner.exec(`git apply ${restorePath}`, { cwd: prepared.repoDir });
+          await sandbox.runner.exec(`rm -f ${restorePath}`, { cwd: prepared.repoDir });
+          if (applied.code !== 0) {
+            throw new Error(`failed to restore checkpoint: ${applied.stderr || applied.stdout}`);
+          }
+        }
+      }
+
+      const userText = [prepared.userPrompt, ...transcript.map(renderTranscriptEntry)].join("\n\n");
+      const engine = createGatewayAgentEngine({
+        baseUrl: attempt.gatewayBaseUrl,
+        model: attempt.model,
+        ...(attempt.apiKey ? { apiKey: attempt.apiKey } : {}),
+        ...(attempt.gatewayTimeoutMs !== undefined ? { timeoutMs: attempt.gatewayTimeoutMs } : {}),
+        systemPrompt: prepared.systemPrompt,
+        buildUserMessage: () => userText,
+        parseToolCalls: (content) => parseGymToolCalls(content) as never,
+        toEffect: buildToEffect(prepared.tools),
+      });
+      const context: AgentEngineContext = {
+        agentId: attempt.agentId as never,
+        workspaceId: `gym:${attempt.agentId}` as never,
+        definition: { id: attempt.agentId, inferenceProfile: { id: attempt.model, model: attempt.model } },
+        inferenceProfile: { id: attempt.model, model: attempt.model },
+        signal: new AbortController().signal,
+        emitOutput: () => {},
+        emitTool: () => {},
+        // The tools execute through the rung (the sandbox broker), not the loop.
+        executeEffect: (effect, minFidelity) => sandbox.executeEffect(effect, minFidelity),
+      };
+      const outcome = (await engine.run([], context)) as GatewayTurnOutcome;
+      const finished = outcome.toolCalls.some((call) => call.name === "finish");
+      const patch = await harvestPatch(sandbox.runner, { repoDir: prepared.repoDir });
+      const nextTranscript: GymTranscriptMessage[] = [
+        ...transcript,
+        { role: "assistant", content: outcome.content },
+        ...outcome.observations.map((observation) => ({
+          role: "tool" as const,
+          name: observation.name,
+          content: JSON.stringify(observation.output ?? observation.error ?? null),
+        })),
+      ];
+      await checkpoint.save(key, {
+        turnIndex: input.turn + 1,
+        patchText: patch,
+        transcript: nextTranscript,
+        requestedModel: outcome.requestedModel,
+        servedModel: outcome.servedModel,
+      });
+      return {
+        content: outcome.content,
+        toolCalls: outcome.toolCalls,
+        observations: outcome.observations,
+        finished,
+        patch,
+        requestedModel: outcome.requestedModel ?? attempt.model,
+        servedModel: outcome.servedModel ?? null,
+        modelSubstituted: outcome.modelSubstituted ?? false,
+        latencyMs: outcome.latencyMs ?? 0,
+        httpAttempts: 1,
+      };
+    } finally {
+      clearInterval(heartbeat);
+    }
+  };
+
+  const gymScoreActivity = async (input: GymScoreActivityInput): Promise<GymAttemptActivityOutput> => {
+    const binding = describeGymRunner(input.prepared.attempt.runner ?? "sandbox");
+    if (!binding.scoredAllowed) {
+      throw ApplicationFailure.nonRetryable(
+        `refusing to score a run on the "${binding.kind}" runner: it is unisolated.`,
+        "GymUnisolatedScoredRun",
+      );
+    }
+    const task = await loadGymTask(input.prepared.attempt.taskDir);
+    const cases = task.hiddenCases ?? [];
+    let score: GymScore;
+    if (input.error !== undefined) {
+      score = { outcome: "errored", touchedPaths: [], detail: input.error };
+    } else if (input.patch.trim().length === 0) {
+      score = { outcome: "failed", touchedPaths: [], detail: "no changes; the planted bug is still present" };
+    } else {
+      score = await isolatedScoreGymPatch({ patchText: input.patch, baseRepoDir: input.prepared.baseRepoDir, cases });
+    }
+    return {
+      arm: "durable",
+      isolation: binding.isolation,
+      outcome: score.outcome,
+      requestedModel: input.requestedModel,
+      servedModel: input.servedModel,
+      modelSubstituted: input.modelSubstituted,
+      wallTimeMs: input.wallTimeMs,
+      callCount: input.callCount,
+      turns: input.turns,
+      httpAttempts: input.httpAttempts,
+      protectedPathsTouched: score.touchedPaths,
+      patchBytes: input.patch.length,
+      ...(score.detail ? { detail: score.detail } : {}),
+    };
+  };
+
+  return { gymPrepareActivity, runTurn, gymScoreActivity };
 }

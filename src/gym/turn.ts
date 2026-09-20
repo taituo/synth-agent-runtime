@@ -44,7 +44,8 @@ function coerceToolCalls(value: unknown): GymToolCall[] {
   });
 }
 
-function extractToolCalls(content: string): GymToolCall[] {
+/** The gym's tool-call protocol: a JSON reply carrying `tool_calls`. */
+export function parseGymToolCalls(content: string): GymToolCall[] {
   const stripped = content.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
   let parsed: unknown;
   try {
@@ -203,7 +204,7 @@ export function createGatewayGymTurn(options: GatewayGymTurnOptions): GymTurn {
       systemPrompt: input.systemPrompt,
       buildUserMessage: () => userText,
       // The gym's tool protocol: a JSON reply carrying `tool_calls`.
-      parseToolCalls: (content) => extractToolCalls(content) as GatewayToolCall[],
+      parseToolCalls: (content) => parseGymToolCalls(content) as GatewayToolCall[],
       // No `toEffect`: the gym loop executes the returned calls through its
       // runner (the sandbox rung), not the engine. The engine is the one model
       // body; the loop owns tool dispatch so `replace_in_file`/`finish` keep

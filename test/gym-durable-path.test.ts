@@ -56,13 +56,15 @@ test("gym-worker.ts registers the gym workflow and its activity", () => {
   assert.match(GYM_WORKER, /gym-workflows/, "the worker must register gym-workflows.ts");
   assert.match(GYM_WORKER, /createGymActivities\(\)/, "the worker must register the gym activities");
   assert.match(GYM_WORKFLOWS, /export async function gymAttemptWorkflow/, "the durable workflow must exist");
-  // The gym's durable arm is the runtime agent, not its own turn: the
-  // orchestrator starts durableAgentWorkflow, whose runTurn activity is the
-  // gym's attempt activity.
-  assert.match(GYM_WORKFLOWS, /executeChild\(durableAgentWorkflow/, "the orchestrator must start the runtime agent workflow");
-  assert.match(GYM_WORKFLOWS, /from "\.\/workflows\.js"/, "the orchestrator must use the runtime's durableAgentWorkflow");
+  // The workflow OWNS the loop: it drives one runTurn activity per turn and
+  // carries the transcript, rather than the activity running the whole loop.
+  assert.match(GYM_WORKFLOWS, /for \(let turn = 0; turn < input\.maxTurns; turn\+\+\)/, "the workflow must own the turn loop");
+  assert.match(GYM_WORKFLOWS, /await runTurn\(/, "the loop must drive a runTurn activity per turn");
+  assert.match(GYM_WORKFLOWS, /gymPrepareActivity/, "the workflow must prepare the attempt");
+  assert.match(GYM_WORKFLOWS, /gymScoreActivity/, "the workflow must score the final patch");
   const GYM_ACTIVITIES = readFileSync(repoFile("integrations/temporal/src/gym-activities.ts"), "utf8");
-  assert.match(GYM_ACTIVITIES, /async runTurn\(/, "the gym must provide the runTurn activity the runtime workflow proxies");
+  assert.match(GYM_ACTIVITIES, /const runTurn = async/, "the gym must provide the one-turn runTurn activity");
+  assert.match(GYM_ACTIVITIES, /executeEffect:/, "the turn must execute tools through the rung");
 });
 
 test("there is exactly one gateway turn body, and the gym turn is a thin adapter over it", () => {

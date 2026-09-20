@@ -1,4 +1,7 @@
+import type { GymToolCall } from "./tools.js";
 import type { GymTurn, GymTurnInput, GymTurnResult } from "./attempt.js";
+/** The gym's tool-call protocol: a JSON reply carrying `tool_calls`. */
+export declare function parseGymToolCalls(content: string): GymToolCall[];
 export interface ScriptedTurnDefaults {
     requestedModel?: string;
     servedModel?: string | null;
