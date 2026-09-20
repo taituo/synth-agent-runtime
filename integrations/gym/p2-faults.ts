@@ -167,50 +167,56 @@ async function runDurableOnce(args: Args, baseUrl: string, workDir: string, faul
   const client = new Client({ connection });
   const taskQueue = `synth-gym-fault-${Date.now().toString(36)}`;
   // Always a dedicated worker so the unique task queue has a listener; for a
-  // process fault the same worker is the one killed mid-attempt.
+  // process fault the same worker is the one killed mid-attempt. The finally
+  // guarantees no orphaned worker if this run throws.
   let worker: ChildProcess | undefined = spawnWorker(taskQueue);
-  await sleep(5_000);
+  try {
+    await sleep(5_000);
 
-  const handle = await client.workflow.start("gymAttemptWorkflow", {
-    taskQueue,
-    workflowId: `gym-fault-${Date.now().toString(36)}`,
-    args: [workflowInput(args, task.taskDir, workDir, baseUrl, "local")],
-    workflowExecutionTimeout: "1 hour",
-  });
+    const handle = await client.workflow.start("gymAttemptWorkflow", {
+      taskQueue,
+      workflowId: `gym-fault-${Date.now().toString(36)}`,
+      args: [workflowInput(args, task.taskDir, workDir, baseUrl, "local")],
+      workflowExecutionTimeout: "1 hour",
+    });
 
-  if (processFault && worker) {
-    await sleep(args.killAfterMs);
-    killGroup(worker, processFault);
-    worker = spawnWorker(taskQueue); // restart
-    await sleep(4_000);
+    if (processFault && worker) {
+      await sleep(args.killAfterMs);
+      killGroup(worker, processFault);
+      worker = spawnWorker(taskQueue); // restart
+      await sleep(4_000);
+    }
+
+    const output = (await handle.result()) as {
+      outcome: string;
+      callCount: number;
+      turns: number;
+      wallTimeMs: number;
+      patchBytes?: number;
+      requestedModel: string | null;
+      servedModel: string | null;
+      trace?: string[];
+      detail?: string;
+      error?: string;
+    };
+    return {
+      arm: "durable",
+      outcome: output.outcome,
+      callCount: output.callCount,
+      turns: output.turns,
+      wallTimeMs: output.wallTimeMs,
+      patchBytes: output.patchBytes ?? 0,
+      requestedModel: output.requestedModel,
+      servedModel: output.servedModel,
+      recovered: faultInjected && output.outcome === "passed",
+      ...(output.trace ? { trace: output.trace } : {}),
+      ...(output.detail ? { detail: output.detail } : {}),
+      ...(output.error ? { error: output.error } : {}),
+    };
+  } finally {
+    if (worker) killGroup(worker, "SIGKILL");
+    await connection.close().catch(() => {});
   }
-
-  const output = (await handle.result()) as {
-    outcome: string;
-    callCount: number;
-    turns: number;
-    wallTimeMs: number;
-    patchBytes?: number;
-    requestedModel: string | null;
-    servedModel: string | null;
-    detail?: string;
-    error?: string;
-  };
-  if (worker) killGroup(worker, "SIGKILL");
-  await connection.close().catch(() => {});
-  return {
-    arm: "durable",
-    outcome: output.outcome,
-    callCount: output.callCount,
-    turns: output.turns,
-    wallTimeMs: output.wallTimeMs,
-    patchBytes: output.patchBytes ?? 0,
-    requestedModel: output.requestedModel,
-    servedModel: output.servedModel,
-    recovered: faultInjected && output.outcome === "passed",
-    ...(output.detail ? { detail: output.detail } : {}),
-    ...(output.error ? { error: output.error } : {}),
-  };
 }
 
 /** Kill a plain attempt child mid-turn: the no-durability arm loses the run. */
@@ -220,21 +226,26 @@ async function runPlainKilled(args: Args, baseUrl: string, workDir: string, sign
     stdio: ["ignore", "ignore", "ignore"],
     env: process.env,
   });
-  await sleep(args.killAfterMs);
-  killGroup(child, signal);
-  const exited: string = await new Promise((resolveExit) => {
+  const exitedPromise = new Promise<string>((resolveExit) => {
     child.once("exit", (code, sig) => resolveExit(sig ?? String(code)));
   });
-  return {
-    arm: "plain",
-    outcome: "lost",
-    callCount: 0,
-    turns: 0,
-    wallTimeMs: args.killAfterMs,
-    patchBytes: 0,
-    recovered: false,
-    detail: `plain attempt child killed with ${signal} mid-turn (exit ${exited}); no durable record, no harvest, no result`,
-  };
+  try {
+    await sleep(args.killAfterMs);
+    killGroup(child, signal);
+    const exited = await exitedPromise;
+    return {
+      arm: "plain",
+      outcome: "lost",
+      callCount: 0,
+      turns: 0,
+      wallTimeMs: args.killAfterMs,
+      patchBytes: 0,
+      recovered: false,
+      detail: `plain attempt child killed with ${signal} mid-turn (exit ${exited}); no durable record, no harvest, no result`,
+    };
+  } finally {
+    killGroup(child, "SIGKILL");
+  }
 }
 
 function flakyOptionsFor(fault: string, upstream: string, port: number): { options: FlakyGatewayOptions; base: string } | undefined {

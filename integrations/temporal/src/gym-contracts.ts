@@ -41,6 +41,8 @@ export interface GymAttemptActivityOutput {
   protectedPathsTouched: string[];
   /** Byte length of the harvested patch, so arms can be compared. */
   patchBytes?: number;
+  /** Per-turn assistant/tool trace, capped, for post-mortem of a fault run. */
+  trace?: string[];
   detail?: string;
   error?: string;
 }

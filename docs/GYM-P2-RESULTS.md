@@ -75,4 +75,48 @@ failure is the injected fault.
 |---|---|---|---|---|
 | 3 | timeout (hung request) | errored, 1 call, 20.0 s | passed, 6 calls, 27.9 s, 358 B, recovered | **yes** |
 | 4 | worker restart (SIGTERM) | **lost** — child killed, no result | **resumed**, passed, 4 calls, 22.0 s, 358 B, recovered | **yes** |
-| 5a | SIGKILL mid-turn | **lost** — child killed, no result | **resumed** (8 calls, 106.0 s), then **failed** — exhausted turns with no change, 0 B | resumed vs vanished, **not a pass** |
+| 5a | SIGKILL mid-turn | **lost** — child killed, no result | **resumed** (8 calls, 106.0 s), then **failed** — no change, 0 B | resumed vs vanished, **not a pass** |
+| 5b | SIGKILL mid-turn | lost | resumed, passed, 8 calls, 111.7 s, 358 B, recovered | yes |
+| 5c | SIGKILL (instrumented) | lost | resumed, passed, 6 calls, 50.2 s, 358 B; **activity attempt=2** | yes |
+
+SIGKILL completed in four durable samples: three passed (358 B), one produced
+0 B (5a). Two further diagnostic runs died (5d: harness exit 1 with stderr lost;
+5e: hung past a 700 s limit and was killed). Both deaths were the harness/box,
+not a durable outcome, and both were cleaned up. The harness is now fixed to
+kill its worker in a `finally`; it still needs a bounded `handle.result()`.
+
+### Architectural finding: control-plane durability is not work-product durability
+
+The instrumented SIGKILL run proves the mechanism behind 5a's 0 B. The execution
+that produced the result is stamped:
+
+```
+0 activity attempt=2 startedAt=2026-09-20T11:01:54.743Z
+3 assistant: read_file(he.js)
+4 tool read_file(he.js): workspace=BUGGED
+5 assistant: replace_in_file(...)
+...
+11 assistant: finish
+```
+
+`attempt=2` means the traced run is the retry after the SIGKILL, and its first
+`read_file` sees the **bugged** source at turn 0. The workspace is re-materialized
+by `materializeGymTask` on every activity execution, so any edits the killed
+attempt had made are gone: the retry redoes the whole task from the base. This is
+the expected behaviour of the current design, but it means the runtime gives
+**control-plane** durability (the workflow and its task survive the worker) and
+not **work-product** durability (the edits in the workspace survive). The 0 B
+sample is the visible cost: the resumed attempt can spend its budget and still
+produce nothing, because it starts over.
+
+Correction to the hypothesis that motivated this check: the turn budget is **not**
+already spent on resume. `maxTurns` is an activity input and resets to 8 on the
+retried execution — the trace starts at turn 0 and the passing samples used 4–8
+turns. So 5a is not "budget exhausted by the earlier attempt"; it is a fresh
+from-scratch attempt in which the model made no net edit. What is lost is the
+workspace, not the budget.
+
+Fix direction (not built here): checkpoint the work product — workspace overlay
+or harvested patch — to the artifact store between turns (or at least at activity
+attempt boundaries) and resume the workspace with the retry instead of
+re-materializing from the pinned bugged commit.

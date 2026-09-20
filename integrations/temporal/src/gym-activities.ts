@@ -45,12 +45,34 @@ export function createGymActivities(): GymAttemptActivities {
             ...(input.apiKey ? { apiKey: input.apiKey } : {}),
             ...(input.gatewayTimeoutMs ? { timeoutMs: input.gatewayTimeoutMs } : {}),
           });
+          // Capture the trace so a worker-death run can be diagnosed: the first
+          // read_file shows which workspace state the (re)started activity saw.
+          const trace: string[] = [];
+          try {
+            trace.push(`activity attempt=${ActivityContext.current().info.attempt} startedAt=${new Date().toISOString()}`);
+          } catch {
+            trace.push("activity attempt=unknown");
+          }
+          const tracedTurn: typeof turn = async (turnInput) => {
+            const result = await turn(turnInput);
+            trace.push(`assistant: ${(result.content ?? JSON.stringify(result.toolCalls)).slice(0, 500)}`);
+            return result;
+          };
           const record = await runGymAttempt({
             task: materialized,
             runner,
-            turn,
+            turn: tracedTurn,
             maxTurns: input.maxTurns,
             deadlineMs: input.deadlineMs,
+            onTool: ({ call, observation }) => {
+              if (call.name === "read_file") {
+                const bugged = observation.includes("parseInt(hexDigits, 10)");
+                const fixed = observation.includes("parseInt(hexDigits, 16)");
+                trace.push(`tool read_file(${String(call.arguments?.path ?? "")}): workspace=${bugged ? "BUGGED" : fixed ? "FIXED" : "unknown"}`);
+              } else {
+                trace.push(`tool ${call.name}: ${observation.slice(0, 300)}`);
+              }
+            },
           });
           // A transient turn failure must THROW so Temporal's activity retry and
           // the workflow's park/backoff engage. Returning an `errored` record
@@ -73,6 +95,7 @@ export function createGymActivities(): GymAttemptActivities {
             turns: record.turns,
             protectedPathsTouched: record.protectedPathsTouched,
             patchBytes: record.patch.length,
+            trace: trace.slice(0, 60),
             ...(record.score.detail ? { detail: record.score.detail } : {}),
             ...(record.error ? { error: record.error } : {}),
           };
