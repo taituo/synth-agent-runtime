@@ -103,7 +103,7 @@ test("classifies gateway HTTP errors as permanent (non-retryable) or transient",
       heartbeat: () => {},
       fetchImpl: (async () => new Response("nope", { status })) as unknown as typeof fetch,
     });
-  for (const status of [400, 401, 403, 404, 422]) {
+  for (const status of [400, 401, 402, 403, 404, 422]) {
     await assert.rejects(make(status)({ agentId: "a", messages: [message("x")] }), (error: unknown) => {
       assert.equal((error as { nonRetryable?: boolean }).nonRetryable, true, `HTTP ${status} should be permanent`);
       return true;

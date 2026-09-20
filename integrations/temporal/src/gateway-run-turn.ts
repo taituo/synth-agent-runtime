@@ -8,7 +8,7 @@ import { parseRetryHintMs } from "./retry-hints.js";
  * network errors, empty or malformed completions — is treated as transient and
  * left to Temporal's retry policy and, after that, the workflow's park/backoff.
  */
-const PERMANENT_HTTP_STATUSES = new Set([400, 401, 403, 404, 422]);
+const PERMANENT_HTTP_STATUSES = new Set([400, 401, 402, 403, 404, 422]);
 
 /**
  * A `runTurn` activity that does REAL inference through an OpenAI-compatible

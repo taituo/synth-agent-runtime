@@ -8,6 +8,7 @@ import {
 } from "@temporalio/workflow";
 import type { AgentActivities, DurableAgentState } from "./contracts.js";
 import {
+  MAX_PARK_HINT_MS,
   clampParkHintMs,
   clone,
   isNonRetryableFailure,
@@ -113,7 +114,8 @@ export async function durableAgentWorkflow(initial: DurableAgentState): Promise<
       // mailbox is left intact so the same turn is retried after a backoff.
       // (An unbounded park/retry loop grows workflow history; Continue-As-New
       // is the production remedy and is out of scope here.)
-      const hintMs = clampParkHintMs(retryAfterMsFromError(error));
+      const rawHint = retryAfterMsFromError(error);
+      const hintMs = clampParkHintMs(rawHint);
       if (hintMs !== undefined) {
         // The server told us when the quota/window resets, so wait exactly that
         // long instead of guessing with exponential backoff. A hinted wait is
@@ -127,12 +129,16 @@ export async function durableAgentWorkflow(initial: DurableAgentState): Promise<
         if (cancelled) break;
         continue;
       }
+      // A hint beyond the clamp means the account is out of quota for the
+      // window, not ordinary throttling: surface it distinctly rather than
+      // parking as if it were a normal retry.
+      const quotaExhausted = rawHint !== undefined && Number.isFinite(rawHint) && rawHint > MAX_PARK_HINT_MS;
       parkAttempt += 1;
       const backoffMs = nextParkBackoffMs(parkAttempt, state.parkBackoff);
       state.status = "waiting";
-      state.lastError = cause;
+      state.lastError = quotaExhausted ? `QUOTA_EXHAUSTED:${cause}` : cause;
       state.updatedAt = Date.now();
-      log.warn("synth.workflow.parked", { attempt: parkAttempt, backoffMs, reason: "backoff", error: cause });
+      log.warn("synth.workflow.parked", { attempt: parkAttempt, backoffMs, reason: quotaExhausted ? "quota-exhausted" : "backoff", error: state.lastError });
       // Wake early only for cancellation: new messages do NOT cut the backoff
       // short, because the provider is presumably still down. Messages that
       // arrive meanwhile stay queued and are picked up after the wait.
