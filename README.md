@@ -76,10 +76,12 @@ leaf or a nested graph), or a composite: `sequence`, `fanout` (parallel children
 joined when all complete), `branch` (a data predicate), and `loop` (iterate until
 a condition, with the counter in workflow state). `runGraphWorkflow` exposes a
 `cancelGraph` signal and a `getGraphState` query, and continues-as-new after
-`CONTINUE_AS_NEW_AFTER_NODES` completed nodes. The interpreter is pure, so the
-composition logic is unit-tested without a server; a live proof SIGKILLs a worker
-mid-graph and shows committed loop/join nodes are not re-run. See
-`docs/HARNESS.md`.
+`CONTINUE_AS_NEW_AFTER_NODES` nodes per run, resuming from a journal of
+completed node occurrences. The interpreter is pure, so the composition logic is
+unit-tested without a server; live proofs against Temporal `:7243` SIGKILL a
+worker mid-graph (committed loop/join nodes are not re-run), run a real child
+workflow the parent waits on, cross the continue-as-new threshold and finish with
+the right node counts, and cancel a real long loop. See `docs/HARNESS.md`.
 
 ## Agent-state fencing
 

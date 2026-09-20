@@ -55,12 +55,17 @@ removed only when the closing work lands.
   than quarantined. Closing: wire it into the turn's workspace commit path or
   quarantine it with the boundary lifted.
 
-- **The graph harness is not fully live-proven.** `docs/HARNESS.md`'s graph
-  workflow runs loops, fan-out/join and branches; the loop+join path has a live
-  SIGKILL/restart proof (`graph-restart`). Still only unit-tested: child
-  workflows as live child runs, `continueAsNew` at the threshold, `cancelGraph`
-  against a real long loop, and per-node timeouts/compensation. Closing: a live
-  proof per mechanism, asserting call counts.
+- **The graph harness is partly live-proven; compensation and timeouts are
+  not.** `docs/HARNESS.md`'s graph workflow runs loops, fan-out/join and
+  branches. Live proofs exist for the loop+join restart (`graph-restart`), a
+  real child workflow the parent waits on (`graph-child`), a loop crossing
+  `continueAsNew` that resumes with the right node counts
+  (`graph-continue-as-new`), and `cancelGraph` stopping a real long loop
+  (`graph-cancel`). Still not implemented/proven: per-node timeouts,
+  compensation, and human-in-the-loop approval signals. The continue-as-new
+  journal is carried in the workflow input, so large node values are bounded by
+  Temporal's payload limit (fine for small values; large artifacts need
+  references). Closing: the remaining flow mechanisms with a live proof each.
 
 - **The Temporal worker deploy shape is documented, not enforced.** Temporal is
   now the single durable engine and the homegrown control plane is deleted

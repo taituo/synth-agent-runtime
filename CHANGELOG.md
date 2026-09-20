@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased — live-prove graph child workflows, continue-as-new and cancel
+
+- Three live proofs against Temporal `:7243`, wired into
+  `scripts/live-proofs.mjs`: `graph-child` (parent history shows a
+  `StartChildWorkflowExecutionInitiated` for `runGraphWorkflow` with a distinct
+  child run id, and the parent result embeds the child's `GraphRunState`),
+  `graph-continue-as-new` (a loop of 1100 crosses the 1000-node threshold; the
+  run chain shows one `WorkflowExecutionContinuedAsNew`, the final run completes
+  with exactly 1100 iterations and no duplicates), and `graph-cancel`
+  (`cancelGraph` stops a real loop — 3 iterations at cancel, 3 after).
+- Fixed continue-as-new resumability: the threshold used the absolute completed
+  count and `executeGraph` re-ran the whole graph on resume, so a resumed loop
+  continued-as-new forever after one node. `GraphScope` now carries a journal of
+  completed node occurrences keyed by deterministic execution path; the
+  interpreter skips journaled work, a loop resumes at the first iteration not
+  journaled, and the threshold counts nodes executed in the current run. Unit
+  test added for the resume path.
+- `docs/HARNESS.md` and `docs/KNOWN-OPEN.md` updated: child workflows,
+  continue-as-new and cancel are live-proven; compensation, per-node timeouts
+  and human-in-the-loop signals remain open.
+
 ## Unreleased — wire the scored-rung refusal into the turn
 
 - `runTurn` now calls `assertRungAllowedForScored` where it resolves the rung, so
