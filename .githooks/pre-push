@@ -1,0 +1,11 @@
+#!/bin/sh
+# Mechanical secret scan before every push. This repo is public, and "remember
+# to scan" is a habit that gets forgotten at the wrong moment. CI runs the same
+# command, so the hook is a fast local fail, not the only enforcement.
+#
+# Enable once per clone: git config core.hooksPath .githooks
+if ! command -v node >/dev/null 2>&1; then
+  echo "secret-scan: node not found; cannot run the scan, refusing to push" >&2
+  exit 1
+fi
+exec node scripts/secret-scan.mjs
