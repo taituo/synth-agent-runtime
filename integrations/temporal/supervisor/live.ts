@@ -18,7 +18,7 @@
  *   SUPERVISOR_TEMPORAL_ADDRESS=127.0.0.1:7244 \
  *   integrations/temporal/node_modules/.bin/tsx supervisor/live.ts
  */
-import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -113,7 +113,23 @@ function startWorker(address: string): ChildProcess {
   return child;
 }
 
-export async function main(): Promise<void> {
+/**
+ * Kill the worker and the node process tsx spawns for it. `tsx` runs the script
+ * in a child node process, so killing only the wrapper leaves the worker alive
+ * and leaking until the process exits.
+ */
+function killWorker(child: ChildProcess): void {
+  if (child.pid) {
+    try {
+      execFileSync("pkill", ["-9", "-P", String(child.pid)]);
+    } catch {
+      // No children (or pkill absent): the direct kill below is the fallback.
+    }
+  }
+  child.kill("SIGKILL");
+}
+
+export async function main(): Promise<number> {
   const address = supervisorAddress();
   if (address.endsWith(":7243")) skip("supervisor Temporal must not be the runtime's 7243; set SUPERVISOR_TEMPORAL_ADDRESS");
   try {
@@ -199,10 +215,12 @@ export async function main(): Promise<void> {
 
     // 4. Durability: SIGKILL the worker, restart it, the workflow must continue.
     const checkInsBeforeRestart = redirected.checkIns;
-    worker.kill("SIGKILL");
+    killWorker(worker);
     await sleep(1_000);
     worker = startWorker(address);
-    const afterRestart = await waitForState(handle, (state) => state.checkIns > checkInsBeforeRestart, 30_000);
+    // Generous: after a SIGKILL the workflow task must be reassigned off the
+    // dead worker's sticky cache before the next check-in can advance.
+    const afterRestart = await waitForState(handle, (state) => state.checkIns > checkInsBeforeRestart, 90_000);
     evidence.restart = { checkInsBeforeRestart, checkInsAfterRestart: afterRestart.checkIns, survived: afterRestart.checkIns > checkInsBeforeRestart };
 
     // 5. Stop.
@@ -237,21 +255,25 @@ export async function main(): Promise<void> {
       evidence.scheduleRecreated === true;
     evidence.ok = ok;
     console.log(JSON.stringify(evidence, null, 2));
-    process.exit(ok ? 0 : 1);
+    // Return (not process.exit) so the `finally` cleanup — schedule delete,
+    // tmux kill, worker kill, temp dir — runs before the process ends.
+    return ok ? 0 : 1;
   } finally {
     // Delete the schedule before the pane so no cron tick starts a supervisor
     // against a session that is gone.
     if (scheduleIdForCleanup) await client.schedule.getHandle(scheduleIdForCleanup).delete().catch(() => {});
     if (sessionStarted) await execFileAsync("tmux", ["kill-session", "-t", tmuxName]).catch(() => {});
-    worker.kill("SIGKILL");
+    killWorker(worker);
     await rm(work, { recursive: true, force: true });
     await connection.close().catch(() => {});
   }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch((error) => {
-    console.error(error instanceof Error ? error.stack ?? error.message : error);
-    process.exit(1);
-  });
+  main()
+    .then((code) => process.exit(code))
+    .catch((error) => {
+      console.error(error instanceof Error ? error.stack ?? error.message : error);
+      process.exit(1);
+    });
 }
