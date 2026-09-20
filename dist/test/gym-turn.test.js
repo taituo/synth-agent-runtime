@@ -5,7 +5,7 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createGatewayGymTurn, createScriptedGymTurn, GYM_TOOL_DEFINITIONS } from "../src/index.js";
+import { createGatewayGymTurn, createScriptedGymTurn, GYM_TOOL_DEFINITIONS, parseRetryAfterMs } from "../src/index.js";
 const INPUT = {
     turnIndex: 0,
     repoDir: "/tmp/does-not-matter",
@@ -50,6 +50,15 @@ test("an omitted served model is recorded as unknown, never guessed", async () =
     assert.equal(result.servedModel, null);
     assert.equal(result.modelSubstituted, false);
 });
+test("an unknown tool name is passed through so the executor can report it", async () => {
+    const turn = createGatewayGymTurn({
+        baseUrl: "http://gateway.test",
+        model: "wanted",
+        fetchImpl: fakeFetch({ body: { choices: [{ message: { content: JSON.stringify({ tool_calls: [{ name: "search_in_file", arguments: { pattern: "x" } }] }) } }] } }),
+    });
+    const result = await turn(INPUT);
+    assert.equal(result.toolCalls[0]?.name, "search_in_file");
+});
 test("a non-JSON reply throws so the attempt records errored", async () => {
     const turn = createGatewayGymTurn({
         baseUrl: "http://gateway.test",
@@ -62,9 +71,22 @@ test("an HTTP error throws so the attempt records errored", async () => {
     const turn = createGatewayGymTurn({
         baseUrl: "http://gateway.test",
         model: "wanted",
-        fetchImpl: fakeFetch({ status: 429, body: "rate limited" }),
+        fetchImpl: fakeFetch({ status: 500, body: "boom" }),
     });
-    await assert.rejects(() => turn(INPUT), /HTTP 429/);
+    await assert.rejects(() => turn(INPUT), /HTTP 500/);
+});
+test("a 429 carries the Retry-After hint across the error boundary", async () => {
+    const turn = createGatewayGymTurn({
+        baseUrl: "http://gateway.test",
+        model: "wanted",
+        fetchImpl: (async () => new Response("rate limited", { status: 429, headers: { "retry-after": "2" } })),
+    });
+    await assert.rejects(() => turn(INPUT), (error) => error.retryAfterMs === 2000);
+});
+test("parseRetryAfterMs handles delta-seconds and rejects garbage", () => {
+    assert.equal(parseRetryAfterMs(new Headers({ "retry-after": "3" })), 3000);
+    assert.equal(parseRetryAfterMs(new Headers({ "retry-after": "nonsense" })), undefined);
+    assert.equal(parseRetryAfterMs(new Headers()), undefined);
 });
 test("the scripted turn computes substitution and calls finish when the script is exhausted", async () => {
     const turn = createScriptedGymTurn([{ toolCalls: [{ name: "run_visible_test" }] }], { requestedModel: "a", servedModel: "b" });

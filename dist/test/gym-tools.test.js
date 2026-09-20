@@ -71,10 +71,42 @@ test("read_file and list_files work, and path escapes are refused", async () => 
         await rm(parent, { recursive: true, force: true });
     }
 });
+test("an unknown tool is a recoverable observation, not a crash", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "gym-tools-"));
+    try {
+        const repo = await makeRepo(parent);
+        const tools = createGymTools(localEffectRunner(repo), { visibleTestPath: "test/visible.test.mjs" });
+        const result = await tools.execute({ name: "search_in_file", arguments: { pattern: "x" } });
+        assert.equal(result.ok, false);
+        assert.match(result.observation, /unknown tool/);
+        assert.match(result.observation, /read_file/);
+    }
+    finally {
+        await rm(parent, { recursive: true, force: true });
+    }
+});
+test("replace_in_file makes a targeted edit and refuses a non-unique or protected target", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "gym-tools-"));
+    try {
+        const repo = await makeRepo(parent);
+        const tools = createGymTools(localEffectRunner(repo), { visibleTestPath: "test/visible.test.mjs" });
+        const edit = await tools.execute({ name: "replace_in_file", arguments: { path: "lib.mjs", old_text: "toUpperCase()", new_text: "toLowerCase()" } });
+        assert.equal(edit.ok, true, edit.observation);
+        assert.match(await readFile(join(repo, "lib.mjs"), "utf8"), /toLowerCase\(\)/);
+        const missing = await tools.execute({ name: "replace_in_file", arguments: { path: "lib.mjs", old_text: "not-present", new_text: "x" } });
+        assert.equal(missing.ok, false);
+        const protectedEdit = await tools.execute({ name: "replace_in_file", arguments: { path: "test/visible.test.mjs", old_text: "hello-world", new_text: "x" } });
+        assert.equal(protectedEdit.blocked, true);
+    }
+    finally {
+        await rm(parent, { recursive: true, force: true });
+    }
+});
 test("the tool set and system prompt are fixed for both arms", () => {
-    assert.deepEqual(GYM_TOOL_DEFINITIONS.map((tool) => tool.name), ["list_files", "read_file", "write_file", "run_visible_test", "finish"]);
+    assert.deepEqual(GYM_TOOL_DEFINITIONS.map((tool) => tool.name), ["list_files", "read_file", "write_file", "replace_in_file", "run_visible_test", "finish"]);
     const prompt = buildGymSystemPrompt("test/visible.test.mjs");
     assert.ok(prompt.includes("test/visible.test.mjs"));
     assert.ok(prompt.includes("READ-ONLY"));
     assert.ok(prompt.includes("tool_calls"));
+    assert.ok(prompt.includes("replace_in_file"), "the prompt must advertise every tool");
 });

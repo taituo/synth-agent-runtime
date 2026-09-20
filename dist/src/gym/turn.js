@@ -1,4 +1,3 @@
-const TOOL_NAMES = ["list_files", "read_file", "write_file", "run_visible_test", "finish"];
 function coerceToolCalls(value) {
     if (!Array.isArray(value))
         throw new Error("model reply has no tool_calls array");
@@ -6,8 +5,8 @@ function coerceToolCalls(value) {
         const item = entry;
         if (typeof item?.name !== "string")
             throw new Error(`tool call ${index} has no name`);
-        if (!TOOL_NAMES.includes(item.name))
-            throw new Error(`unknown tool: ${item.name}`);
+        // An unknown tool name is a model mistake, not a protocol error: let the
+        // executor return "unknown tool" as an observation so the model can retry.
         const rawArgs = item.arguments ?? item.args ?? {};
         let args = {};
         if (typeof rawArgs === "string") {
@@ -69,6 +68,23 @@ export function createScriptedGymTurn(steps, defaults = {}) {
     };
 }
 /**
+ * Parse a `Retry-After` header (delta-seconds or HTTP-date) into milliseconds.
+ * Returns undefined for absent/invalid values so a broken upstream cannot park
+ * an attempt for an absurd time.
+ */
+export function parseRetryAfterMs(headers) {
+    const raw = headers.get("retry-after");
+    if (!raw)
+        return undefined;
+    const seconds = Number(raw);
+    if (Number.isFinite(seconds) && seconds >= 0)
+        return seconds * 1000;
+    const date = Date.parse(raw);
+    if (!Number.isNaN(date))
+        return Math.max(0, date - Date.now());
+    return undefined;
+}
+/**
  * The plain arm: a direct call to an OpenAI-compatible gateway. No Temporal, no
  * retry, no receipts. The prompt is the shared gym prompt, so this arm and the
  * durable arm differ only in durability.
@@ -93,11 +109,19 @@ export function createGatewayGymTurn(options) {
             method: "POST",
             headers,
             signal: AbortSignal.timeout(timeoutMs),
-            body: JSON.stringify({ model: options.model, messages, temperature: 0 }),
+            body: JSON.stringify({ model: options.model, messages, temperature: 0, max_tokens: options.maxTokens ?? 4096 }),
         });
         const text = await response.text();
-        if (!response.ok)
-            throw new Error(`gateway returned HTTP ${response.status}: ${text.slice(0, 300)}`);
+        if (!response.ok) {
+            const message = `gateway returned HTTP ${response.status}: ${text.slice(0, 300)}`;
+            const retryAfterMs = parseRetryAfterMs(response.headers);
+            // Carry a server reset hint across the error boundary (429/503), so a
+            // durable supervisor parks for the real window instead of guessing.
+            if (retryAfterMs !== undefined && (response.status === 429 || response.status === 503)) {
+                throw Object.assign(new Error(message), { retryAfterMs });
+            }
+            throw new Error(message);
+        }
         const body = JSON.parse(text);
         const message = body.choices?.[0]?.message;
         let toolCalls;

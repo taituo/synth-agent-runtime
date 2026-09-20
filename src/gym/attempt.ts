@@ -81,6 +81,15 @@ export interface RunGymAttemptOptions {
   onTool?: (result: { turnIndex: number; call: GymToolCall; ok: boolean; observation: string }) => void;
 }
 
+/** A turn failure, kept structured so a durable supervisor can decide to retry/park. */
+export interface GymFailure {
+  message: string;
+  /** True when retrying the attempt could plausibly succeed (5xx, 429, timeout). */
+  transient: boolean;
+  /** Server reset hint in ms, when the provider supplied one. */
+  retryAfterMs?: number;
+}
+
 export interface GymAttemptRecord {
   outcome: GymOutcome;
   requestedModel: string | null;
@@ -95,6 +104,8 @@ export interface GymAttemptRecord {
   patch: string;
   score: GymScore;
   error?: string;
+  /** Present when a model turn threw; the durable arm turns this into a retry. */
+  failure?: GymFailure;
 }
 
 const DEFAULT_MAX_TURNS = 8;
@@ -134,6 +145,7 @@ export async function runGymAttempt(options: RunGymAttemptOptions): Promise<GymA
   let finished = false;
   let timedOut = false;
   let errored: string | undefined;
+  let failure: GymFailure | undefined;
   let requestedModel: string | null = null;
   let servedModel: string | null = null;
   let modelSubstituted = false;
@@ -149,6 +161,7 @@ export async function runGymAttempt(options: RunGymAttemptOptions): Promise<GymA
       result = await options.turn({ turnIndex, repoDir: task.repoDir, visibleTestPath, systemPrompt, userPrompt, transcript: [...transcript], tools: GYM_TOOL_DEFINITIONS });
     } catch (error) {
       errored = error instanceof Error ? error.message : String(error);
+      failure = classifyFailure(error, errored);
       break;
     }
     turns++;
@@ -209,6 +222,7 @@ export async function runGymAttempt(options: RunGymAttemptOptions): Promise<GymA
   let outcome: GymOutcome = score.outcome;
   if (errored !== undefined) outcome = "errored";
   else if (timedOut) outcome = "timed-out";
+  if (timedOut && failure === undefined) failure = { message: "attempt exceeded its deadline", transient: true };
 
   return {
     outcome,
@@ -222,5 +236,19 @@ export async function runGymAttempt(options: RunGymAttemptOptions): Promise<GymA
     patch,
     score,
     ...(errored !== undefined ? { error: errored } : {}),
+    ...(failure !== undefined ? { failure } : {}),
   };
+}
+
+/**
+ * Classify a thrown turn error. A 5xx, 429 (with or without a hint), network
+ * error or timeout is transient: a durable supervisor may retry. A malformed
+ * model reply is not (retrying the same broken exchange rarely helps).
+ */
+function classifyFailure(error: unknown, message: string): GymFailure {
+  const retryAfterMs = typeof (error as { retryAfterMs?: unknown })?.retryAfterMs === "number"
+    ? ((error as { retryAfterMs: number }).retryAfterMs)
+    : undefined;
+  const transient = retryAfterMs !== undefined || /HTTP 5\d\d|HTTP 429|abort|timed? ?out|timeout|ECONN|socket hang up|fetch failed|network/i.test(message);
+  return { message, transient, ...(retryAfterMs !== undefined ? { retryAfterMs } : {}) };
 }

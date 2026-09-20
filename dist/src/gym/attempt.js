@@ -36,6 +36,7 @@ export async function runGymAttempt(options) {
     let finished = false;
     let timedOut = false;
     let errored;
+    let failure;
     let requestedModel = null;
     let servedModel = null;
     let modelSubstituted = false;
@@ -51,6 +52,7 @@ export async function runGymAttempt(options) {
         }
         catch (error) {
             errored = error instanceof Error ? error.message : String(error);
+            failure = classifyFailure(error, errored);
             break;
         }
         turns++;
@@ -114,6 +116,8 @@ export async function runGymAttempt(options) {
         outcome = "errored";
     else if (timedOut)
         outcome = "timed-out";
+    if (timedOut && failure === undefined)
+        failure = { message: "attempt exceeded its deadline", transient: true };
     return {
         outcome,
         requestedModel,
@@ -126,5 +130,18 @@ export async function runGymAttempt(options) {
         patch,
         score,
         ...(errored !== undefined ? { error: errored } : {}),
+        ...(failure !== undefined ? { failure } : {}),
     };
+}
+/**
+ * Classify a thrown turn error. A 5xx, 429 (with or without a hint), network
+ * error or timeout is transient: a durable supervisor may retry. A malformed
+ * model reply is not (retrying the same broken exchange rarely helps).
+ */
+function classifyFailure(error, message) {
+    const retryAfterMs = typeof error?.retryAfterMs === "number"
+        ? (error.retryAfterMs)
+        : undefined;
+    const transient = retryAfterMs !== undefined || /HTTP 5\d\d|HTTP 429|abort|timed? ?out|timeout|ECONN|socket hang up|fetch failed|network/i.test(message);
+    return { message, transient, ...(retryAfterMs !== undefined ? { retryAfterMs } : {}) };
 }

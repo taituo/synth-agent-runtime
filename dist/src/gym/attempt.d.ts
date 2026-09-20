@@ -76,6 +76,14 @@ export interface RunGymAttemptOptions {
         observation: string;
     }) => void;
 }
+/** A turn failure, kept structured so a durable supervisor can decide to retry/park. */
+export interface GymFailure {
+    message: string;
+    /** True when retrying the attempt could plausibly succeed (5xx, 429, timeout). */
+    transient: boolean;
+    /** Server reset hint in ms, when the provider supplied one. */
+    retryAfterMs?: number;
+}
 export interface GymAttemptRecord {
     outcome: GymOutcome;
     requestedModel: string | null;
@@ -90,6 +98,8 @@ export interface GymAttemptRecord {
     patch: string;
     score: GymScore;
     error?: string;
+    /** Present when a model turn threw; the durable arm turns this into a retry. */
+    failure?: GymFailure;
 }
 /**
  * Run one attempt to completion and return the record the milestone reports on.

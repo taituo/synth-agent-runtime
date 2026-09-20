@@ -42,8 +42,10 @@ interface ArmResult {
   callCount: number;
   protectedPathsTouched: string[];
   patchBytes: number;
+  turns?: number;
   detail?: string;
   error?: string;
+  trace?: string[];
 }
 
 /** Distinct non-pass outcome for a missing dependency: exit 2. */
@@ -180,17 +182,40 @@ async function runLivePlain(
   image: string,
   maxTurns: number,
   deadlineMs: number,
+  runnerKind: "local" | "sandbox",
+  gatewayTimeoutMs?: number,
 ): Promise<ArmResult> {
-  const sandbox = await buildSandboxRunner({
-    repoDir: materialized.repoDir,
-    image,
-    ...(process.env.SYNTH_KUBERNETES_NAMESPACE ? { namespace: process.env.SYNTH_KUBERNETES_NAMESPACE } : {}),
-    ...(process.env.SYNTH_KUBECTL_CONTEXT ? { kubectlContext: process.env.SYNTH_KUBECTL_CONTEXT } : {}),
-    ...(process.env.SYNTH_RUNTIME_CLASS ? { runtimeClassName: process.env.SYNTH_RUNTIME_CLASS } : {}),
-  });
+  const sandbox = runnerKind === "sandbox"
+    ? await buildSandboxRunner({
+        repoDir: materialized.repoDir,
+        image,
+        ...(process.env.SYNTH_KUBERNETES_NAMESPACE ? { namespace: process.env.SYNTH_KUBERNETES_NAMESPACE } : {}),
+        ...(process.env.SYNTH_KUBECTL_CONTEXT ? { kubectlContext: process.env.SYNTH_KUBECTL_CONTEXT } : {}),
+        ...(process.env.SYNTH_RUNTIME_CLASS ? { runtimeClassName: process.env.SYNTH_RUNTIME_CLASS } : {}),
+      })
+    : undefined;
   try {
-    const turn = createGatewayGymTurn({ baseUrl: gatewayBaseUrl, model, ...(process.env.SYNTH_GATEWAY_API_KEY ? { apiKey: process.env.SYNTH_GATEWAY_API_KEY } : {}) });
-    const record = await runGymAttempt({ task: materialized, runner: sandbox.runner, turn, maxTurns, deadlineMs });
+    const runner = sandbox ? sandbox.runner : localEffectRunner(materialized.repoDir);
+    const turn = createGatewayGymTurn({
+      baseUrl: gatewayBaseUrl,
+      model,
+      ...(process.env.SYNTH_GATEWAY_API_KEY ? { apiKey: process.env.SYNTH_GATEWAY_API_KEY } : {}),
+      ...(gatewayTimeoutMs ? { timeoutMs: gatewayTimeoutMs } : {}),
+    });
+    const trace: string[] = [];
+    const tracedTurn: GymTurn = async (input) => {
+      const result = await turn(input);
+      trace.push(`assistant: ${(result.content ?? JSON.stringify(result.toolCalls)).slice(0, 500)}`);
+      return result;
+    };
+    const record = await runGymAttempt({
+      task: materialized,
+      runner,
+      turn: tracedTurn,
+      maxTurns,
+      deadlineMs,
+      onTool: ({ call, observation }) => trace.push(`tool ${call.name}: ${observation.slice(0, 300)}`),
+    });
     return {
       arm: "plain",
       outcome: record.outcome,
@@ -199,13 +224,15 @@ async function runLivePlain(
       modelSubstituted: record.modelSubstituted,
       wallTimeMs: record.wallTimeMs,
       callCount: record.callCount,
+      turns: record.turns,
       protectedPathsTouched: record.protectedPathsTouched,
       patchBytes: record.patch.length,
+      trace,
       ...(record.score.detail ? { detail: record.score.detail } : {}),
       ...(record.error ? { error: record.error } : {}),
     };
   } finally {
-    await sandbox.close();
+    await sandbox?.close();
   }
 }
 
@@ -232,6 +259,8 @@ async function runDurableWorkflow(
   image: string,
   maxTurns: number,
   deadlineMs: number,
+  runnerKind: "local" | "sandbox",
+  gatewayTimeoutMs?: number,
 ): Promise<ArmResult> {
   const temporal = await loadTemporalClient();
   const connection = await temporal.Connection.connect(process.env.SYNTH_TEMPORAL_ADDRESS ? { address: process.env.SYNTH_TEMPORAL_ADDRESS } : undefined);
@@ -244,6 +273,8 @@ async function runDurableWorkflow(
     model,
     maxTurns,
     deadlineMs,
+    runner: runnerKind,
+    ...(gatewayTimeoutMs ? { gatewayTimeoutMs } : {}),
     image,
     ...(process.env.SYNTH_KUBERNETES_NAMESPACE ? { namespace: process.env.SYNTH_KUBERNETES_NAMESPACE } : {}),
     ...(process.env.SYNTH_KUBECTL_CONTEXT ? { kubectlContext: process.env.SYNTH_KUBECTL_CONTEXT } : {}),
@@ -266,7 +297,7 @@ async function runDurableWorkflow(
     wallTimeMs: output.wallTimeMs,
     callCount: output.callCount,
     protectedPathsTouched: output.protectedPathsTouched,
-    patchBytes: 0,
+    patchBytes: output.patchBytes ?? 0,
     ...(output.detail ? { detail: output.detail } : {}),
     ...(output.error ? { error: output.error } : {}),
   };
@@ -283,6 +314,8 @@ async function main(): Promise<number> {
   const model = arg(args, "model") ?? process.env.SYNTH_GYM_MODEL ?? "deepseek-v4.1-flash";
   const gatewayBaseUrl = arg(args, "gateway") ?? process.env.SYNTH_GATEWAY_URL ?? "http://127.0.0.1:8787";
   const fixtureCacheDir = process.env.SYNTH_FIXTURE_REPOS ?? DEFAULT_GYM_FIXTURE_CACHE_DIR;
+  const runnerKind = (arg(args, "runner") ?? "sandbox") as "local" | "sandbox";
+  const gatewayTimeoutMs = arg(args, "gateway-timeout-ms") ? Number(arg(args, "gateway-timeout-ms")) : undefined;
 
   const task = await loadGymTask(taskDir);
   const work = await mkdtemp(join(tmpdir(), "gym-run-"));
@@ -292,13 +325,13 @@ async function main(): Promise<number> {
       await preflightFixtureCache(fixtureCacheDir, task.repo);
       await preflightGateway(gatewayBaseUrl);
     }
-    const image = dryRun ? "" : preflightCluster();
+    const image = dryRun || runnerKind === "local" ? "" : preflightCluster();
 
     for (const arm of arms === "both" ? (["plain", "durable"] as const) : ([arms] as const)) {
       const materialized = await materializeGymTask({ task, workDir: work, repoDirName: `${arm}-${Date.now().toString(36)}`, fixtureCacheDir });
       if (dryRun) results.push(await runDryArm(arm, materialized, maxTurns, deadlineMs, attempts));
-      else if (arm === "plain") results.push(await runLivePlain(materialized, gatewayBaseUrl, model, image, maxTurns, deadlineMs));
-      else results.push(await runDurableWorkflow(materialized, gatewayBaseUrl, model, image, maxTurns, deadlineMs));
+      else if (arm === "plain") results.push(await runLivePlain(materialized, gatewayBaseUrl, model, image, maxTurns, deadlineMs, runnerKind, gatewayTimeoutMs));
+      else results.push(await runDurableWorkflow(materialized, gatewayBaseUrl, model, image, maxTurns, deadlineMs, runnerKind, gatewayTimeoutMs));
     }
 
     const ok = results.every((result) => result.outcome === "passed");

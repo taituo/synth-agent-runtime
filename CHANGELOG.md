@@ -14,9 +14,12 @@
   the bug's own reverse patch, which scores `passed`. The first real task is `he`
   `hex-decode` (hex numeric character references decoded in base 10).
 - **`src/gym/tools.ts`** is the agent tool surface (`list_files`, `read_file`,
-  `write_file`, `run_visible_test`, `finish`) defined over an `EffectRunner` so
-  the identical definitions run over a local temp dir or the `ExecutionBroker`;
-  `write_file` refuses test files and runner config.
+  `write_file`, `replace_in_file`, `run_visible_test`, `finish`) defined over an
+  `EffectRunner` so the identical definitions run over a local temp dir or the
+  `ExecutionBroker`; `write_file`/`replace_in_file` refuse test files and runner
+  config, and an unknown tool is a recoverable observation rather than a crash.
+  The prompt advertises every tool, so a model cannot silently reach for one the
+  harness does not have.
 - **`src/gym/harvest.ts`** takes the patch from git (`git add -A` + `git diff
   --cached HEAD`) with `node_modules` explicitly excluded, so sandbox-only side
   effects never travel with the scored patch.
@@ -26,7 +29,13 @@
   call count, protected paths touched) and exposes scoring as one injectable seam.
 - Plain turn (direct gateway), durable `gymAttemptWorkflow` (park/backoff shape,
   sandbox broker + `KubernetesExecutor`), and `integrations/gym/run-gym.ts` whose
-  `--dry-run` completes the whole pipeline at **zero model calls**.
+  `--dry-run` completes the whole pipeline at **zero model calls**. A transient
+  turn failure (5xx, 429, timeout) is surfaced as a structured `GymFailure`, so
+  the durable activity throws and Temporal retries then parks on the server's
+  `Retry-After` hint while the plain arm does neither; `integrations/gym/p2-faults.ts`
+  runs the per-arm fault matrix (502, 429, timeout, worker restart, SIGKILL)
+  with a fresh fault proxy per arm so a one-shot fault is not consumed by the
+  first arm.
 
 ### Artifact handoff by reference, with provenance and a flat history
 

@@ -19,7 +19,9 @@ import {
 
 const { runGymAttemptActivity } = proxyActivities<GymAttemptActivities>({
   startToCloseTimeout: "60 minutes",
-  heartbeatTimeout: "2 minutes",
+  // The activity heartbeats every 15s; a 30s heartbeat timeout keeps
+  // worker-death detection bounded for the fault matrix.
+  heartbeatTimeout: "30 seconds",
   retry: {
     maximumAttempts: 3,
     initialInterval: "1 second",

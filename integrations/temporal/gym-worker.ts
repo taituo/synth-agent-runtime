@@ -16,4 +16,7 @@ await runTemporalWorker({
   // The worker's activity type is broader than the gym contract; the gym
   // activities are additive and registered alongside the agent ones.
   activities: createGymActivities() as never,
+  // A dedicated task queue per fault run lets a harness kill exactly one worker.
+  taskQueue: process.env.SYNTH_GYM_TASK_QUEUE ?? "synth-agent-runtime",
+  ...(process.env.TEMPORAL_ADDRESS ? { address: process.env.TEMPORAL_ADDRESS } : {}),
 });

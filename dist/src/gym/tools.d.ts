@@ -20,7 +20,7 @@ export interface EffectRunner {
 export declare function localEffectRunner(root: string): EffectRunner;
 /** Wrap a broker + workspace context as an EffectRunner (synthetic or sandbox rung). */
 export declare function brokerEffectRunner(broker: ExecutionBroker, context: EffectContext, id?: string): EffectRunner;
-export type GymToolName = "list_files" | "read_file" | "write_file" | "run_visible_test" | "finish";
+export type GymToolName = "list_files" | "read_file" | "write_file" | "replace_in_file" | "run_visible_test" | "finish";
 export interface GymToolCall {
     name: GymToolName;
     arguments?: Record<string, unknown>;
@@ -57,7 +57,7 @@ export interface GymTools {
 }
 export declare function createGymTools(runner: EffectRunner, options: GymToolOptions): GymTools;
 /** The task prompt. Both arms must send this byte-for-byte. */
-export declare function buildGymSystemPrompt(visibleTestPath: string): string;
+export declare function buildGymSystemPrompt(visibleTestPath: string, tools?: readonly GymToolDefinition[]): string;
 export declare function buildGymUserPrompt(options: {
     visibleTestPath: string;
     visibleTestContent: string;

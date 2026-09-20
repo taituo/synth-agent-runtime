@@ -11,12 +11,20 @@ export type ScriptedStep = GymTurnResult | ((input: GymTurnInput) => GymTurnResu
  * is exhausted the turn calls `finish`, so a dry run always terminates.
  */
 export declare function createScriptedGymTurn(steps: readonly ScriptedStep[], defaults?: ScriptedTurnDefaults): GymTurn;
+/**
+ * Parse a `Retry-After` header (delta-seconds or HTTP-date) into milliseconds.
+ * Returns undefined for absent/invalid values so a broken upstream cannot park
+ * an attempt for an absurd time.
+ */
+export declare function parseRetryAfterMs(headers: Headers): number | undefined;
 export interface GatewayGymTurnOptions {
     /** Base URL of the gateway, no trailing slash (e.g. http://127.0.0.1:8787). */
     baseUrl: string;
     model: string;
     apiKey?: string;
     timeoutMs?: number;
+    /** Upper bound on generated tokens, so a runaway answer cannot stall a turn. */
+    maxTokens?: number;
     fetchImpl?: typeof fetch;
     /** Extra headers (e.g. tenancy/lane hints for the gateway). */
     headers?: Record<string, string>;

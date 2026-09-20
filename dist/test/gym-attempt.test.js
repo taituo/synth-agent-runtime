@@ -194,6 +194,37 @@ test("a throwing turn scores errored and the call count includes every invocatio
         await rm(parent, { recursive: true, force: true });
     }
 });
+test("a transient turn failure is recorded as retryable with its reset hint", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "gym-attempt-"));
+    try {
+        const task = await makeMaterialized(parent);
+        const turn = async () => {
+            throw Object.assign(new Error("gateway returned HTTP 429: rate limited"), { retryAfterMs: 2000 });
+        };
+        const record = await runGymAttempt({ task, runner: localEffectRunner(task.repoDir), turn });
+        assert.equal(record.outcome, "errored");
+        assert.equal(record.failure?.transient, true);
+        assert.equal(record.failure?.retryAfterMs, 2000);
+    }
+    finally {
+        await rm(parent, { recursive: true, force: true });
+    }
+});
+test("a malformed model reply is not classified as retryable", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "gym-attempt-"));
+    try {
+        const task = await makeMaterialized(parent);
+        const turn = async () => {
+            throw new Error("model reply is not JSON: I cannot help with that.");
+        };
+        const record = await runGymAttempt({ task, runner: localEffectRunner(task.repoDir), turn });
+        assert.equal(record.outcome, "errored");
+        assert.equal(record.failure?.transient, false);
+    }
+    finally {
+        await rm(parent, { recursive: true, force: true });
+    }
+});
 test("a turn that overruns the deadline scores timed-out", async () => {
     const parent = await mkdtemp(join(tmpdir(), "gym-attempt-"));
     try {
