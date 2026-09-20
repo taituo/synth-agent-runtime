@@ -21,6 +21,37 @@ function envArgs(env) {
         return `${key}=${value}`;
     });
 }
+/** Env var the git-change loop is passed through, so no shell quoting is needed. */
+export const GIT_CHANGES_LOOP_ENV = "SYNTH_GIT_CHANGES_LOOP";
+/**
+ * The inner loop that turns `git status -z` into one NUL-separated record per
+ * change: path, status, kind, target.
+ *
+ * `read -d` is a bash/busybox-ash builtin. Debian's `/bin/sh` is dash and rejects
+ * it ("Illegal option -d"), which made the loop emit nothing and `syncBack`
+ * silently import zero changes. That is invisible with an alpine executor and
+ * breaks under the repo's own `node:22-bookworm-slim` executor, so the loop is
+ * run under a shell that supports `read -d` (bash when present, else `sh`).
+ */
+export const GIT_CHANGES_LOOP = [
+    "while IFS= read -r -d '' entry; do",
+    '  status=$(printf %s "$entry" | cut -c1-2)',
+    '  path=$(printf %s "$entry" | cut -c4-)',
+    '  if [ -L "$path" ]; then kind=L; target=$(readlink "./$path"); else kind=F; target=""; fi',
+    `  printf '%s\\0%s\\0%s\\0%s\\0' "$path" "$status" "$kind" "$target"`,
+    "done",
+].join("\n");
+/**
+ * The full command run in the pod. `workspace` is parameterized so the exact
+ * script can be exercised in a local test against a real repo.
+ */
+export function gitChangesCommand(workspace = "/workspace") {
+    return [
+        `cd ${shQuote(workspace)} || exit 1`,
+        "if command -v bash >/dev/null 2>&1; then SB=bash; else SB=sh; fi",
+        `git -c safe.directory=${shQuote(workspace)} status --porcelain=v1 -z --untracked-files=all --no-renames | $SB -c "$${GIT_CHANGES_LOOP_ENV}"`,
+    ].join("\n");
+}
 /**
  * `kubectl delete pod X networkpolicy Y` does NOT mean "delete pod X and
  * networkpolicy Y" — kubectl reads the first positional argument after the
@@ -190,18 +221,21 @@ export class KubectlSandboxBackend {
         // One exec: emit each change as four NUL-separated fields (path, status,
         // kind, target). `git status -z` uses NUL terminators already; the shell
         // loop adds whether the working-tree entry is a symlink and its target, so a
-        // mode-120000 change is not silently flattened into regular bytes.
-        const script = [
-            "cd /workspace || exit 1",
-            "git -c safe.directory=/workspace status --porcelain=v1 -z --untracked-files=all --no-renames |",
-            "while IFS= read -r -d '' entry; do",
-            '  status=$(printf %s "$entry" | cut -c1-2)',
-            '  path=$(printf %s "$entry" | cut -c4-)',
-            '  if [ -L "$path" ]; then kind=L; target=$(readlink "./$path"); else kind=F; target=""; fi',
-            `  printf '%s\\0%s\\0%s\\0%s\\0' "$path" "$status" "$kind" "$target"`,
-            "done",
-        ].join("\n");
-        const result = await this.#run(["exec", "-n", sandbox.namespace, sandbox.podName, "--", "sh", "-lc", script], undefined, this.#defaultExecTimeoutMs);
+        // mode-120000 change is not silently flattened into regular bytes. The loop
+        // is passed via env and run under bash/ash because `read -d` is not POSIX
+        // (see GIT_CHANGES_LOOP).
+        const result = await this.#run([
+            "exec",
+            "-n",
+            sandbox.namespace,
+            sandbox.podName,
+            "--",
+            "env",
+            `${GIT_CHANGES_LOOP_ENV}=${GIT_CHANGES_LOOP}`,
+            "sh",
+            "-lc",
+            gitChangesCommand(),
+        ], undefined, this.#defaultExecTimeoutMs);
         if (result.code !== 0) {
             throw new Error(`git status failed in sandbox ${sandbox.id}: ${result.stderr.toString("utf8") || result.stdout.toString("utf8")}`);
         }

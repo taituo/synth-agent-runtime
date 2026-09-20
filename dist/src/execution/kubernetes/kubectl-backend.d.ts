@@ -7,6 +7,24 @@ export interface KubectlSandboxBackendOptions {
     createTimeoutMs?: number;
     defaultExecTimeoutMs?: number;
 }
+/** Env var the git-change loop is passed through, so no shell quoting is needed. */
+export declare const GIT_CHANGES_LOOP_ENV = "SYNTH_GIT_CHANGES_LOOP";
+/**
+ * The inner loop that turns `git status -z` into one NUL-separated record per
+ * change: path, status, kind, target.
+ *
+ * `read -d` is a bash/busybox-ash builtin. Debian's `/bin/sh` is dash and rejects
+ * it ("Illegal option -d"), which made the loop emit nothing and `syncBack`
+ * silently import zero changes. That is invisible with an alpine executor and
+ * breaks under the repo's own `node:22-bookworm-slim` executor, so the loop is
+ * run under a shell that supports `read -d` (bash when present, else `sh`).
+ */
+export declare const GIT_CHANGES_LOOP: string;
+/**
+ * The full command run in the pod. `workspace` is parameterized so the exact
+ * script can be exercised in a local test against a real repo.
+ */
+export declare function gitChangesCommand(workspace?: string): string;
 /**
  * `kubectl delete pod X networkpolicy Y` does NOT mean "delete pod X and
  * networkpolicy Y" — kubectl reads the first positional argument after the
