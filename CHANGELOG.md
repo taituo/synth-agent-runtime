@@ -157,7 +157,13 @@
   `integrations/gym/p2-faults.ts`
   runs the per-arm fault matrix (502, 429, timeout, worker restart, SIGKILL)
   with a fresh fault proxy per arm so a one-shot fault is not consumed by the
-  first arm.
+  first arm. The durable arm's workflow input now carries the gateway `apiKey`
+  too, so an authenticated gateway sees the same request from both arms; without
+  it the plain arm sent `Authorization` and the durable arm did not, varying more
+  than durability. Note the provider-fault rows (502/429/timeout) are
+  retry-policy rows, not durability evidence: the plain arm is a no-retry single
+  shot, so they measure "has any retry at all". The process-fault rows are the
+  durability evidence.
 - **Work-product checkpoints close the "control-plane durability is not
   work-product durability" gap found by the fault matrix.** A SIGKILLed worker
   used to leave the retried activity re-materializing the pinned bugged checkout,

@@ -26,6 +26,17 @@ Run one fault at a time; each row is committed as it completes.
 | 1 | 502 (first request) | errored, 1 call, 28 ms | passed, 8 calls, 39.5 s, 358 B | **yes** |
 | 2 | 429 + `Retry-After` x3 | errored, 1 call, 31 ms | passed, 8 calls, 65.7 s, 358 B | **yes** |
 
+**Interpretation — rows 1–2 are retry-policy rows, not durability evidence.**
+The plain arm is a no-retry single shot (`createGatewayGymTurn` throws on the
+first non-2xx and `runPlainOnce` calls the loop once); the durable arm gets
+Temporal's activity retry plus the workflow's park/backoff. So these rows measure
+"has any retry at all", which a plain HTTP client can have without Temporal,
+leases or receipts. The durability evidence is the process-fault rows (worker
+restart, SIGKILL), where the plain child vanishes and the durable workflow
+survives — a difference in kind, not degree. Making the plain arm a fair control
+means giving it the same bounded transient retry/backoff; that change is not in
+this run, so the retry-policy label stands.
+
 ### Rows 3–4 as first run (confounded — superseded by the re-run below)
 
 | # | fault | plain arm | durable arm | verdict |

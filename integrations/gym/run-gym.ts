@@ -271,6 +271,10 @@ async function runDurableWorkflow(
     workDir: join(materialized.baseRepoDir, ".."),
     gatewayBaseUrl,
     model,
+    // Both arms must send the same request; without this the durable arm
+    // omitted the Authorization header the plain arm sent, so an authenticated
+    // gateway would make them differ by more than durability.
+    ...(process.env.SYNTH_GATEWAY_API_KEY ? { apiKey: process.env.SYNTH_GATEWAY_API_KEY } : {}),
     maxTurns,
     deadlineMs,
     runner: runnerKind,
