@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased — durable verification and no stale compiled tests
+
+- `scripts/live-proofs.mjs` now exits **2** when any selected proof skips
+  (skip-only included), distinct from `0` pass and `1` fail. `scripts/live-proof.mjs`
+  already did.
+- `.github/workflows/core.yml`'s `temporal` job installs the Temporal CLI, starts
+  a real `temporal server start-dev` on `:7243`, and runs the Temporal-only live
+  proofs (`graph-restart`, `durable-restart`, `graph-child`,
+  `graph-continue-as-new`, `graph-cancel`, `effect-receipt`). The step exits 2 if
+  any proof skips, so a missing server fails CI instead of passing on skips.
+- New `docs/VERIFICATION.md`: the verification standard, how to run the set, and
+  the permanent regression test behind each demonstrated attack (the curated
+  in-repo set; the `/tmp` review prose is scratch).
+- New `scripts/verify.mjs` (`npm run verify`): root + Temporal suites, syntax,
+  secret scan, and the Temporal live proofs, with 0/1/2 exit codes.
+- Root `dist/` is no longer tracked (added to `.gitignore`) and the `build`/`test`
+  path is `rm -rf dist` first, so a deleted test source cannot be run from a
+  stale compiled artifact (the verify-7 defect). `tsc` does not prune, so the
+  clean step is the guarantee; the index-only secret scan is unaffected.
+
 ## Unreleased — persist effect receipts in the shipped rung
 
 - The Temporal rung now passes a durable `RuntimeStateStore` to
