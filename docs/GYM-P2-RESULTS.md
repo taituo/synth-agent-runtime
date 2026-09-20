@@ -183,3 +183,20 @@ repeated with the hardened scorer and the bounded-wait/logging harness.
 | 1 | lost | **passed** | 3 | 2 | 358 B |
 | 2 | lost | **passed** | 6 | 2 | 358 B |
 | 3 | lost | **passed** | 3 | 2 | 358 B |
+| 4 | lost | **passed** | 7 | 1 | 358 B |
+
+All four samples passed under the isolated scorer, resumed from turns 1-2, and the
+0-byte case did not recur (the pre-fix baseline was 3 passes in 4 with one 0 B).
+
+### What killed the earlier sample 4
+
+Not reproducible. The earlier checkpoint-batch sample 4 hung past the 700 s tool
+timeout and left an orphaned worker; the harness had no bound on
+`handle.result()` and no worker logging, so the hang could not be diagnosed from
+its own artifacts. Its environment (about 550 MB free before the run) makes
+worker loss under memory pressure the most likely cause: if the restarted worker
+dies, the workflow never completes and an unbounded wait blocks forever. The
+harness now bounds that wait (`--result-timeout-ms`) and captures the worker log,
+which turns that class into a diagnosable `harness-timeout` result instead of a
+silent harness death. The re-run of sample 4 passed cleanly in 1m48s with no
+worker-level error in its log.
