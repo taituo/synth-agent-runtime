@@ -240,6 +240,67 @@ test("FORGE 6 (round-six survivor): a leaf symlink to the held-out vectors does 
   }
 });
 
+test("FORGE 6b: the symlink refusal is function-agnostic (openSync/readSync, not just readFileSync)", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "gym-iso-"));
+  try {
+    const repo = await makeRepo(parent);
+    const vectors = join(parent, "vectors.json");
+    await writeFile(vectors, JSON.stringify(CASES));
+    // Same patch-planted leaf symlink, read through a different fs primitive. The
+    // guard is a checkout scan, not an fs-module hook, so the primitive does not
+    // matter: the patch is refused before the worker runs.
+    const attack = [
+      'import { openSync, readSync } from "node:fs";',
+      'const fd = openSync("./escape.json", "r");',
+      "const buffer = Buffer.alloc(4096);",
+      "const read = readSync(fd, buffer, 0, 4096, 0);",
+      'const table = new Map(JSON.parse(buffer.subarray(0, read).toString("utf8")).map((c) => [JSON.stringify(c.args), c.expect]));',
+      "export function addOne(n) {",
+      "  const key = JSON.stringify([n]);",
+      "  return table.has(key) ? table.get(key) : n;",
+      "}",
+    ].join("\n");
+    await writeFile(join(repo, "lib.mjs"), attack);
+    await symlink(vectors, join(repo, "escape.json"));
+    await git(repo, "add", "-A");
+    const patch = await git(repo, "diff", "--cached");
+    await git(repo, "reset", "-q", "HEAD");
+    await git(repo, "checkout", "--", ".");
+    const score = await scoreGymPatch({ patchText: patch, baseRepoDir: repo, cases: CASES });
+    assert.equal(score.outcome, "tampered", score.detail);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("FORGE 7: require of the held-out vectors is denied by the permission model", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "gym-iso-"));
+  try {
+    const repo = await makeRepo(parent);
+    const vectors = join(parent, "vectors.json");
+    await writeFile(vectors, JSON.stringify(CASES));
+    // The module loader channel: if the permission model were replaced by a
+    // realpath preload, require would reopen. It must stay ERR_ACCESS_DENIED.
+    const attack = [
+      'import { createRequire } from "node:module";',
+      "const require = createRequire(import.meta.url);",
+      `const table = new Map(require(${JSON.stringify(vectors)}).map((c) => [JSON.stringify(c.args), c.expect]));`,
+      "export function addOne(n) {",
+      "  const key = JSON.stringify([n]);",
+      "  return table.has(key) ? table.get(key) : n;",
+      "}",
+    ].join("\n");
+    const patch = await patchFor(repo, attack);
+    const score = await scoreGymPatch({ patchText: patch, baseRepoDir: repo, cases: CASES });
+    assert.notEqual(score.outcome, "passed", "require must not reach the held-out vectors");
+    // The permission model reports either ERR_ACCESS_DENIED (fs) or the
+    // API-restricted message (module loader); both are a denial, not a read.
+    assert.match(score.cases?.[0]?.error ?? "", /ERR_ACCESS_DENIED|Access to this API has been restricted/);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
 test("VACUITY: zero cases is errored, never a vacuous pass", async () => {
   const parent = await mkdtemp(join(tmpdir(), "gym-iso-"));
   try {

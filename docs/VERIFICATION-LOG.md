@@ -112,3 +112,26 @@ Re-ran the reviewer's full battery (`/tmp/opencode/audit6/oracle-battery-885.mjs
 adapted to this build): golden control `passed` 4/4; all six attack payloads not
 passed — five `failed`/`errored`, the symlink variant `tampered` with 0 passed
 cases. `FORGE 6` is the permanent regression for the survivor.
+
+## Follow-up on the symlink fix: surface and model check (ff7ab93)
+
+Reviewer channel inventory. What was checked, not a conclusion:
+
+- The fix is a checkout scan (`findEscapingSymlink`), not a guard on one fs
+  function. A patch-planted leaf symlink was refused (`tampered`, 0 passed
+  cases) whether the agent read it with `readFileSync`, `openSync`+`readSync`,
+  or `statSync`/`accessSync`/`realpathSync` — the patch never reaches the
+  worker, so the primitive is irrelevant.
+- The Node permission model is still in force and was not replaced by a
+  preload/realpath check: `permissionArgs` still returns
+  `--permission --allow-fs-read=<work>` and the worker is spawned with it
+  (`src/gym/scoring.ts:228,333`); there is no `--import`, no `NODE_OPTIONS`.
+  Confirmed by running payloads that would reopen if the model were gone
+  (`/tmp/opencode/audit6/followup-ff7ab93.mjs`): direct `fs.readFileSync`,
+  `require`, dynamic `import`, `new Worker`, `module.register` and
+  `child_process.execFileSync` all returned `ERR_ACCESS_DENIED` (module loader:
+  "Access to this API has been restricted"); `fetch("file://…")` failed
+  ("fetch failed"). GOLDEN control passed 2/2.
+- Permanent regressions added: `FORGE 6b` (symlink via `openSync`/`readSync` is
+  `tampered`) and `FORGE 7` (`require` of the vectors is denied). `FORGE 5`
+  already pins the direct-read denial.
