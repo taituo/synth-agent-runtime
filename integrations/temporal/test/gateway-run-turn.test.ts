@@ -340,6 +340,82 @@ test("a scored run refuses an unisolated rung, accepts an isolated one", () => {
   assert.doesNotThrow(() => assertRungAllowedForScored(unisolated, false), "an unscored cheap run may use the synthetic rung");
 });
 
+test("a scored turn on the synthetic rung is refused by the production runTurn path", async () => {
+  let modelCalls = 0;
+  const runTurn = createGatewayRunTurn({
+    baseUrl: "http://gw.test",
+    model: "m",
+    heartbeat: () => {},
+    fetchImpl: (async () => {
+      modelCalls++;
+      return chatReply("{}");
+    }) as unknown as typeof fetch,
+  });
+  await assert.rejects(
+    () => runTurn({
+      agentId: `agt_scored_${Date.now()}`,
+      messages: [message("write then read")],
+      config: {
+        scored: true,
+        systemPrompt: "You edit files.",
+        tools: [{ name: "write_file", effect: "workspace.write" }],
+        rung: { kind: "synthetic" },
+      },
+    }),
+    /UNISOLATED_RUNG_REFUSED/,
+  );
+  assert.equal(modelCalls, 0, "the refusal must happen before any model call");
+});
+
+test("an unscored turn on the synthetic rung still runs (the control)", async () => {
+  const fetchImpl = (async () => chatReply(JSON.stringify({ tool_calls: [
+    { name: "write_file", arguments: { path: "control.txt", content: "control" } },
+  ] }))) as unknown as typeof fetch;
+  const runTurn = createGatewayRunTurn({ baseUrl: "http://gw.test", model: "m", heartbeat: () => {}, fetchImpl });
+  const result = await runTurn({
+    agentId: `agt_unscored_${Date.now()}`,
+    messages: [message("write a file")],
+    config: {
+      scored: false,
+      systemPrompt: "You edit files.",
+      tools: [{ name: "write_file", effect: "workspace.write" }],
+      rung: { kind: "synthetic" },
+    },
+  });
+  const observations = (result.result as { observations: Array<{ ok: boolean }> }).observations;
+  assert.equal(observations.length, 1);
+  assert.equal(observations[0]!.ok, true, "an unscored turn may use the unisolated synthetic rung");
+});
+
+test("a scored turn on an isolated rung is allowed (no over-refusal)", async () => {
+  const rungFactory: RungFactory = () => ({
+    isolated: true,
+    async executeEffect() { return { ok: true }; },
+  });
+  const runTurn = createGatewayRunTurn({
+    baseUrl: "http://gw.test",
+    model: "m",
+    heartbeat: () => {},
+    rungFactory,
+    fetchImpl: (async () => chatReply(JSON.stringify({ tool_calls: [
+      { name: "write_file", arguments: { path: "isolated.txt", content: "isolated" } },
+    ] }))) as unknown as typeof fetch,
+  });
+  const result = await runTurn({
+    agentId: "agt_scored_isolated",
+    messages: [message("write a file")],
+    config: {
+      scored: true,
+      systemPrompt: "You edit files.",
+      tools: [{ name: "write_file", effect: "workspace.write" }],
+      rung: { kind: "sandbox" },
+    },
+  });
+  const observations = (result.result as { observations: Array<{ ok: boolean }> }).observations;
+  assert.equal(observations.length, 1);
+  assert.equal(observations[0]!.ok, true, "a scored turn on an isolated rung must proceed");
+});
+
 test("the durable activity and a direct caller run the same engine body", async () => {
   const bodies: string[] = [];
   let engineRuns = 0;

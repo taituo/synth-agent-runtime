@@ -71,6 +71,13 @@ export interface DurableTurnConfig {
   tools?: DurableToolSpec[];
   /** The execution rung for tool calls. Omitted means tool calls are refused. */
   rung?: DurableRungConfig;
+  /**
+   * Whether the turn's output is scored (graded against held-out ground truth).
+   * A scored turn must run in a trust boundary, so `runTurn` refuses an
+   * unisolated rung (the synthetic/worker-RAM one) via
+   * `assertRungAllowedForScored`. Defaults to false for cheap, unscored runs.
+   */
+  scored?: boolean;
 }
 
 export interface RunTurnInput {

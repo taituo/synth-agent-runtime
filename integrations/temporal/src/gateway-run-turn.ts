@@ -387,6 +387,10 @@ export function createGatewayRunTurn(options: GatewayRunTurnOptions): AgentActiv
     let rung: TurnRung | undefined;
     if (config.rung && config.rung.kind !== "none") {
       rung = await (options.rungFactory ?? defaultRungFactory)(config.rung, input);
+      // A scored turn must run inside a trust boundary. Refuse an unisolated
+      // rung before the model is called, so a scored run can never execute
+      // model-authored effects in worker RAM.
+      assertRungAllowedForScored(rung, config.scored === true);
     }
 
     // The one turn body. Configured per turn from the carried config; a
