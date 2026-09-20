@@ -32,6 +32,7 @@ export * from "./inference/gateway/tenant-policy.js";
 export * from "./inference/gateway/server.js";
 export * from "./adapters/pi/pi-engine.js";
 export * from "./execution/resource-class.js";
+export * from "./execution/executor-image.js";
 export * from "./execution/kubernetes/types.js";
 export * from "./execution/kubernetes/manifests.js";
 export * from "./execution/kubernetes/kubectl-backend.js";

@@ -2,6 +2,7 @@ import {
   AgentRuntime,
   DEFAULT_KUBERNETES_RESOURCE_CLASSES,
   ExecutionBroker,
+  EXECUTOR_IMAGE,
   KubernetesExecutor,
   KubectlSandboxBackend,
   LocalMemoryDurability,
@@ -12,7 +13,7 @@ import {
   type KubernetesResourceClass,
 } from "../src/index.js";
 
-const image = process.env.SYNTH_EXECUTOR_IMAGE ?? "ghcr.io/example/synth-executor:latest";
+const image = process.env.SYNTH_EXECUTOR_IMAGE ?? EXECUTOR_IMAGE;
 const classes: KubernetesResourceClass[] = DEFAULT_KUBERNETES_RESOURCE_CLASSES
   .filter((entry) => entry.id !== "project-cell")
   .map((entry) => ({ ...entry, image }));
