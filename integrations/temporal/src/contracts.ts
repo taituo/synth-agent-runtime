@@ -88,3 +88,18 @@ export interface RunTurnResult {
 export interface AgentActivities {
   runTurn(input: RunTurnInput): Promise<RunTurnResult>;
 }
+
+/** Input for a generic graph activity node. */
+export interface GraphActivityInput {
+  name: string;
+  input?: unknown;
+}
+
+/**
+ * Activities the graph workflow may call for `activity` nodes. Optional: a
+ * worker that only runs `durableAgentWorkflow` need not supply it, and a graph
+ * with no activity nodes never calls it.
+ */
+export interface GraphActivities {
+  graphActivity(input: GraphActivityInput): Promise<unknown>;
+}

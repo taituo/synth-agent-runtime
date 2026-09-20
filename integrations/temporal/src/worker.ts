@@ -1,11 +1,12 @@
 import { fileURLToPath } from "node:url";
 import { NativeConnection, Worker } from "@temporalio/worker";
 import { createSynthActivityInterceptors, type SynthActivityInterceptorOptions } from "./activity-interceptors.js";
-import type { AgentActivities } from "./contracts.js";
+import type { AgentActivities, GraphActivities } from "./contracts.js";
 
 export interface RunTemporalWorkerOptions {
   workflowsPath: string;
-  activities: AgentActivities;
+  /** `graphActivity` is optional; it is only needed by graphs with activity nodes. */
+  activities: AgentActivities & Partial<GraphActivities>;
   taskQueue?: string;
   address?: string;
   namespace?: string;
