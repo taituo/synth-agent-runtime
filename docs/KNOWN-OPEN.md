@@ -17,6 +17,17 @@ removed only when the closing work lands.
   capability. Closing: a corpus on the order of 100+ items, balanced across
   classes, with labels agreed by more than one annotator and the ambiguous set
   reported separately.
+  **Progress (2026-09-20):** `corpusCoverage()` reports the scorable count,
+  class balance and `benchmarkReady` (false), and `annotationAgreement()` with
+  `secondAnnotatorLabel()` runs an explicit ambiguity procedure: a deterministic
+  second pass that must agree with the recorded label, with disagreements
+  reported as needing a human tie-break and excluded from the gate. Tests pin
+  both, including that the corpus must not claim to be benchmark-ready.
+  **Still open, and blocked on resources rather than code:** the 100+ balanced
+  set needs licensed real texts across all three classes (social posts cannot be
+  legally scraped) and a *human* second annotator; a synthetic-only expansion
+  would measure template-following and is the kind of tuning this entry exists
+  to prevent, so it was not done.
 
 ## Inference and scheduling
 

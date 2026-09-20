@@ -32,6 +32,89 @@ export const CORPUS_ACCURACY_GATE = 0.9;
 export const CORPUS_BASELINE =
   "2026-09-20: 8/8 = 1.0 (deepseek-v4-flash, qwen3.7-plus, deepseek-v4-pro), after the four cve-* items moved to ambiguous; smoke test, not a benchmark";
 
+/**
+ * A corpus large and balanced enough to gate capability rather than only detect
+ * regressions. `benchmarkReady` is false for the current corpus by design; this
+ * constant makes the shortfall explicit and machine-checked instead of implied.
+ */
+export const CORPUS_BENCHMARK_MIN_ITEMS = 100;
+
+export interface CorpusCoverage {
+  total: number;
+  scorable: number;
+  ambiguous: number;
+  byClass: Record<CorpusClass, number>;
+  byProvenance: Record<"real" | "synthetic", number>;
+  /** Scorable classes within ~10% of each other. */
+  balanced: boolean;
+  benchmarkReady: boolean;
+}
+
+export function corpusCoverage(items: readonly CorpusItem[] = MESSY_EVENTS): CorpusCoverage {
+  const byClass: Record<CorpusClass, number> = { news: 0, social_post: 0, incident: 0, ambiguous: 0 };
+  const byProvenance: Record<"real" | "synthetic", number> = { real: 0, synthetic: 0 };
+  for (const item of items) {
+    byClass[item.expectedClass]++;
+    byProvenance[item.provenance]++;
+  }
+  const scorable = byClass.news + byClass.social_post + byClass.incident;
+  const counts = [byClass.news, byClass.social_post, byClass.incident];
+  const spread = Math.max(...counts) - Math.min(...counts);
+  const balanced = scorable > 0 && spread <= Math.max(1, Math.ceil(scorable * 0.1));
+  return {
+    total: items.length,
+    scorable,
+    ambiguous: byClass.ambiguous,
+    byClass,
+    byProvenance,
+    balanced,
+    benchmarkReady: scorable >= CORPUS_BENCHMARK_MIN_ITEMS && balanced,
+  };
+}
+
+/**
+ * An independent second annotator, as an explicit ambiguity procedure: a
+ * deterministic lexical pass that must agree with the recorded human label. A
+ * disagreement does not overwrite the label — it marks the item as needing a
+ * human tie-break and excludes it from the gate (treated as ambiguous). This is
+ * a sanity check against single-annotator drift, NOT a substitute for a second
+ * human annotator; the corpus entry stays open until real texts can be licensed
+ * across classes and a human agrees the labels.
+ */
+export function secondAnnotatorLabel(text: string): CorpusClass {
+  const t = text.toLowerCase();
+  if (/ignore (all )?previous|reply with|assistant:|system prompt|```/.test(t)) return "ambiguous";
+  if (/\b(vulnerability|attacker|exploit|malicious code|remote code execution|denial of service)\b/.test(t)) return "ambiguous";
+  if (/\b(outage|degraded|latency|error rate|postmortem|failover|503|5xx|escalat)\b/.test(t)) return "incident";
+  if (/\b(announced|reported|according to|published|press release|said|wrote)\b/.test(t)) return "news";
+  if (/(^|\s)(just|omg|lol|my|i)\s|#\w+|@\w+/.test(t)) return "social_post";
+  return "ambiguous";
+}
+
+export interface AnnotationAgreement {
+  agreements: string[];
+  disagreements: Array<{ id: string; expected: CorpusClass; second: CorpusClass }>;
+  agreementRate: number;
+  /** Items the two annotators disagree on are excluded from the gate. */
+  needsTieBreak: string[];
+}
+
+export function annotationAgreement(items: readonly CorpusItem[] = MESSY_EVENTS): AnnotationAgreement {
+  const agreements: string[] = [];
+  const disagreements: AnnotationAgreement["disagreements"] = [];
+  for (const item of items) {
+    const second = secondAnnotatorLabel(item.text);
+    if (second === item.expectedClass) agreements.push(item.id);
+    else disagreements.push({ id: item.id, expected: item.expectedClass, second });
+  }
+  return {
+    agreements,
+    disagreements,
+    agreementRate: items.length === 0 ? 0 : agreements.length / items.length,
+    needsTieBreak: disagreements.map((entry) => entry.id),
+  };
+}
+
 export interface CorpusTurn {
   plantedKinds: ReadonlyArray<string | null>;
   classifications: ReadonlyArray<{ classification: string }>;
