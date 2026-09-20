@@ -62,6 +62,33 @@ export async function applyPatch(patchText: string, repoDir: string, options: Gi
   });
 }
 
+/**
+ * Part two: a review-shaped handoff as a git ref. The producer pushes to a ref
+ * like `refs/synth/<agent>/<run>`; a reviewer fetches it, diffs it, comments.
+ * The ref must be fully qualified so it cannot escape the ref namespace.
+ */
+export async function createReviewRef(bareDir: string, commit: string, ref: string, options: GitTransportOptions = {}): Promise<string> {
+  if (!ref.startsWith("refs/")) throw new Error(`Review ref must be fully qualified: ${ref}`);
+  await git(["--git-dir", bareDir, "update-ref", ref, commit], options);
+  return ref;
+}
+
+export interface ReviewRef {
+  ref: string;
+  commit: string;
+}
+
+export async function listReviewRefs(bareDir: string, prefix = "refs/synth/", options: GitTransportOptions = {}): Promise<ReviewRef[]> {
+  const raw = await git(["--git-dir", bareDir, "for-each-ref", "--format=%(refname) %(objectname)", prefix], options);
+  return raw
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      const [ref, commit] = line.split(" ");
+      return { ref: ref!, commit: commit! };
+    });
+}
+
 /** Decode the base64 stdout of {@link bundleExportCommand} into bundle bytes. */
 export function decodeBundleBase64(stdout: string): Buffer {
   return Buffer.from(stdout.replace(/\s+/g, ""), "base64");

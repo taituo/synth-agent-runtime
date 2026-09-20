@@ -13,6 +13,17 @@ export declare function patchExportCommand(baseRef?: string): string;
 export declare function applyPatchCheck(patchText: string, repoDir: string, options?: GitTransportOptions): Promise<boolean>;
 /** Apply `patchText` to the repo's working tree. */
 export declare function applyPatch(patchText: string, repoDir: string, options?: GitTransportOptions): Promise<void>;
+/**
+ * Part two: a review-shaped handoff as a git ref. The producer pushes to a ref
+ * like `refs/synth/<agent>/<run>`; a reviewer fetches it, diffs it, comments.
+ * The ref must be fully qualified so it cannot escape the ref namespace.
+ */
+export declare function createReviewRef(bareDir: string, commit: string, ref: string, options?: GitTransportOptions): Promise<string>;
+export interface ReviewRef {
+    ref: string;
+    commit: string;
+}
+export declare function listReviewRefs(bareDir: string, prefix?: string, options?: GitTransportOptions): Promise<ReviewRef[]>;
 /** Decode the base64 stdout of {@link bundleExportCommand} into bundle bytes. */
 export declare function decodeBundleBase64(stdout: string): Buffer;
 /** Ingest a bundle file into a runtime-controlled bare repo; returns the commit. */
