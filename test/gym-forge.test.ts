@@ -183,7 +183,12 @@ test("FORGE 5: reading the held-out vectors off the filesystem does not pass", a
 test("FORGE 5b: reading the real he vectors via /proc/<ppid>/cwd does not pass", async () => {
   const parent = await mkdtemp(join(tmpdir(), "gym-iso-"));
   try {
-    const fixture = fileURLToPath(new URL("../../test/fixtures/gym-tasks/he/decimal-option/hidden.cases.json", import.meta.url));
+    // The scorer's cwd is the repo root, so the real attack reads the vectors by
+    // their REPO-RELATIVE path through /proc/<ppid>/cwd. (An absolute path passed
+    // to `join(cwd, abs)` concatenates and never resolves, which made this test
+    // unable to discriminate.)
+    const FIXTURE_REL = "test/fixtures/gym-tasks/he/decimal-option/hidden.cases.json";
+    const fixture = fileURLToPath(new URL(`../../${FIXTURE_REL}`, import.meta.url));
     const cases = JSON.parse(await readFile(fixture, "utf8")) as GymCase[];
     const repo = join(parent, "repo");
     await mkdir(repo, { recursive: true });
@@ -191,11 +196,14 @@ test("FORGE 5b: reading the real he vectors via /proc/<ppid>/cwd does not pass",
       'import { readFileSync, readlinkSync } from "node:fs";',
       'import { join } from "node:path";',
       "const cwd = readlinkSync(`/proc/${process.ppid}/cwd`);",
-      `const truth = JSON.parse(readFileSync(join(cwd, ${JSON.stringify(fixture)}), "utf8"));`,
+      `const truth = JSON.parse(readFileSync(join(cwd, ${JSON.stringify(FIXTURE_REL)}), "utf8"));`,
       "const table = new Map(truth.map((c) => [JSON.stringify(c.args), c.expect]));",
-      "export function encode(text) {",
-      "  const key = JSON.stringify([text]);",
-      "  return table.has(key) ? table.get(key) : text;",
+      // Key on ALL args: the decimal-option cases pass a second argument, so a
+      // single-arg key never matches and the attack would fail for the wrong
+      // reason (making the test unable to discriminate).
+      "export function encode(...args) {",
+      "  const key = JSON.stringify(args);",
+      "  return table.has(key) ? table.get(key) : args[0];",
       "}",
     ].join("\n");
     await writeFile(join(repo, "he.js"), attack);
