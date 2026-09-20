@@ -4,10 +4,6 @@ Deliberately unfinished work, recorded so it is not silently dropped. Each item
 says what is open, why it is still open, and what closing it needs. Items are
 removed only when the closing work lands.
 
-## Verification and CI
-
-
-
 ## Egress and artifacts
 
 - **Workspace sync still flattens symlinks.** The git transport preserves mode
@@ -38,10 +34,14 @@ removed only when the closing work lands.
 
 ## Inference and scheduling
 
-- **OpenRouter limits/prices are asserted, not measured.** The quota spec states
-  "20 requests/minute and 50/day" and per-million prices as facts with no
-  artifact. Closing: a real-key run that records the observed headers and cost,
-  or removal of the numbers.
+- **OpenRouter limits/prices are UNMEASURED and stay labelled so.** The quota
+  spec (external, `/tmp/opencode/spec-quota-aware-retry.md`) states "20
+  requests/minute and 50/day" and per-million prices as facts, with no artifact
+  behind them. We do not have an `OPENROUTER_API_KEY`, so we cannot measure
+  them. They must not be cited as measured; the driver itself skips with exit 2
+  when the key is absent. Closing needs a real key and a run that records the
+  observed headers and cost — until then the numbers are unverified claims, not
+  results.
 - **Rate-limit scope: no practical limit binds at our scale (measured).** The
   probe (`npm run live:rate-limit-scope`) sustained **1000 concurrent** calls to
   one cheap model: 998 returned 200 in ~20s (~50 req/s), 2 returned a transient
