@@ -6,14 +6,6 @@ removed only when the closing work lands.
 
 ## Verification and CI
 
-- **No CI for the Temporal integration.** Root CI runs only the root suite; the
-  Temporal package's 65 unit tests and every live proof are runnable by hand
-  only, so a Temporal regression can merge green. Closing: a workflow that
-  starts a Temporal service and runs `tsx --test test/*.test.ts`, plus a runner
-  for the live proofs that reports skipped-vs-passed per proof.
-- **No enforced secret scan.** The rule is "secret-scan before every push" but
-  nothing enforces it. Closing: a `scripts/secret-scan.mjs` over tracked files
-  wired into CI (and optionally a pre-push hook).
 - **Track 6 replay is a hand-built probe.** The replay proof uses a synthetic
   history, not a recorded history of the real `durableAgentWorkflow`. Closing:
   capture a real workflow history and replay it, asserting no non-determinism.
@@ -25,16 +17,6 @@ removed only when the closing work lands.
   regular bytes, and `integrations/kubernetes/git-transport-live.ts` computes
   `syncBackKind` yet excludes it from `ok`. Closing: symlink-aware
   write/list-git-changes and include the sync-back kind in the proof's `ok`.
-- **`EffectResult.artifact` has no writer.** The field exists and is never
-  populated, so no runtime receipt carries a digest; a canary test in
-  `test/blob-store.test.ts` pins the gap. Closing: a producer on the broker or
-  executor that stores content and returns the `ArtifactRef`, then remove the
-  canary.
-- **Blackboard `Artifact.data` is still inline.** `src/core/types.ts` keeps
-  `data: unknown` (content inline), which the egress spec calls the actual work
-  to fix. Closing: a breaking change to a `{digest,size,mediaType,mechanism}`
-  reference, an audit of every writer/reader, a version bump and a CHANGELOG
-  note.
 - **Blob store: access model decided, lifecycle partly wired.** The decision is
   in `docs/BLOB-STORE.md`: within one trust domain the digest is the capability
   (unguessable, integrity-verified on read), and across tenants

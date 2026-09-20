@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ExecutionBroker, FileSystemBlobStore, MemoryWorkspace, SyntheticExecutor, sha256Hex } from "../src/index.js";
+import { digestOf, ExecutionBroker, FileSystemBlobStore, MemoryWorkspace, SyntheticExecutor, sha256Hex } from "../src/index.js";
 
 async function listFiles(dir: string): Promise<string[]> {
   const out: string[] = [];
@@ -78,19 +78,34 @@ test("stat round-trips the media type", async () => {
   }
 });
 
-test("KNOWN OPEN: no runtime path populates EffectResult.artifact yet", async () => {
-  // The egress spec requires an effect receipt to carry a digest that resolves
-  // to the bytes. No writer sets `EffectResult.artifact`, so this pins the gap:
-  // it fails the day a writer lands, and the known-open entry is then removed
-  // deliberately rather than the gap being silently forgotten.
+test("a workspace.export effect puts the receipt's artifact reference in the store", async () => {
+  const root = await mkdtemp(join(tmpdir(), "blob-export-"));
+  try {
+    const store = new FileSystemBlobStore(root);
+    const workspace = new MemoryWorkspace();
+    workspace.write("a.txt", "exported");
+    const broker = new ExecutionBroker([new SyntheticExecutor(new Map([[workspace.id, workspace]]), store)]);
+    const result = await broker.execute(
+      { id: "e-export", kind: "workspace.export" },
+      { agentId: "agt_blob" as never, workspaceId: workspace.id },
+    );
+    assert.equal(result.ok, true);
+    assert.ok(result.artifact, "the receipt must carry an artifact reference, never inline bytes");
+    assert.equal(digestOf(await store.get(result.artifact!.digest)), result.artifact!.digest);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("workspace.export without a blob store fails loudly rather than faking a reference", async () => {
   const workspace = new MemoryWorkspace();
   const broker = new ExecutionBroker([new SyntheticExecutor(new Map([[workspace.id, workspace]]))]);
   const result = await broker.execute(
-    { id: "e-artifact", kind: "workspace.write", path: "a.txt", content: "x" },
+    { id: "e-export-2", kind: "workspace.export" },
     { agentId: "agt_blob" as never, workspaceId: workspace.id },
   );
-  assert.equal(result.ok, true);
-  assert.equal(result.artifact, undefined, "no writer populates EffectResult.artifact yet");
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "ARTIFACT_STORE_REQUIRED");
 });
 
 test("stat reports the object, a missing digest is undefined, an invalid one throws", async () => {
