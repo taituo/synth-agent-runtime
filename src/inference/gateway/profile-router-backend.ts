@@ -47,7 +47,13 @@ export class ProfileRouterBackend implements GatewayBackend {
   private readonly affinityTtlMs: number;
 
   async listModels(): Promise<GatewayModel[]> {
-    return [...this.#profiles.values()].map((p) => ({ object: "model", owned_by: "synth-router", ...p.model }));
+    return [...this.#profiles.values()].map((p) => ({
+      object: "model",
+      owned_by: "synth-router",
+      provider: "router",
+      profile: p.model.id,
+      ...p.model,
+    }));
   }
 
   async handle(request: Request, model: string): Promise<Response> {

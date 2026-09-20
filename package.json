@@ -19,6 +19,7 @@
     "process-crash:contract": "npm run build && node --test dist/test/process-crash.test.js",
     "responses:contract": "npm run build && node --test dist/test/responses.test.js",
     "integrations:syntax": "node scripts/check-integrations.mjs",
+    "models:list": "node scripts/models.mjs",
     "live:lane-gateway": "integrations/temporal/node_modules/.bin/tsx scripts/lane-gateway-live.ts",
     "live:proof": "node scripts/live-proof.mjs",
     "distributed:contract": "npm run build && node --test dist/test/v08.test.js",

@@ -21,7 +21,13 @@ export class ProfileRouterBackend {
     now;
     affinityTtlMs;
     async listModels() {
-        return [...this.#profiles.values()].map((p) => ({ object: "model", owned_by: "synth-router", ...p.model }));
+        return [...this.#profiles.values()].map((p) => ({
+            object: "model",
+            owned_by: "synth-router",
+            provider: "router",
+            profile: p.model.id,
+            ...p.model,
+        }));
     }
     async handle(request, model) {
         const profile = this.#profiles.get(model);
