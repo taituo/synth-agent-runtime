@@ -56,5 +56,19 @@ test("gym-worker.ts registers the gym workflow and its activity", () => {
   assert.match(GYM_WORKER, /gym-workflows/, "the worker must register gym-workflows.ts");
   assert.match(GYM_WORKER, /createGymActivities\(\)/, "the worker must register the gym activities");
   assert.match(GYM_WORKFLOWS, /export async function gymAttemptWorkflow/, "the durable workflow must exist");
-  assert.match(GYM_WORKFLOWS, /runGymAttemptActivity/, "the workflow must run the attempt as an activity");
+  // The gym's durable arm is the runtime agent, not its own turn: the
+  // orchestrator starts durableAgentWorkflow, whose runTurn activity is the
+  // gym's attempt activity.
+  assert.match(GYM_WORKFLOWS, /executeChild\(durableAgentWorkflow/, "the orchestrator must start the runtime agent workflow");
+  assert.match(GYM_WORKFLOWS, /from "\.\/workflows\.js"/, "the orchestrator must use the runtime's durableAgentWorkflow");
+  const GYM_ACTIVITIES = readFileSync(repoFile("integrations/temporal/src/gym-activities.ts"), "utf8");
+  assert.match(GYM_ACTIVITIES, /async runTurn\(/, "the gym must provide the runTurn activity the runtime workflow proxies");
+});
+
+test("there is exactly one gateway turn body, and the gym turn is a thin adapter over it", () => {
+  const gymTurn = readFileSync(repoFile("src/gym/turn.ts"), "utf8");
+  assert.match(gymTurn, /createGatewayAgentEngine/, "the gym turn must construct the shared engine");
+  assert.ok(!/fetch\(|doFetch|AbortSignal\.timeout/.test(gymTurn), "the gym turn must not make its own HTTP call");
+  const engine = readFileSync(repoFile("src/runtime/gateway-engine.ts"), "utf8");
+  assert.match(engine, /\/v1\/chat\/completions/, "the shared engine owns the one chat-completions URL");
 });

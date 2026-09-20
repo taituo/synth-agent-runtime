@@ -51,9 +51,12 @@ export interface GatewayRetryOptions {
  */
 export declare const DEFAULT_GATEWAY_RETRY: Required<Pick<GatewayRetryOptions, "maxAttempts" | "baseDelayMs" | "maxDelayMs">>;
 /**
- * The plain arm: a direct call to an OpenAI-compatible gateway. With `retry`
- * omitted it is a single shot; with the shared `DEFAULT_GATEWAY_RETRY` it does
- * the bounded transient retry a normal HTTP client does, so it is a fair control
+ * The plain arm: a direct call to an OpenAI-compatible gateway, made by the
+ * runtime's shared turn body. This function only configures `GatewayAgentEngine`
+ * (system prompt, tool-call parser, model/endpoint) and maps its outcome back to
+ * the gym's turn shape; it does NOT build an HTTP request. With `retry` omitted
+ * it is a single shot; with the shared `DEFAULT_GATEWAY_RETRY` it does the
+ * bounded transient retry a normal HTTP client does, so it is a fair control
  * against the durable arm. The prompt is the shared gym prompt either way.
  */
 export declare function createGatewayGymTurn(options: GatewayGymTurnOptions): GymTurn;

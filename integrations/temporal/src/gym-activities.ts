@@ -17,11 +17,22 @@ import { join } from "node:path";
 import { ApplicationFailure, Context as ActivityContext } from "@temporalio/activity";
 import { BlobGymCheckpointStore, DEFAULT_GATEWAY_RETRY, createGatewayGymTurn, describeGymRunner, FileSystemBlobStore, loadGymTask, localEffectRunner, materializeGymTask, runGymAttempt, type EffectRunner } from "../../../src/index.js";
 import { buildSandboxRunner } from "../../gym/sandbox.js";
+import type { AgentActivities, RunTurnInput, RunTurnResult } from "./contracts.js";
 import type { GymAttemptActivities, GymAttemptActivityInput, GymAttemptActivityOutput } from "./gym-contracts.js";
 
-export function createGymActivities(): GymAttemptActivities {
-  return {
-    async runGymAttemptActivity(input: GymAttemptActivityInput): Promise<GymAttemptActivityOutput> {
+/**
+ * The gym's durable activities.
+ *
+ * `runGymAttemptActivity` runs one whole attempt (plant -> the shared loop ->
+ * harvest -> score). `runTurn` is the activity the runtime's
+ * `durableAgentWorkflow` proxies: it carries the attempt parameters in the
+ * mailbox message and runs the same attempt, so the gym's durable arm is
+ * `gymAttemptWorkflow` (orchestrator) -> `durableAgentWorkflow` (agent) ->
+ * `runTurn` (this) -> the shared turn body `GatewayAgentEngine` -> the sandbox
+ * rung's `process.exec`.
+ */
+export function createGymActivities(): GymAttemptActivities & Pick<AgentActivities, "runTurn"> {
+  const runGymAttemptActivity = async (input: GymAttemptActivityInput): Promise<GymAttemptActivityOutput> => {
       const heartbeat = setInterval(() => {
         try {
           ActivityContext.current().heartbeat();
@@ -141,6 +152,28 @@ export function createGymActivities(): GymAttemptActivities {
       } finally {
         clearInterval(heartbeat);
       }
+  };
+
+  return {
+    runGymAttemptActivity,
+    async runTurn(input: RunTurnInput): Promise<RunTurnResult> {
+      // The attempt parameters travel in the mailbox message; the durable
+      // workflow owns the mailbox, the activity is pure compute.
+      const text = input.messages[0]?.text;
+      if (typeof text !== "string" || text.length === 0) {
+        throw ApplicationFailure.nonRetryable(
+          "the gym runTurn activity requires the attempt parameters as the first mailbox message",
+          "GymMissingAttemptParams",
+        );
+      }
+      let params: GymAttemptActivityInput;
+      try {
+        params = JSON.parse(text) as GymAttemptActivityInput;
+      } catch {
+        throw ApplicationFailure.nonRetryable("the gym runTurn parameters are not JSON", "GymBadAttemptParams");
+      }
+      const output = await runGymAttemptActivity(params);
+      return { result: output, state: "completed" };
     },
   };
 }

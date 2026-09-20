@@ -4,17 +4,21 @@
  *
  *   - `createScriptedGymTurn` — a fake model with a fixed script. Zero cost;
  *     this is what `--dry-run` and the unit tests use.
- *   - `createGatewayGymTurn` — the plain arm: a direct OpenAI-compatible
- *     request. It can do a bounded transient retry/backoff (the same thing any
- *     real HTTP client does) so that a comparison against the durable arm does
- *     not measure "has any retry at all". The retry is opt-in (`retry`); with it
- *     disabled the turn is a single shot, and the two arms still differ only in
- *     durability once both are given the same `retry`.
- *   - the durable arm lives in `integrations/temporal` as a Temporal activity.
+ *   - `createGatewayGymTurn` — a THIN adapter over the runtime's one turn body,
+ *     `GatewayAgentEngine` (`src/runtime/gateway-engine.ts`). It does not build
+ *     a `/v1/chat/completions` request itself; it configures the shared engine
+ *     with the gym's system prompt and tool-call parser. The bounded transient
+ *     retry (the same thing any real HTTP client does) stays here, opt-in via
+ *     `retry`, so the two arms differ only in durability.
+ *   - the durable arm lives in `integrations/temporal` and runs the same shared
+ *     engine through the `runTurn` activity.
  *
  * All of them return tool calls in the same shape, and the plain/durable arms
  * share the same system prompt via `buildGymSystemPrompt`.
  */
+import type { AgentMessage } from "../core/types.js";
+import type { AgentEngineContext } from "../runtime/agent-engine.js";
+import { createGatewayAgentEngine, type GatewayToolCall } from "../runtime/gateway-engine.js";
 import type { GymToolCall, GymToolName } from "./tools.js";
 import type { GymTurn, GymTurnInput, GymTurnResult } from "./attempt.js";
 
@@ -166,14 +170,15 @@ function isRetryableTurnError(error: unknown): boolean {
 }
 
 /**
- * The plain arm: a direct call to an OpenAI-compatible gateway. With `retry`
- * omitted it is a single shot; with the shared `DEFAULT_GATEWAY_RETRY` it does
- * the bounded transient retry a normal HTTP client does, so it is a fair control
+ * The plain arm: a direct call to an OpenAI-compatible gateway, made by the
+ * runtime's shared turn body. This function only configures `GatewayAgentEngine`
+ * (system prompt, tool-call parser, model/endpoint) and maps its outcome back to
+ * the gym's turn shape; it does NOT build an HTTP request. With `retry` omitted
+ * it is a single shot; with the shared `DEFAULT_GATEWAY_RETRY` it does the
+ * bounded transient retry a normal HTTP client does, so it is a fair control
  * against the durable arm. The prompt is the shared gym prompt either way.
  */
 export function createGatewayGymTurn(options: GatewayGymTurnOptions): GymTurn {
-  const doFetch = options.fetchImpl ?? fetch;
-  const url = `${options.baseUrl.replace(/\/$/, "")}/v1/chat/completions`;
   const timeoutMs = options.timeoutMs ?? 120_000;
   const maxAttempts = Math.max(1, options.retry?.maxAttempts ?? 1);
   const baseDelayMs = options.retry?.baseDelayMs ?? 250;
@@ -181,59 +186,50 @@ export function createGatewayGymTurn(options: GatewayGymTurnOptions): GymTurn {
   const sleepImpl = options.retry?.sleepImpl ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
 
   async function callOnce(input: GymTurnInput, startedAt: number, attempts: number): Promise<GymTurnResult> {
-    const headers: Record<string, string> = { "content-type": "application/json", ...(options.headers ?? {}) };
-    if (options.apiKey) headers.authorization = `Bearer ${options.apiKey}`;
-    const messages = [
-      { role: "system", content: input.systemPrompt },
-      { role: "user", content: input.userPrompt },
+    // Render the transcript into the single user message the shared body sends.
+    const userText = [
+      input.userPrompt,
       ...input.transcript.map((entry) =>
-        entry.role === "assistant"
-          ? { role: "assistant", content: entry.content }
-          : { role: "user", content: `Observation from ${entry.name ?? "tool"}:\n${entry.content}` },
+        entry.role === "assistant" ? entry.content : `Observation from ${entry.name ?? "tool"}:\n${entry.content}`,
       ),
-    ];
-    const response = await doFetch(url, {
-      method: "POST",
-      headers,
-      signal: AbortSignal.timeout(timeoutMs),
-      body: JSON.stringify({ model: options.model, messages, temperature: 0, max_tokens: options.maxTokens ?? 4096 }),
+    ].join("\n\n");
+
+    const engine = createGatewayAgentEngine({
+      baseUrl: options.baseUrl,
+      model: options.model,
+      ...(options.apiKey ? { apiKey: options.apiKey } : {}),
+      ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+      ...(options.fetchImpl ? { fetchImpl: options.fetchImpl } : {}),
+      systemPrompt: input.systemPrompt,
+      buildUserMessage: () => userText,
+      // The gym's tool protocol: a JSON reply carrying `tool_calls`.
+      parseToolCalls: (content) => extractToolCalls(content) as GatewayToolCall[],
+      // No `toEffect`: the gym loop executes the returned calls through its
+      // runner (the sandbox rung), not the engine. The engine is the one model
+      // body; the loop owns tool dispatch so `replace_in_file`/`finish` keep
+      // their gym semantics.
     });
-    const text = await response.text();
-    if (!response.ok) {
-      const message = `gateway returned HTTP ${response.status}: ${text.slice(0, 300)}`;
-      const retryAfterMs = parseRetryAfterMs(response.headers);
-      const error = Object.assign(new Error(message), { status: response.status });
-      // Carry a server reset hint across the error boundary (429/503), so a
-      // durable supervisor parks for the real window instead of guessing.
-      if (retryAfterMs !== undefined && (response.status === 429 || response.status === 503)) {
-        (error as { retryAfterMs?: number }).retryAfterMs = retryAfterMs;
-      }
-      throw error;
-    }
-    const body = JSON.parse(text) as {
-      model?: string;
-      choices?: Array<{ message?: { content?: string | null; tool_calls?: Array<{ function?: { name?: string; arguments?: string } }> } }>;
-      usage?: unknown;
+
+    const context: AgentEngineContext = {
+      agentId: "gym-agent" as never,
+      workspaceId: "gym-workspace" as never,
+      definition: { id: "gym-agent", inferenceProfile: { id: options.model, model: options.model } },
+      inferenceProfile: { id: options.model, model: options.model },
+      signal: new AbortController().signal,
+      emitOutput: () => {},
+      emitTool: () => {},
     };
-    const message = body.choices?.[0]?.message;
-    let toolCalls: GymToolCall[];
-    if (Array.isArray(message?.tool_calls) && message.tool_calls.length > 0) {
-      toolCalls = coerceToolCalls(message.tool_calls.map((call) => ({ name: call.function?.name, arguments: call.function?.arguments })));
-    } else if (typeof message?.content === "string" && message.content.length > 0) {
-      toolCalls = extractToolCalls(message.content);
-    } else {
-      throw new Error("gateway reply had neither content nor tool_calls");
-    }
-    const servedModel = typeof body.model === "string" && body.model.trim() ? body.model.trim() : null;
+    const outcome = await engine.run([] as readonly AgentMessage[], context);
+    const toolCalls = outcome.toolCalls as GymToolCall[];
     return {
       toolCalls,
-      content: message?.content ?? JSON.stringify({ tool_calls: toolCalls }),
-      requestedModel: options.model,
-      servedModel,
-      modelSubstituted: servedModel !== null && servedModel !== options.model,
+      content: outcome.content ?? JSON.stringify({ tool_calls: toolCalls }),
+      requestedModel: outcome.requestedModel,
+      servedModel: outcome.servedModel,
+      modelSubstituted: outcome.modelSubstituted,
       latencyMs: Date.now() - startedAt,
       attempts,
-      ...(body.usage !== undefined ? { usage: body.usage } : {}),
+      ...(outcome.usage !== undefined ? { usage: outcome.usage } : {}),
     };
   }
 

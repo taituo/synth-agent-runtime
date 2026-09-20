@@ -48,3 +48,31 @@ test("runner:sandbox is not refused by the isolation check (it fails later, on t
     },
   );
 });
+
+// --- runTurn: the activity the runtime's durableAgentWorkflow proxies ---------
+
+test("runTurn carries the attempt parameters in the mailbox message and refuses local", async () => {
+  const activities = createGymActivities();
+  const params = input({ runner: "local" });
+  await assert.rejects(
+    () => activities.runTurn({ agentId: "a", messages: [{ id: "m", role: "human", text: JSON.stringify(params), createdAt: 0 }] }),
+    (error: unknown) => {
+      const e = error as { nonRetryable?: boolean; type?: string };
+      assert.equal(e.nonRetryable, true, "a direct durableAgentWorkflow start must be refused non-retryably");
+      assert.equal(e.type, "GymUnisolatedScoredRun");
+      return true;
+    },
+  );
+});
+
+test("runTurn rejects a missing or non-JSON attempt message rather than running an attempt", async () => {
+  const activities = createGymActivities();
+  await assert.rejects(
+    () => activities.runTurn({ agentId: "a", messages: [] }),
+    /attempt parameters as the first mailbox message/,
+  );
+  await assert.rejects(
+    () => activities.runTurn({ agentId: "a", messages: [{ id: "m", role: "human", text: "not json", createdAt: 0 }] }),
+    /parameters are not JSON/,
+  );
+});
