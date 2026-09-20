@@ -120,3 +120,13 @@ Fix direction (not built here): checkpoint the work product — workspace overla
 or harvested patch — to the artifact store between turns (or at least at activity
 attempt boundaries) and resume the workspace with the retry instead of
 re-materializing from the pinned bugged commit.
+
+### SIGKILL after the work-product checkpoint fix (4 samples, same params)
+
+The fix: `src/gym/checkpoint.ts` + `runGymAttempt` resume. Each sample is a
+fresh workflow key; kill-after 12 s; maxTurns 8. `resumedFromTurn` is the turn
+the retried activity continued from.
+
+| sample | plain | durable | calls | resumedFrom | patch |
+|---|---|---|---|---|---|
+| 1 | lost | **passed** | 2 | 2 | 358 B |
