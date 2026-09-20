@@ -44,7 +44,12 @@ export interface GatewayTurnRecord {
   /** Planted kinds of the messages in this batch, in order (never sent to the model). */
   plantedKinds: Array<string | null>;
   classifications: EventClassification[];
-  model: string;
+  /** The model id the runtime asked for. */
+  requestedModel: string;
+  /** The model id the upstream said answered, or null when it did not say. Never guessed. */
+  servedModel: string | null;
+  /** True only when the upstream named a model different from the requested one. */
+  modelSubstituted: boolean;
   latencyMs: number;
   usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
 }
@@ -183,12 +188,18 @@ export function createGatewayRunTurn(options: GatewayRunTurnOptions): AgentActiv
     if (typeof content !== "string" || content.length === 0) throw new Error("gateway reply had no message content");
     const classifications = parseClassifications(content, input.messages.length);
 
+    // The upstream is the only authority on which model answered. If it omits the
+    // field we record `null` (unknown) rather than back-filling the requested id,
+    // which would hide a router substitution behind failover or cooldown.
+    const servedModel = typeof body.model === "string" && body.model.trim() ? body.model.trim() : null;
     const record: GatewayTurnRecord = {
       agentId: input.agentId,
       attempt: currentAttempt(),
       plantedKinds: input.messages.map((message) => message.kind ?? null),
       classifications,
-      model: body.model ?? options.model,
+      requestedModel: options.model,
+      servedModel,
+      modelSubstituted: servedModel !== null && servedModel !== options.model,
       latencyMs: Date.now() - startedAt,
       ...(body.usage ? { usage: body.usage } : {}),
     };

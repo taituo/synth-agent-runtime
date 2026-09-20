@@ -171,6 +171,7 @@ export async function main(): Promise<void> {
   const logViolations = logCorrelationViolations(runner.logs, ids);
   const errorSpans = runner.trace.filter((event) => event.phase === "error");
   const latencies = records.map((record) => record.latencyMs).sort((a, b) => a - b);
+  const servedModels = [...new Set(records.map((record) => record.servedModel ?? "unknown"))].sort();
   const totalEvents = perAgent.reduce((sum, agent) => sum + agent.expected, 0);
   const totalCorrect = perAgent.reduce((sum, agent) => sum + agent.correct, 0);
   const accuracy = totalEvents === 0 ? 0 : totalCorrect / totalEvents;
@@ -204,6 +205,10 @@ export async function main(): Promise<void> {
       {
         gateway: baseUrl,
         model,
+        modelRequested: model,
+        modelsServed: servedModels,
+        modelSubstitutions: records.filter((record) => record.modelSubstituted).length,
+        modelUnknown: records.filter((record) => record.servedModel === null).length,
         wallMs,
         modelCalls: records.length,
         retriedTurns: records.filter((record) => record.attempt > 1).length,

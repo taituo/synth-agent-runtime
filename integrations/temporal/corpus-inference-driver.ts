@@ -81,6 +81,7 @@ export async function main(): Promise<void> {
   await handle.result().catch(() => undefined);
 
   const turns = records.filter((record) => record.agentId === agentId);
+  const servedModels = [...new Set(turns.map((turn) => turn.servedModel ?? "unknown"))].sort();
   const score = scoreCorpus(MESSY_EVENTS, turns);
   const ok =
     !timedOut &&
@@ -96,6 +97,10 @@ export async function main(): Promise<void> {
       {
         gateway: baseUrl,
         model,
+        modelRequested: model,
+        modelsServed: servedModels,
+        modelSubstitutions: turns.filter((turn) => turn.modelSubstituted).length,
+        modelUnknown: turns.filter((turn) => turn.servedModel === null).length,
         corpus: { total: MESSY_EVENTS.length, scorable: score.scorable, real: MESSY_EVENTS.filter((i) => i.provenance === "real").length },
         timedOut,
         finalStatus: state?.status ?? "unknown",

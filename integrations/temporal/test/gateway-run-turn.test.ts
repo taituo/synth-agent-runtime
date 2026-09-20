@@ -60,6 +60,62 @@ test("sends a chat completion for the whole batch and never leaks the planted ki
   assert.equal(records[0]!.usage?.total_tokens, 7);
 });
 
+test("records the model that actually answered, and flags a substitution", async () => {
+  const records: GatewayTurnRecord[] = [];
+  const runTurn = createGatewayRunTurn({
+    baseUrl: "http://gw.test",
+    model: "requested-model",
+    heartbeat: () => {},
+    onTurn: (record) => records.push(record),
+    fetchImpl: (async () =>
+      new Response(
+        JSON.stringify({
+          model: "different-model",
+          choices: [{ message: { role: "assistant", content: '{"events":[{"classification":"news","reaction":"ok"}]}' } }],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )) as unknown as typeof fetch,
+  });
+  await runTurn({ agentId: "a", messages: [message("x")] });
+  assert.equal(records[0]!.requestedModel, "requested-model");
+  assert.equal(records[0]!.servedModel, "different-model");
+  assert.equal(records[0]!.modelSubstituted, true, "a router substitution must be flagged, not hidden");
+});
+
+test("an upstream that omits the model field is recorded as unknown, never guessed", async () => {
+  const records: GatewayTurnRecord[] = [];
+  const runTurn = createGatewayRunTurn({
+    baseUrl: "http://gw.test",
+    model: "requested-model",
+    heartbeat: () => {},
+    onTurn: (record) => records.push(record),
+    fetchImpl: (async () =>
+      new Response(
+        JSON.stringify({ choices: [{ message: { role: "assistant", content: '{"events":[{"classification":"news","reaction":"ok"}]}' } }] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )) as unknown as typeof fetch,
+  });
+  await runTurn({ agentId: "a", messages: [message("x")] });
+  assert.equal(records[0]!.requestedModel, "requested-model");
+  assert.equal(records[0]!.servedModel, null, "the upstream did not say which model answered");
+  assert.equal(records[0]!.modelSubstituted, false, "an unknown served model is not a substitution");
+});
+
+test("records a matching served model with no substitution flag", async () => {
+  const records: GatewayTurnRecord[] = [];
+  const runTurn = createGatewayRunTurn({
+    baseUrl: "http://gw.test",
+    model: "test-model",
+    heartbeat: () => {},
+    onTurn: (record) => records.push(record),
+    fetchImpl: (async () => chatReply('{"events":[{"classification":"news","reaction":"ok"}]}')) as unknown as typeof fetch,
+  });
+  await runTurn({ agentId: "a", messages: [message("x")] });
+  assert.equal(records[0]!.requestedModel, "test-model");
+  assert.equal(records[0]!.servedModel, "test-model");
+  assert.equal(records[0]!.modelSubstituted, false);
+});
+
 test("tolerates a code-fenced JSON reply and surrounding prose", () => {
   const json = '{"events":[{"classification":"news","reaction":"x"}]}';
   assert.deepEqual(extractJsonObject("```json\n" + json + "\n```"), JSON.parse(json));
