@@ -1,8 +1,11 @@
 /**
- * Durable-arm activity: build the sandbox runner, run the SHARED
- * `runGymAttempt`, and return the plain record shape. The workflow around it
- * supplies the park/backoff durability; this file supplies the model call
- * (direct gateway) and the sandbox tool surface.
+ * Durable-arm activity: build the runner (sandbox when `runner=sandbox`, else
+ * local), run the SHARED `runGymAttempt`, and return the plain record shape. The
+ * workflow around it supplies the park/backoff durability; this file supplies
+ * the model call (direct gateway) and the tool surface.
+ *
+ * NOTE: the recorded fault matrix used `runner=local` for both arms; the sandbox
+ * branch here is the isolated option, proven live by `sandbox-live.ts`.
  */
 import { join } from "node:path";
 import { ApplicationFailure, Context as ActivityContext } from "@temporalio/activity";

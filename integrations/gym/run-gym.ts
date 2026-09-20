@@ -105,7 +105,7 @@ async function preflightGateway(baseUrl: string): Promise<void> {
 
 function preflightCluster(): string {
   const image = process.env.SYNTH_EXECUTOR_IMAGE;
-  if (!image) throw new SkippedError("SYNTH_EXECUTOR_IMAGE not set (must be a git-capable image pinned by digest)");
+  if (!image) throw new SkippedError("SYNTH_EXECUTOR_IMAGE not set (must be a node+git image pinned by digest; the Pod runs run_visible_test, so git-only images exit 127)");
   try {
     execFileSync("kubectl", ["version", "--client"], { stdio: "ignore" });
   } catch {

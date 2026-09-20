@@ -1,8 +1,13 @@
 /**
- * Build the sandbox-backed `EffectRunner` both gym arms use.
+ * Build the sandbox-backed `EffectRunner` for the gym's `runner=sandbox` mode.
  *
  * The plain arm and the durable arm must differ in exactly one variable —
- * durability — so both drive the same tools over a gVisor/Kubernetes sandbox.
+ * durability — so when the sandbox mode is selected, both drive the same tools
+ * over a gVisor/Kubernetes sandbox. NOTE: the recorded fault matrix did NOT use
+ * this runner; every committed row ran `runner=local` (host, no isolation) for
+ * both arms. This path is the isolated option, proven live by
+ * `sandbox-live.ts`; it is not what produced the matrix numbers.
+ *
  * This mirrors `integrations/kubernetes/mixed-chain.ts`: a `MemoryWorkspace`
  * backed by a local checkout, a `SyntheticExecutor` for workspace effects and a
  * `KubernetesExecutor` for `process.exec`, fronted by an `ExecutionBroker` with
@@ -91,7 +96,12 @@ class LocalDirSource implements TreeSource {
 export interface BuildSandboxRunnerOptions {
   /** Materialized bugged checkout (its tracked tree is materialized into the Pod). */
   repoDir: string;
-  /** Git-capable image pinned by digest (e.g. alpine/git@sha256:...). */
+  /**
+   * node+git-capable image pinned by digest. The Pod runs the agent's
+   * `run_visible_test`, so it must have node as well as git — a git-only image
+   * such as `alpine/git` makes the tool exit 127. Example:
+   * `docker.io/library/node:22-bookworm@sha256:dd5847a0...`.
+   */
   image: string;
   namespace?: string;
   kubectlContext?: string;
@@ -106,7 +116,7 @@ export interface SandboxRunner {
 
 /** Construct the broker-backed runner. Throws if the image is missing. */
 export async function buildSandboxRunner(options: BuildSandboxRunnerOptions): Promise<SandboxRunner> {
-  if (!options.image) throw new Error("buildSandboxRunner requires a git-capable image pinned by digest");
+  if (!options.image) throw new Error("buildSandboxRunner requires a node+git image pinned by digest (the Pod runs run_visible_test)");
   const base = DEFAULT_KUBERNETES_RESOURCE_CLASSES.find((entry) => entry.id === "sandbox-small");
   if (!base) throw new Error("sandbox-small resource class missing");
   const resourceClass: KubernetesResourceClass = {

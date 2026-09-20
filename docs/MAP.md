@@ -86,7 +86,9 @@ effect receipts, the CAS world store. This is the part being tested by killing t
 runtime itself, and not a model or a provider.
 
 *The control arm in the gym milestone removes THIS axis only* — same model, same rung, no
-durability — so the comparison measures durability rather than something else.
+durability — so the comparison measures durability rather than something else. (In the
+recorded matrix that rung was the local/host runner for both arms, not the gVisor rung;
+see `GYM-P2-RESULTS.md`.)
 
 ---
 

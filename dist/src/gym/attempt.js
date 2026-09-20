@@ -161,12 +161,15 @@ export async function runGymAttempt(options) {
                 score = { outcome: "failed", touchedPaths: [], detail: "no changes; the planted bug is still present" };
             }
             else {
-                // The gym's pass decision is the ISOLATED verifier: it runs agent code
-                // in a worker that never sees the expected outputs and never holds a
-                // secret, and decides by comparing returned values. The harness-based
-                // in-process scorer is deliberately not a fallback here — agent code can
-                // import that harness and call its own complete(). A task with no
-                // held-out cases is `errored`, not scored.
+                // The gym's pass decision is the ISOLATED verifier: AFTER the attempt, it
+                // re-runs the agent's patched code in a worker that never sees the
+                // expected outputs and never holds a secret, and decides by comparing
+                // returned values. This isolates the SCORER, not the agent's execution —
+                // the attempt itself runs on whichever runner was selected (the recorded
+                // matrix used `local`, on the host). The harness-based in-process scorer
+                // is deliberately not a fallback here — agent code can import that
+                // harness and call its own complete(). A task with no held-out cases is
+                // `errored`, not scored.
                 const cases = task.task.hiddenCases ?? [];
                 const scorer = options.score ?? ((request) => isolatedScoreGymPatch({
                     patchText: request.patchText,
