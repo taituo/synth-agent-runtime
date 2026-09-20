@@ -61,6 +61,12 @@ export interface RunGymAttemptOptions {
     score?: GymScorer;
     /** Hard cap on model turns. Default 8. */
     maxTurns?: number;
+    /**
+     * How many times a malformed (non-JSON / bad tool-call protocol) reply may be
+     * re-asked within one attempt. Default 1: enough for a stochastic slip, not
+     * enough for a model that reliably emits bad JSON to burn the budget.
+     */
+    maxReasks?: number;
     /** Wall-clock budget for the whole attempt. Default 10 minutes. */
     deadlineMs?: number;
     nodeBin?: string;
@@ -76,11 +82,23 @@ export interface RunGymAttemptOptions {
         observation: string;
     }) => void;
 }
-/** A turn failure, kept structured so a durable supervisor can decide to retry/park. */
+/**
+ * A turn failure, kept structured so a durable supervisor can decide what to do.
+ *
+ * `transient` — provider/network/rate-limit failure; the durable arm retries and
+ * parks (with `retryAfterMs` when the server supplied a hint).
+ * `malformed` — the reply was not valid JSON/tool-call protocol. The runner
+ * re-asks ONCE (see `maxReasks`) because the failure is stochastic; if the
+ * re-ask is also malformed it is `fatal` for the attempt. It is deliberately NOT
+ * `transient`, so a model that reliably emits bad JSON cannot consume the whole
+ * durable retry budget on every turn.
+ * `fatal` — anything else; no recovery.
+ */
 export interface GymFailure {
     message: string;
     /** True when retrying the attempt could plausibly succeed (5xx, 429, timeout). */
     transient: boolean;
+    kind: "transient" | "malformed" | "fatal";
     /** Server reset hint in ms, when the provider supplied one. */
     retryAfterMs?: number;
 }
@@ -94,6 +112,8 @@ export interface GymAttemptRecord {
     callCount: number;
     /** Turns that returned normally. */
     turns: number;
+    /** Malformed-reply re-asks consumed (bounded by `maxReasks`). */
+    reasks: number;
     protectedPathsTouched: string[];
     patch: string;
     score: GymScore;

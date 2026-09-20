@@ -70,6 +70,12 @@ export interface RunGymAttemptOptions {
   score?: GymScorer;
   /** Hard cap on model turns. Default 8. */
   maxTurns?: number;
+  /**
+   * How many times a malformed (non-JSON / bad tool-call protocol) reply may be
+   * re-asked within one attempt. Default 1: enough for a stochastic slip, not
+   * enough for a model that reliably emits bad JSON to burn the budget.
+   */
+  maxReasks?: number;
   /** Wall-clock budget for the whole attempt. Default 10 minutes. */
   deadlineMs?: number;
   nodeBin?: string;
@@ -81,11 +87,23 @@ export interface RunGymAttemptOptions {
   onTool?: (result: { turnIndex: number; call: GymToolCall; ok: boolean; observation: string }) => void;
 }
 
-/** A turn failure, kept structured so a durable supervisor can decide to retry/park. */
+/**
+ * A turn failure, kept structured so a durable supervisor can decide what to do.
+ *
+ * `transient` — provider/network/rate-limit failure; the durable arm retries and
+ * parks (with `retryAfterMs` when the server supplied a hint).
+ * `malformed` — the reply was not valid JSON/tool-call protocol. The runner
+ * re-asks ONCE (see `maxReasks`) because the failure is stochastic; if the
+ * re-ask is also malformed it is `fatal` for the attempt. It is deliberately NOT
+ * `transient`, so a model that reliably emits bad JSON cannot consume the whole
+ * durable retry budget on every turn.
+ * `fatal` — anything else; no recovery.
+ */
 export interface GymFailure {
   message: string;
   /** True when retrying the attempt could plausibly succeed (5xx, 429, timeout). */
   transient: boolean;
+  kind: "transient" | "malformed" | "fatal";
   /** Server reset hint in ms, when the provider supplied one. */
   retryAfterMs?: number;
 }
@@ -100,6 +118,8 @@ export interface GymAttemptRecord {
   callCount: number;
   /** Turns that returned normally. */
   turns: number;
+  /** Malformed-reply re-asks consumed (bounded by `maxReasks`). */
+  reasks: number;
   protectedPathsTouched: string[];
   patch: string;
   score: GymScore;
@@ -120,6 +140,7 @@ export async function runGymAttempt(options: RunGymAttemptOptions): Promise<GymA
   const now = options.now ?? Date.now;
   const startedAt = now();
   const maxTurns = options.maxTurns ?? DEFAULT_MAX_TURNS;
+  const maxReasks = options.maxReasks ?? 1;
   const deadlineMs = options.deadlineMs ?? DEFAULT_DEADLINE_MS;
   const { task, runner } = options;
 
@@ -146,6 +167,7 @@ export async function runGymAttempt(options: RunGymAttemptOptions): Promise<GymA
   let timedOut = false;
   let errored: string | undefined;
   let failure: GymFailure | undefined;
+  let reasks = 0;
   let requestedModel: string | null = null;
   let servedModel: string | null = null;
   let modelSubstituted = false;
@@ -155,24 +177,38 @@ export async function runGymAttempt(options: RunGymAttemptOptions): Promise<GymA
       timedOut = true;
       break;
     }
-    let result: GymTurnResult;
-    callCount++;
-    try {
-      result = await options.turn({ turnIndex, repoDir: task.repoDir, visibleTestPath, systemPrompt, userPrompt, transcript: [...transcript], tools: GYM_TOOL_DEFINITIONS });
-    } catch (error) {
-      errored = error instanceof Error ? error.message : String(error);
-      failure = classifyFailure(error, errored);
-      break;
+    let result: GymTurnResult | undefined;
+    for (let attemptNo = 0; attemptNo <= maxReasks; attemptNo++) {
+      callCount++;
+      try {
+        result = await options.turn({ turnIndex, repoDir: task.repoDir, visibleTestPath, systemPrompt, userPrompt, transcript: [...transcript], tools: GYM_TOOL_DEFINITIONS });
+        break;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const classified = classifyFailure(error, message);
+        if (classified.kind === "malformed" && attemptNo < maxReasks) {
+          reasks++;
+          // Re-ask once with an explicit correction. The failure is usually a
+          // stochastic formatting slip, not a property of the task.
+          transcript.push({ role: "tool", name: "harness", content: 'Your previous reply was not valid JSON. Reply with ONLY {"tool_calls":[...]}.' });
+          continue;
+        }
+        errored = message;
+        failure = classified;
+        break;
+      }
     }
+    if (errored !== undefined) break;
+    const turnResult = result as GymTurnResult;
     turns++;
-    if (result.requestedModel) requestedModel = result.requestedModel;
-    if (result.servedModel !== undefined) servedModel = result.servedModel;
-    if (result.modelSubstituted) modelSubstituted = true;
+    if (turnResult.requestedModel) requestedModel = turnResult.requestedModel;
+    if (turnResult.servedModel !== undefined) servedModel = turnResult.servedModel;
+    if (turnResult.modelSubstituted) modelSubstituted = true;
 
-    const assistantContent = result.content ?? JSON.stringify({ tool_calls: result.toolCalls });
+    const assistantContent = turnResult.content ?? JSON.stringify({ tool_calls: turnResult.toolCalls });
     transcript.push({ role: "assistant", content: assistantContent });
 
-    for (const call of result.toolCalls) {
+    for (const call of turnResult.toolCalls) {
       if (call.name === "finish") {
         finished = true;
         break;
@@ -222,7 +258,7 @@ export async function runGymAttempt(options: RunGymAttemptOptions): Promise<GymA
   let outcome: GymOutcome = score.outcome;
   if (errored !== undefined) outcome = "errored";
   else if (timedOut) outcome = "timed-out";
-  if (timedOut && failure === undefined) failure = { message: "attempt exceeded its deadline", transient: true };
+  if (timedOut && failure === undefined) failure = { message: "attempt exceeded its deadline", transient: true, kind: "transient" };
 
   return {
     outcome,
@@ -232,6 +268,7 @@ export async function runGymAttempt(options: RunGymAttemptOptions): Promise<GymA
     wallTimeMs: now() - startedAt,
     callCount,
     turns,
+    reasks,
     protectedPathsTouched,
     patch,
     score,
@@ -240,15 +277,28 @@ export async function runGymAttempt(options: RunGymAttemptOptions): Promise<GymA
   };
 }
 
+const TRANSIENT_RE = /HTTP 5\d\d|HTTP 429|abort|timed? ?out|timeout|ECONN|socket hang up|fetch failed|network/i;
+const MALFORMED_RE = /not JSON|in JSON|no tool_calls|tool_calls array|arguments are not JSON|has no name|model reply has no|Unexpected token|Unexpected end of JSON/i;
+
 /**
- * Classify a thrown turn error. A 5xx, 429 (with or without a hint), network
- * error or timeout is transient: a durable supervisor may retry. A malformed
- * model reply is not (retrying the same broken exchange rarely helps).
+ * Classify a thrown turn error.
+ *
+ * Provider/network failures (5xx, 429, timeout, reset) are `transient`: the
+ * durable arm retries and can park on a server hint. A malformed/truncated
+ * model reply is `malformed`: the runner re-asks once, but if the re-ask is also
+ * bad the attempt fails — it is deliberately not handed to the durable retry
+ * budget, because a model that reliably emits bad JSON would otherwise burn that
+ * budget every turn. Anything else is `fatal`. Failures this makes
+ * unrecoverable: a second malformed reply in one attempt, and any non-provider,
+ * non-JSON error.
  */
 function classifyFailure(error: unknown, message: string): GymFailure {
   const retryAfterMs = typeof (error as { retryAfterMs?: unknown })?.retryAfterMs === "number"
     ? ((error as { retryAfterMs: number }).retryAfterMs)
     : undefined;
-  const transient = retryAfterMs !== undefined || /HTTP 5\d\d|HTTP 429|abort|timed? ?out|timeout|ECONN|socket hang up|fetch failed|network/i.test(message);
-  return { message, transient, ...(retryAfterMs !== undefined ? { retryAfterMs } : {}) };
+  if (retryAfterMs !== undefined || TRANSIENT_RE.test(message)) {
+    return { message, transient: true, kind: "transient", ...(retryAfterMs !== undefined ? { retryAfterMs } : {}) };
+  }
+  if (MALFORMED_RE.test(message)) return { message, transient: false, kind: "malformed" };
+  return { message, transient: false, kind: "fatal" };
 }

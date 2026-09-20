@@ -204,22 +204,52 @@ test("a transient turn failure is recorded as retryable with its reset hint", as
         const record = await runGymAttempt({ task, runner: localEffectRunner(task.repoDir), turn });
         assert.equal(record.outcome, "errored");
         assert.equal(record.failure?.transient, true);
+        assert.equal(record.failure?.kind, "transient");
         assert.equal(record.failure?.retryAfterMs, 2000);
+        assert.equal(record.reasks, 0, "a transient failure is not re-asked in-loop");
     }
     finally {
         await rm(parent, { recursive: true, force: true });
     }
 });
-test("a malformed model reply is not classified as retryable", async () => {
+test("a malformed reply is re-asked once, then fatal: it never touches the durable budget", async () => {
     const parent = await mkdtemp(join(tmpdir(), "gym-attempt-"));
     try {
         const task = await makeMaterialized(parent);
+        let calls = 0;
         const turn = async () => {
+            calls++;
             throw new Error("model reply is not JSON: I cannot help with that.");
         };
-        const record = await runGymAttempt({ task, runner: localEffectRunner(task.repoDir), turn });
+        const record = await runGymAttempt({ task, runner: localEffectRunner(task.repoDir), turn, maxTurns: 8, maxReasks: 1 });
         assert.equal(record.outcome, "errored");
-        assert.equal(record.failure?.transient, false);
+        assert.equal(record.failure?.kind, "malformed");
+        assert.equal(record.failure?.transient, false, "a malformed reply must not enter the transient retry path");
+        assert.equal(record.reasks, 1);
+        assert.equal(record.callCount, 2, "one original reply plus one re-ask, not the whole 8-turn budget");
+        assert.equal(calls, 2);
+    }
+    finally {
+        await rm(parent, { recursive: true, force: true });
+    }
+});
+test("a single stochastic malformed reply recovers after the re-ask", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "gym-attempt-"));
+    try {
+        const task = await makeMaterialized(parent);
+        let calls = 0;
+        const turn = async () => {
+            calls++;
+            if (calls === 1)
+                throw new Error("Expected ',' or ']' after array element in JSON at position 12");
+            return { toolCalls: [{ name: "write_file", arguments: { path: "lib.mjs", content: FIXED } }, { name: "finish" }] };
+        };
+        const record = await runGymAttempt({ task, runner: localEffectRunner(task.repoDir), turn, nodeBin: process.execPath });
+        assert.equal(record.outcome, "passed", record.error);
+        assert.equal(record.reasks, 1);
+        assert.equal(record.callCount, 2);
+        assert.equal(record.turns, 1);
+        assert.equal(record.failure, undefined);
     }
     finally {
         await rm(parent, { recursive: true, force: true });

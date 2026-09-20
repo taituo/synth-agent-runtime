@@ -32,7 +32,12 @@
   `--dry-run` completes the whole pipeline at **zero model calls**. A transient
   turn failure (5xx, 429, timeout) is surfaced as a structured `GymFailure`, so
   the durable activity throws and Temporal retries then parks on the server's
-  `Retry-After` hint while the plain arm does neither; `integrations/gym/p2-faults.ts`
+  `Retry-After` hint while the plain arm does neither. A malformed/truncated
+  model reply is `malformed`, not `transient`: the runner re-asks it exactly
+  once (`maxReasks`, default 1) on a budget separate from the durable retry
+  path, so a stochastic formatting slip recovers but a model that reliably emits
+  bad JSON cannot consume the retry allowance every turn.
+  `integrations/gym/p2-faults.ts`
   runs the per-arm fault matrix (502, 429, timeout, worker restart, SIGKILL)
   with a fresh fault proxy per arm so a one-shot fault is not consumed by the
   first arm.
