@@ -86,15 +86,58 @@ export declare class TenantBlobPolicy implements BlobAccessPolicy {
     authorize(request: BlobAccessRequest): boolean;
 }
 /**
+ * Write quota: a per-blob size ceiling and a per-tenant cumulative ceiling. It
+ * is a small counter owned by the caller (a guard cannot know prior usage from
+ * a content-addressed store without listing it), so a restart resets it; a
+ * deployment that needs durable accounting persists `usage()`.
+ */
+export interface BlobWriteQuota {
+    /** Throws `BLOB_QUOTA_EXCEEDED:blob:*` or `:tenant:*` when the write is too large. */
+    check(tenantId: string | undefined, bytes: number): void;
+    /** Record a committed write (call only when the object is new; dedup adds nothing). */
+    commit(tenantId: string | undefined, bytes: number): void;
+}
+export interface TenantWriteQuotaOptions {
+    /** Largest single object accepted. */
+    maxBytesPerBlob?: number;
+    /** Largest cumulative bytes accepted for one tenant (or the shared pool). */
+    maxBytesPerTenant?: number;
+}
+export declare class TenantWriteQuota implements BlobWriteQuota {
+    #private;
+    private readonly options;
+    constructor(options?: TenantWriteQuotaOptions);
+    check(tenantId: string | undefined, bytes: number): void;
+    commit(tenantId: string | undefined, bytes: number): void;
+    usage(tenantId: string | undefined): number;
+}
+/** One access decision, emitted on read and write. */
+export interface BlobAuditEvent {
+    op: "read" | "write";
+    digest: string;
+    outcome: "allowed" | "denied" | "not-found";
+    principal?: BlobPrincipal;
+    at: number;
+}
+export type BlobAuditSink = (event: BlobAuditEvent) => void;
+export interface GuardedBlobStoreOptions {
+    quota?: BlobWriteQuota;
+    audit?: BlobAuditSink;
+    now?: () => number;
+}
+/**
  * A {@link BlobStore} view that consults a policy. Bind a principal with
  * `forPrincipal`; `stat` returns undefined rather than leaking the existence of
- * a blob the principal may not read.
+ * a blob the principal may not read. Optionally enforces a write quota and
+ * emits an audit event for every read and write.
  */
 export declare class GuardedBlobStore implements BlobStore {
+    #private;
     private readonly inner;
     private readonly policy;
     private readonly principal?;
-    constructor(inner: BlobStore, policy: BlobAccessPolicy, principal?: BlobPrincipal | undefined);
+    private readonly options;
+    constructor(inner: BlobStore, policy: BlobAccessPolicy, principal?: BlobPrincipal | undefined, options?: GuardedBlobStoreOptions);
     forPrincipal(principal: BlobPrincipal): GuardedBlobStore;
     put(bytes: Uint8Array, options?: PutBlobOptions): Promise<BlobRef>;
     get(digest: string): Promise<Uint8Array>;

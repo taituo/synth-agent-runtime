@@ -30,6 +30,16 @@
   than leaking existence, and writes require a principal. `list`/`prune` add a
   lifecycle primitive (reachability is the caller's job). Decision, rationale
   and remaining gaps in `docs/BLOB-STORE.md`.
+- **The three lifecycle gaps named in `docs/BLOB-STORE.md` are closed.**
+  `reachableDigests` + `sweepUnreferencedBlobs` (`src/artifacts/retention.ts`)
+  wire `prune` to the artifact index's reachable set, including the
+  `producedFrom` ancestry and referenced-but-unrecorded digests, with an
+  optional grace period. `TenantWriteQuota` enforces a per-blob size ceiling and
+  a per-tenant cumulative ceiling in `GuardedBlobStore.put` (new objects only,
+  so dedup is not charged twice, and a rejected write is not charged). Read
+  auditing emits a `BlobAuditEvent` (op, digest, outcome allowed/denied/
+  not-found, principal, at) on every `get` and `put`. The quota counter is
+  in-memory; durable accounting is the caller's if needed.
 
 ### Lane scheduler: a lower band can no longer be starved
 

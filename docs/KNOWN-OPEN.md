@@ -6,15 +6,6 @@ removed only when the closing work lands.
 
 ## Egress and artifacts
 
-- **Blob store: access model decided, lifecycle partly wired.** The decision is
-  in `docs/BLOB-STORE.md`: within one trust domain the digest is the capability
-  (unguessable, integrity-verified on read), and across tenants
-  `GuardedBlobStore` + `TenantBlobPolicy` enforce isolation (with `stat` not
-  leaking existence). `list`/`prune` exist and are tested. Still open:
-  automatic GC wired from the artifact index's reachable set, a per-tenant write
-  quota, and read auditing. Closing: a scheduled retention job, a `put` size
-  ceiling, and an audit event on `get`.
-
 
 ## Measurement
 

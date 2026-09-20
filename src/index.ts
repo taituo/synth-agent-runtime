@@ -9,6 +9,7 @@ export * from "./workspace/git-transport.js";
 export * from "./workspace/scoped-push.js";
 export * from "./artifacts/blob-store.js";
 export * from "./artifacts/artifact-index.js";
+export * from "./artifacts/retention.js";
 export * from "./gym/scoring.js";
 export * from "./gym/task.js";
 export * from "./gym/tools.js";
