@@ -58,3 +58,28 @@ was able to fail for the reason it claimed.
 The patch-path fuzz's first run failed on an over-strict assertion (a rename may
 pick the same old and new name), not on the implementation; the assertion now
 checks both rename sides only when they differ.
+
+## Round-six scorer forgery fix: the in-process signer is gone (2026-09-20)
+
+Review round six ONE-a executed the signing oracle against main `bf56bca`: the
+HMAC harness was written into the clone and exported `check()`/`complete()`, so
+agent code signed a forged transcript with the real per-run key and scored
+`passed` with the bug unfixed. Reproduced on the committed dist before the fix
+(`/tmp/opencode/audit6/attack-main-hmac-v2.mjs`), then re-run against the ported
+isolated verifier:
+
+| state | signing-oracle payload | guessed-MAC control |
+|---|---|---|
+| `bf56bca` (before) | `passed` (bug unfixed) | `errored` |
+| isolated verifier (after) | `errored` | `errored` |
+
+Failing-first: `test/gym-vacuity.test.ts` "FORGE 4 (round six ONE-a)" is the
+permanent regression, and it can fail for the real reason — restoring an
+in-clone `gym-hidden-harness.mjs` that exports the signer makes the payload
+`passed` again. The scorer no longer runs a signer in the agent's process: the
+verifier holds the held-out vectors and the worker only reports raw return
+values, so the oracle has nothing to call. FORGE 5/5b (held-out vectors read off
+disk and via `/proc/<ppid>/cwd`) are pinned too; the worker runs under Node's
+permission model confined to the scoring work dir and refuses to run if the
+model is unavailable. `scoreGymPatch` now takes held-out `cases` instead of a
+`hiddenTestPath`; the `he/decimal-option` fixture ships `hidden.cases.json`.

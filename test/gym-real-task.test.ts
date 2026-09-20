@@ -1,12 +1,11 @@
 /**
  * Solidify the gym scorer on a REAL pinned repo (`he`).
  *
- * Round 1: a committed task fixture plants a genuine one-line bug in `he.js`
- * and the held-out test must FAIL on the materialized (bugged) checkout and
- * PASS on the clean one.
- * Round 2: the scoring matrix on that real repo — golden fix passes, a partial
- * fix that passes the visible test fails the hidden one, tampering is a
- * distinct outcome, and agent code that exits 0 cannot score.
+ * The committed task fixture plants a genuine one-line bug in `he.js` and ships
+ * the held-out vectors as data the verifier holds. The matrix: the bugged tree
+ * fails, the golden fix passes, a partial fix that passes the visible test fails
+ * the held-out vectors, tampering is distinct, and agent code that exits 0 cannot
+ * score.
  *
  * Zero model calls. A cold fixture cache SKIPs (never a vacuous pass).
  */
@@ -18,7 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { HIDDEN_HARNESS_DEST, HIDDEN_HARNESS_SOURCE, scoreGymPatch } from "../src/index.js";
+import { scoreGymPatch, type GymCase } from "../src/index.js";
 import { FixtureUnavailableError, REAL_REPOS, repoCachePath, type RealRepo } from "./fixtures/real-repos.js";
 
 const execFileAsync = promisify(execFile);
@@ -31,13 +30,16 @@ interface GymTask {
   commit: string;
   bugPatch: string;
   visibleTestPath: string;
-  hiddenTest: string;
-  expectedHiddenTests: number;
+  hiddenCases: string;
   description: string;
 }
 
 async function loadTask(): Promise<GymTask> {
   return JSON.parse(await readFile(join(FIXTURE_DIR, "task.json"), "utf8")) as GymTask;
+}
+
+async function loadCases(task: GymTask): Promise<GymCase[]> {
+  return JSON.parse(await readFile(join(FIXTURE_DIR, task.hiddenCases), "utf8")) as GymCase[];
 }
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
@@ -92,7 +94,7 @@ async function goldenFixPatch(repo: string, task: GymTask): Promise<string> {
 async function runTest(repo: string, relativePath: string): Promise<number> {
   // The outer `node --test` sets NODE_TEST_CONTEXT; if the child inherits it,
   // it believes it is a test subprocess and skips every file, exiting 0.
-  const env: NodeJS.ProcessEnv = { ...process.env, GYM_HIDDEN_NONCE: "direct-run" };
+  const env: NodeJS.ProcessEnv = { ...process.env };
   delete env.NODE_TEST_CONTEXT;
   try {
     await execFileAsync(process.execPath, ["--test", relativePath], { cwd: repo, env });
@@ -102,33 +104,19 @@ async function runTest(repo: string, relativePath: string): Promise<number> {
   }
 }
 
-/** Run the held-out test directly in a checkout; returns the exit code. */
-async function runHidden(repo: string, hiddenSource: string): Promise<number> {
-  const dest = join(repo, "hidden.test.mjs");
-  await copyFile(hiddenSource, dest);
-  await writeFile(join(repo, HIDDEN_HARNESS_DEST), HIDDEN_HARNESS_SOURCE);
-  try {
-    return await runTest(repo, "hidden.test.mjs");
-  } finally {
-    await rm(dest, { force: true });
-    await rm(join(repo, HIDDEN_HARNESS_DEST), { force: true });
-  }
-}
-
-test("the held-out test fails on the bugged checkout and passes on the clean one", async (t) => {
+test("the held-out vectors fail on the bugged checkout and pass on the golden fix", async (t) => {
   const repo = REAL_REPOS.find((entry) => entry.name === "he");
   assert.ok(repo, "he must be in REAL_REPOS");
   const cache = await cacheOrSkip(t, repo!);
   if (!cache) return;
   const task = await loadTask();
-  const hidden = join(FIXTURE_DIR, task.hiddenTest);
+  const cases = await loadCases(task);
   const parent = await mkdtemp(join(tmpdir(), "gym-he-"));
   try {
     const bugged = await materializeBugged(parent, cache, task);
-    assert.notEqual(await runHidden(bugged, hidden), 0, "the hidden test must FAIL on the planted bug");
-    // Clean checkout (undo the bug) must pass.
-    await execFileAsync("git", ["-C", bugged, "apply", "-R", join(FIXTURE_DIR, task.bugPatch)]);
-    assert.equal(await runHidden(bugged, hidden), 0, "the hidden test must PASS once the bug is fixed");
+    assert.equal((await scoreGymPatch({ patchText: "", baseRepoDir: bugged, cases })).outcome, "failed", "the bugged tree must fail the held-out vectors");
+    const golden = await goldenFixPatch(bugged, task);
+    assert.equal((await scoreGymPatch({ patchText: golden, baseRepoDir: bugged, cases })).outcome, "passed", "the bug's own reverse must pass");
   } finally {
     await rm(parent, { recursive: true, force: true });
   }
@@ -157,17 +145,16 @@ test("scoring matrix on the real he task", async (t) => {
   const cache = await cacheOrSkip(t, repo!);
   if (!cache) return;
   const task = await loadTask();
-  const hidden = join(FIXTURE_DIR, task.hiddenTest);
+  const cases = await loadCases(task);
   const parent = await mkdtemp(join(tmpdir(), "gym-he-"));
   try {
     const bugged = await materializeBugged(parent, cache, task);
-    const score = (patchText: string) =>
-      scoreGymPatch({ patchText, baseRepoDir: bugged, hiddenTestPath: hidden, expectedHiddenTests: task.expectedHiddenTests });
+    const score = (patchText: string) => scoreGymPatch({ patchText, baseRepoDir: bugged, cases });
 
     const golden = await goldenFixPatch(bugged, task);
     assert.equal((await score(golden)).outcome, "passed", "the bug's own reverse must pass");
 
-    // A partial fix that passes the VISIBLE test but not the hidden one.
+    // A partial fix that passes the VISIBLE test but not the held-out vectors.
     const partial = await patchFrom(bugged, async (dir) => {
       const path = join(dir, "he.js");
       const source = await readFile(path, "utf8");

@@ -1,0 +1,6 @@
+[
+  { "module": "./he.js", "call": "encode", "args": ["€"], "expect": "&#x20AC;", "label": "default is hexadecimal" },
+  { "module": "./he.js", "call": "encode", "args": ["€", { "decimal": true }], "expect": "&#8364;", "label": "decimal option" },
+  { "module": "./he.js", "call": "encode", "args": ["😀", { "decimal": true }], "expect": "&#128512;", "label": "decimal astral symbol" },
+  { "module": "./he.js", "call": "encode", "args": ["😀"], "expect": "&#x1F600;", "label": "hex astral symbol" }
+]
