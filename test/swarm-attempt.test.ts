@@ -93,6 +93,70 @@ test("a SIGKILL after turn 0 resumes from the checkpoint's findings, not the emp
   }
 });
 
+test("two-arm contrast: durability preserves partial findings across a SIGKILL, a plain retry loses them", async () => {
+  // The spec's discriminating quantity: after an identical kill, does the arm
+  // still hold the finding made before it? The only injected difference is the
+  // checkpoint; the stream, tools and turn script are shared.
+  const reportThenDie: SwarmTurn = async (input) => {
+    if (input.turnIndex === 0) return scriptedTurn(input);
+    throw new Error("SIGKILL");
+  };
+
+  // Plain arm: no checkpoint. A retry re-materializes an empty workspace and
+  // starts from turn 0 with nothing.
+  const plainDir = await mkdtemp(join(tmpdir(), "swarm-plain-"));
+  try {
+    await assert.rejects(runSwarmAttempt({ runner: localEffectRunner(plainDir), turn: reportThenDie }), /SIGKILL/);
+    const plainRetryDir = await mkdtemp(join(tmpdir(), "swarm-plain-retry-"));
+    try {
+      let findingsAtTurnZero = -1;
+      const retry: SwarmTurn = async (input) => {
+        if (input.turnIndex === 0) findingsAtTurnZero = input.findings.length;
+        return { toolCalls: [{ name: "finish", arguments: {} }] };
+      };
+      const plain = await runSwarmAttempt({ runner: localEffectRunner(plainRetryDir), turn: retry });
+      assert.equal(findingsAtTurnZero, 0, "the plain arm lost the finding made before the kill");
+      assert.equal(plain.score.recovered, 0, "the plain arm recovers nothing after a retry");
+    } finally {
+      await rm(plainRetryDir, { recursive: true, force: true });
+    }
+  } finally {
+    await rm(plainDir, { recursive: true, force: true });
+  }
+
+  // Durable arm: checkpoint. The retry starts at turn 1 with the finding intact,
+  // reports the remaining two, and recovers all three.
+  const store = new MemoryCheckpointStore();
+  const durableDir = await mkdtemp(join(tmpdir(), "swarm-durable-"));
+  try {
+    await assert.rejects(
+      runSwarmAttempt({ runner: localEffectRunner(durableDir), turn: reportThenDie, checkpoint: store, checkpointKey: "session-arm" }),
+      /SIGKILL/,
+    );
+    const durableRetryDir = await mkdtemp(join(tmpdir(), "swarm-durable-retry-"));
+    try {
+      let findingsAtResume = -1;
+      const retry: SwarmTurn = async (input) => {
+        if (input.turnIndex === 1) findingsAtResume = input.findings.length;
+        return {
+          toolCalls: [
+            { name: "report_finding", arguments: { kind: "slow-burn", summary: "search latency creeping", evidence: ["burn-1", "burn-5"] } },
+            { name: "report_finding", arguments: { kind: "correlation", summary: "recommendations after v2.3", evidence: ["rel-1", "corr-1"] } },
+            { name: "finish", arguments: {} },
+          ],
+        };
+      };
+      const durable = await runSwarmAttempt({ runner: localEffectRunner(durableRetryDir), turn: retry, checkpoint: store, checkpointKey: "session-arm" });
+      assert.equal(findingsAtResume, 1, "the durable arm kept the finding made before the kill");
+      assert.equal(durable.score.recovered, 3, "the durable arm recovers all three planted signals");
+    } finally {
+      await rm(durableRetryDir, { recursive: true, force: true });
+    }
+  } finally {
+    await rm(durableDir, { recursive: true, force: true });
+  }
+});
+
 test("a decoy reported as a finding is a false positive in the final score", async () => {
   const dir = await mkdtemp(join(tmpdir(), "swarm-decoy-"));
   try {
