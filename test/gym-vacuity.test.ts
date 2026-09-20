@@ -143,6 +143,64 @@ test("agent code printing a guessed marker does not rescue a failing test", asyn
   }
 });
 
+async function hiddenTwoPassing(parent: string): Promise<string> {
+  const path = join(parent, "hidden.test.mjs");
+  await writeFile(
+    path,
+    [
+      'import test from "node:test";',
+      'import assert from "node:assert/strict";',
+      "const equal = assert.equal.bind(assert);",
+      'const { slugify } = await import("./lib.mjs");',
+      'test("first", () => { equal(slugify(""), ""); });',
+      'test("second", () => { equal(slugify("  A  B "), "a-b"); console.log("GYM_HIDDEN_COMPLETE " + process.env.GYM_HIDDEN_NONCE); });',
+      "",
+    ].join("\n"),
+  );
+  return path;
+}
+
+test("expectedHiddenTests requires that many passing subtests", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "gym-"));
+  try {
+    const repo = await makeTaskRepo(parent);
+    const hidden = await hiddenTwoPassing(parent);
+    const patch = await patchFor(repo, (dir) => writeFile(join(dir, "lib.mjs"), FIXED));
+    // Two subtests, two expected -> pass.
+    assert.equal((await scoreGymPatch({ patchText: patch, baseRepoDir: repo, hiddenTestPath: hidden, expectedHiddenTests: 2 })).outcome, "passed");
+    // Only one expected would also pass (>= expected); three must not.
+    const tooMany = await scoreGymPatch({ patchText: patch, baseRepoDir: repo, hiddenTestPath: hidden, expectedHiddenTests: 3 });
+    assert.equal(tooMany.outcome, "errored", `two passing subtests cannot satisfy three expected: ${tooMany.detail ?? ""}`);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("a failing subtest among passing ones is failed, not passed", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "gym-"));
+  try {
+    const repo = await makeTaskRepo(parent);
+    const hidden = join(parent, "hidden.test.mjs");
+    await writeFile(
+      hidden,
+      [
+        'import test from "node:test";',
+        'import assert from "node:assert/strict";',
+        "const equal = assert.equal.bind(assert);",
+        'const { slugify } = await import("./lib.mjs");',
+        'test("passes", () => { equal(slugify(""), ""); });',
+        'test("fails", () => { equal(slugify("X Y"), "x-y"); equal(slugify("X Y"), "wrong"); console.log("GYM_HIDDEN_COMPLETE " + process.env.GYM_HIDDEN_NONCE); });',
+        "",
+      ].join("\n"),
+    );
+    const patch = await patchFor(repo, (dir) => writeFile(join(dir, "lib.mjs"), FIXED));
+    const score = await scoreGymPatch({ patchText: patch, baseRepoDir: repo, hiddenTestPath: hidden, expectedHiddenTests: 2 });
+    assert.equal(score.outcome, "failed", `one failing subtest must fail the run: ${score.hiddenOutput ?? ""}`);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
 test("a correct fix with the real marker passes", async () => {
   const parent = await mkdtemp(join(tmpdir(), "gym-"));
   try {
