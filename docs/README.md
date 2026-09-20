@@ -34,6 +34,11 @@ Everything below is design/subsystem detail, in rough reading order.
 - [`INFERENCE.md`](INFERENCE.md), [`RESPONSES.md`](RESPONSES.md), [`LIVE-CONTRACTS.md`](LIVE-CONTRACTS.md), [`LIVE-PROOF.md`](LIVE-PROOF.md) — gateway protocol, contracts, live-proof harness.
 - [`PI-E2E.md`](PI-E2E.md) — Pi checkout end-to-end test notes.
 
+## Status and verification
+
+- [`KNOWN-OPEN.md`](KNOWN-OPEN.md) — **canonical, current**: deliberately unfinished work, one line each on why it is open and what closing it needs.
+- [`VERIFICATION-LOG.md`](VERIFICATION-LOG.md) — failing-first evidence: per commit, the mutation applied, the failure it produced, and the restore.
+
 ## Other
 
 - [`INTEGRATION.md`](INTEGRATION.md) — third-party integration notes.
