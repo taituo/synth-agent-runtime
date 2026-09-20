@@ -169,12 +169,12 @@ export interface IsolatedScoreOptions {
 }
 
 /** The evaluation worker. Agent code runs here; expected outputs never do. */
-const WORKER_SOURCE = `
+export const WORKER_SOURCE = `
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
-import { writeSync } from "node:fs";
+import { readFileSync, writeFileSync, writeSync } from "node:fs";
 
 const reply = (message) => writeSync(3, JSON.stringify(message) + "\\n");
 const cache = new Map();
@@ -192,6 +192,30 @@ const load = async (spec) => {
   cache.set(spec, mod);
   return mod;
 };
+
+// One-shot batch mode for a sandboxed exec: read every request up front, write
+// every result, exit. Same evaluation, no interactive fd required, so the
+// worker can run inside a one-shot pod exec under the execution rung. Expected
+// values are still never passed in; only module/call/args are.
+const requestsPath = process.argv[2];
+if (requestsPath) {
+  const resultsPath = process.argv[3];
+  const requests = JSON.parse(readFileSync(requestsPath, "utf8"));
+  const results = [];
+  for (const request of requests) {
+    try {
+      const mod = await load(request.module);
+      const fn = mod[request.call] ?? mod.default?.[request.call];
+      if (typeof fn !== "function") throw new Error("no exported function " + request.call);
+      const value = await fn(...(request.args ?? []));
+      results.push({ id: request.id, present: value !== undefined, valueJson: JSON.stringify(value) });
+    } catch (error) {
+      results.push({ id: request.id, error: String(error && error.message ? error.message : error) });
+    }
+  }
+  writeFileSync(resultsPath, JSON.stringify(results));
+  process.exit(0);
+}
 
 const rl = createInterface({ input: process.stdin });
 for await (const line of rl) {

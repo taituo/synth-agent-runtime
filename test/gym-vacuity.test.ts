@@ -22,7 +22,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { isolatedScoreGymPatch, scoreGymPatch, type GymCase } from "../src/index.js";
+import { WORKER_SOURCE, isolatedScoreGymPatch, scoreGymPatch, type GymCase } from "../src/index.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -326,6 +326,31 @@ test("FORGE 8: node:sqlite cannot reach host state from inside the worker", asyn
     assert.notEqual(score.outcome, "passed", "node:sqlite must not reach host state");
     assert.equal(existsSync(dbPath), false, "the host database must not be created");
     assert.match(score.cases?.[0]?.error ?? "", /ERR_UNKNOWN_BUILTIN_MODULE|Cannot find module|not supported/);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("the worker runs one-shot in batch mode, so a sandboxed exec needs no fd", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "gym-batch-"));
+  try {
+    const repo = await makeRepo(parent, "export function addOne(n) {\n  return n;\n}\n");
+    const worker = join(parent, "worker.mjs");
+    await writeFile(worker, WORKER_SOURCE);
+    const requests = join(parent, "requests.json");
+    await writeFile(
+      requests,
+      JSON.stringify([
+        { id: 1, module: "./lib.mjs", call: "addOne", args: [1] },
+        { id: 2, module: "./lib.mjs", call: "missing", args: [] },
+      ]),
+    );
+    const resultsPath = join(parent, "results.json");
+    await execFileAsync(process.execPath, [worker, requests, resultsPath], { cwd: repo });
+    const results = JSON.parse(await readFile(resultsPath, "utf8")) as Array<{ id: number; present?: boolean; valueJson?: string; error?: string }>;
+    assert.equal(results[0]?.present, true);
+    assert.equal(results[0]?.valueJson, "1");
+    assert.match(results[1]?.error ?? "", /no exported function missing/);
   } finally {
     await rm(parent, { recursive: true, force: true });
   }

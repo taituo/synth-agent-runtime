@@ -93,6 +93,21 @@ from the worker can name. Not the durable answer.
 
 1. **Now (done):** `node:sqlite` deny, `FORGE 8`, and the guardrail wording in
    `src/gym/scoring.ts`, `CHANGELOG.md` and `docs/KNOWN-OPEN.md`.
+1b. **Done — batch worker mode (the sandbox enabler).** `WORKER_SOURCE` now runs
+   one-shot when given `<requests.json> <results.json>`: it reads only
+   module/call/args (never expected values), evaluates, writes results, exits.
+   This is what lets the worker run under a one-shot `process.exec` in a pod
+   instead of an interactive fd3 pipe. Pinned by the batch-mode test.
+1c. **Next — pod wiring.** In `isolatedScoreGymPatch`, when a sandbox is
+   configured (`SYNTH_EXECUTOR_IMAGE`/`SYNTH_KUBERNETES_NAMESPACE`/
+   `SYNTH_RUNTIME_CLASS`), materialize the applied checkout into a pod via
+   `KubectlSandboxBackend` (+ `WorkspaceSynchronizer`), write the worker and the
+   requests file, `exec` it in batch mode, read the results file, and compare in
+   the verifier. Reuse the execution rung's network policy (no egress) and mount
+   only `/workspace` — no host `/tmp`. Skip with exit 2 when unconfigured. This
+   is also the path for the agent's own tool execution; the gym-runner fix
+   (`nodeBin` for `run_visible_test`, git `safe.directory=/workspace`) is the
+   same shape.
 2. **Next:** add option B as a CI-built artifact (static Landlock launcher) and
    make the scorer prefer it; probe for it and fall back with a recorded caveat.
 3. **Or:** add option A behind the existing cluster env (`SYNTH_EXECUTOR_IMAGE`,
