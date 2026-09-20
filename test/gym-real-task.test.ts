@@ -88,19 +88,26 @@ async function goldenFixPatch(repo: string, task: GymTask): Promise<string> {
   return patch;
 }
 
-/** Run the held-out test directly in a checkout; returns the exit code. */
-async function runHidden(repo: string, hiddenSource: string): Promise<number> {
-  const dest = join(repo, "hidden.test.mjs");
-  await copyFile(hiddenSource, dest);
+/** Run a test file inside a checkout; returns the exit code. */
+async function runTest(repo: string, relativePath: string): Promise<number> {
   // The outer `node --test` sets NODE_TEST_CONTEXT; if the child inherits it,
   // it believes it is a test subprocess and skips every file, exiting 0.
   const env: NodeJS.ProcessEnv = { ...process.env, GYM_HIDDEN_NONCE: "direct-run" };
   delete env.NODE_TEST_CONTEXT;
   try {
-    await execFileAsync(process.execPath, ["--test", "hidden.test.mjs"], { cwd: repo, env });
+    await execFileAsync(process.execPath, ["--test", relativePath], { cwd: repo, env });
     return 0;
   } catch (error) {
     return (error as { code?: number }).code ?? 1;
+  }
+}
+
+/** Run the held-out test directly in a checkout; returns the exit code. */
+async function runHidden(repo: string, hiddenSource: string): Promise<number> {
+  const dest = join(repo, "hidden.test.mjs");
+  await copyFile(hiddenSource, dest);
+  try {
+    return await runTest(repo, "hidden.test.mjs");
   } finally {
     await rm(dest, { force: true });
   }
@@ -120,6 +127,23 @@ test("the held-out test fails on the bugged checkout and passes on the clean one
     // Clean checkout (undo the bug) must pass.
     await execFileAsync("git", ["-C", bugged, "apply", "-R", join(FIXTURE_DIR, task.bugPatch)]);
     assert.equal(await runHidden(bugged, hidden), 0, "the hidden test must PASS once the bug is fixed");
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("the fixture contract: bug applies cleanly, visible test fails on bug and passes on clean", async (t) => {
+  const repo = REAL_REPOS.find((entry) => entry.name === "he");
+  assert.ok(repo, "he must be in REAL_REPOS");
+  const cache = await cacheOrSkip(t, repo!);
+  if (!cache) return;
+  const task = await loadTask();
+  const parent = await mkdtemp(join(tmpdir(), "gym-he-"));
+  try {
+    const bugged = await materializeBugged(parent, cache, task);
+    assert.notEqual(await runTest(bugged, task.visibleTestPath), 0, "the visible test must FAIL on the bug");
+    await execFileAsync("git", ["-C", bugged, "apply", "-R", join(FIXTURE_DIR, task.bugPatch)]);
+    assert.equal(await runTest(bugged, task.visibleTestPath), 0, "the visible test must PASS once fixed");
   } finally {
     await rm(parent, { recursive: true, force: true });
   }
