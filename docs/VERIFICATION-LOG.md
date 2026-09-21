@@ -112,3 +112,29 @@ Re-ran the reviewer's full battery (`/tmp/opencode/audit6/oracle-battery-885.mjs
 adapted to this build): golden control `passed` 4/4; all six attack payloads not
 passed — five `failed`/`errored`, the symlink variant `tampered` with 0 passed
 cases. `FORGE 6` is the permanent regression for the survivor.
+
+## 2026-09-21 — A/B/C for every refusal (`2a2d876`, three-1)
+
+The rule: a refusal test needs two inputs that must be refused and one that must
+succeed. A rule that refuses everything is as useless as one that refuses
+nothing, and without the third case you cannot tell them apart. Added the
+missing success controls (and the missing second refusal) and verified each new
+control failing-first.
+
+| claim | refused-A | refused-B | allowed control | discriminating quantity / test |
+|---|---|---|---|---|
+| scored-rung gate | `assertScoredRunnerAllowed("local")` -> `UnisolatedScoredRunError` | `parseGymRunner("synthetic"/"host")` -> `unknown runner` (no fail-open) | `assertScoredRunnerAllowed("sandbox")` does not throw; `describeGymRunner("sandbox").scoredAllowed === true` | the error is the named type; unknown values throw; sandbox allowed. `test/gym-runner-isolation.test.ts` |
+| sandbox boundary | host/local probe (`gvisor:false`, host visible) -> `assertBoundary` throws | pod-like but `gvisor:false`, host hidden -> throws | compliant pod probe (`gvisor:true`, host hidden, no host TCP) -> does not throw | `assertBoundary` throws on A and B, passes on C. `test/gym-sandbox-boundary.test.ts` |
+| scorer isolation | `SYNTH_REQUIRE_ISOLATION=1` -> `errored`, 0 cases | escaping symlink in the checkout -> `tampered` (FORGE 6) | golden fix with the flag off -> `passed` | outcome `errored` / `tampered` / `passed`. `test/gym-scoring-hardening.test.ts` + `test/gym-forge.test.ts` |
+| path/symlink escapes | `..` traversal -> `WORKSPACE_PATH_ESCAPES` | absolute `/etc/passwd` -> `WORKSPACE_PATH_ESCAPES` | in-workspace relative `src/a.txt` -> read ok | the shared error code; the allowed path returns the bytes. `test/gym-tools.test.ts` (local) + `test/sandbox-workspace.test.ts` (pod) |
+| tamper / forgery (FORGE) | FORGE 1-7 attacks each not `passed` | second shape (leaf symlink / `openSync`) -> `tampered` | golden fix `passed`; wrong fix `failed` | per-attack outcome. `test/gym-forge.test.ts` |
+
+Failing-first (mutation -> observed red -> restored):
+
+| commit | mutation (what was broken) | observed failure | restored |
+|---|---|---|---|
+| `2a2d876` | `describeGymRunner("sandbox").scoredAllowed = false` | "the scored-rung gate has two refusals and one allow (A/B/C)" failed | green |
+| `2a2d876` | `assertBoundary` rejects the compliant pod (gvisor check flipped) | boundary A/B/C test failed | green |
+| `2a2d876` | scorer refuses unless `SYNTH_REQUIRE_ISOLATION=0` | isolation A/B/C test failed (golden no longer `passed`) | green |
+| `2a2d876` | `escapesWorkspace` returns true always | pod path A/B/C test failed (in-workspace read denied) | green |
+| `2a2d876` | `localEffectRunner`'s `resolveWithin` accepts absolute paths | gym-tools path A/B/C test failed (absolute read allowed) | green |
