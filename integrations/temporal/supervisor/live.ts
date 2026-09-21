@@ -196,15 +196,18 @@ export async function main(): Promise<number> {
     evidence.startedWorkflowId = startedWorkflowId ?? null;
     const handle = client.workflow.getHandle(startedWorkflowId ?? workflowIdPrefix);
 
-    // 1. Working: the pane shows the busy marker. Wait for a real check-in
-    // rather than a fixed sleep, so a cold worker does not race the assertion.
+    // 1. Working: the pane shows the busy marker. Wait for the status to become
+    // `working`, not merely for the first check-in: the pane redraws on its own
+    // cadence, so a single sample right after the write can still see the stale
+    // "all quiet" screen (a sample-timing race, not a functional result).
     await writeFile(stateFile, "esc interrupt\n");
-    const working = await waitForState(handle, (state) => state.checkIns >= 1, 25_000);
+    const working = await waitForState(handle, (state) => state.checkIns >= 1 && state.status === "working", 25_000);
     evidence.working = { status: working.status, checkIns: working.checkIns };
 
-    // 2. Blocked past the threshold: an escalation must fire and land.
+    // 2. Blocked past the threshold: an escalation must fire and land. Wait for
+    // the transition to `blocked` with an escalation, again not a snapshot.
     await writeFile(stateFile, "BLOCKED_MARKER\n");
-    const blocked = await waitForState(handle, (state) => state.escalations >= 1, 25_000);
+    const blocked = await waitForState(handle, (state) => state.status === "blocked" && state.escalations >= 1, 25_000);
     evidence.blocked = { status: blocked.status, escalations: blocked.escalations, checkIns: blocked.checkIns };
 
     // 3. Human redirection: a signal must be delivered and confirmed.
@@ -246,7 +249,8 @@ export async function main(): Promise<number> {
       evidence.working !== undefined &&
       schedule.created === true &&
       startedWorkflowId !== undefined &&
-      (working.status === "working" || working.status === "blocked") &&
+      working.status === "working" &&
+      blocked.status === "blocked" &&
       blocked.escalations >= 1 &&
       redirected.pokes >= 1 &&
       inboxAfterRedirect.includes("hello from the human") &&

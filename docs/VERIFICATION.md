@@ -56,7 +56,7 @@ already did (a skip is never a pass).
 | Reading the held-out vectors off the filesystem, or via `/proc/<ppid>/cwd` | `test/gym-forge.test.ts` FORGE 5, 5b |
 | A leaf symlink to the vectors, an intermediate-directory symlink, `require`, `node:sqlite` | `test/gym-forge.test.ts` FORGE 6, 7, 8, 9 |
 | Tampering hidden as a patch path trick (no `diff --git` header, rename, non-ASCII, `./` prefix, `tests/` dir) | `test/gym-scoring.test.ts`; fuzz `test/gym-patch-paths.test.ts` |
-| Scorer worker reaching host services/state (TCP, unix socket, `process.kill`, `os.userInfo`) | `scripts/scorer-isolation-probe.mjs` (live; exit 2 while any class is reachable) + `docs/KNOWN-OPEN.md` |
+| Scorer worker reaching host services/state (TCP, unix socket, `process.kill`, `os.userInfo`) | `scripts/scorer-isolation-probe.mjs` (live; exit 2 while any class is reachable **or unconfirmed**, and it prints the actual boundary selection) + `docs/KNOWN-OPEN.md` |
 | Symlink escape on the workspace path: absolute target, chain, intermediate symlinked dir, dangling link, legitimate relative in-repo link | `test/symlink-target.test.ts` |
 | The synthetic rung silently rewrites an escaping path; the parity oracle importing the implementation | `test/rung-parity.test.ts` (`../`, absolute, oracle-independence, source-backed symlink read) |
 | Cross-tenant blob read; blob dedup/corruption | `test/blob-access.test.ts`, `test/blob-store.test.ts` |

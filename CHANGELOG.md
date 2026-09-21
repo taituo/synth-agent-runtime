@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased — fixes: a deterministic supervisor proof, honest isolation-probe labels
+
+- **The supervisor live proof no longer races its own samples.**
+  `integrations/temporal/supervisor/live.ts` used to assert the status of the
+  first check-in; the tmux pane redraws on its own cadence, so that sample could
+  still show the stale screen (`working.status === "idle"`) and fail a run that
+  was functionally fine. It now waits (bounded, 25s) for the `working` status and
+  for the `blocked` + escalation transition, and asserts those transitions rather
+  than a snapshot. Ran 3× against Temporal `127.0.0.1:7244`: **3/3 `ok:true`**
+  with identical quantities (`schedule.created`, `scheduleFired`,
+  `blocked.escalations=1`, `redirect.delivered`, `restart.survived`,
+  `scheduleRecreated`).
+- **`scripts/scorer-isolation-probe.mjs` labels the actual selection.**
+  The boundary label now comes from `sandboxScorerConfig()`, so
+  `SYNTH_SCORER_SANDBOX=0` prints `host (Node permission model)` even when
+  `SYNTH_EXECUTOR_IMAGE` is set (previously it claimed `pod (gVisor)`).
+  `unconfirmed` rows now exit **2** as well, next to `reachable` — a skip or an
+  unknown is never a pass. Measured exit codes: pod path **0**, host path (with
+  `SYNTH_SCORER_SANDBOX=0`) **2**, unconfirmed (`SYNTH_REQUIRE_ISOLATION=1` with
+  no boundary) **2**.
+
 ## Unreleased — merge `gym-runner`: one sandbox rung, consolidated FORGE attacks
 
 - **One rung for the gym's sandbox arm** (`a6fb152`): `integrations/gym/sandbox.ts`

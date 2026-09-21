@@ -8,8 +8,11 @@
 //   node scripts/scorer-isolation-probe.mjs [--json]
 //
 // With SYNTH_EXECUTOR_IMAGE set the scorer runs the worker in the gVisor pod;
-// without it the worker runs on the host under Node's permission model.
-// Exit 0 when every probed class is blocked, 2 when any is reachable.
+// without it (or with SYNTH_SCORER_SANDBOX=0) the worker runs on the host under
+// Node's permission model. The printed boundary is the ACTUAL selection, never
+// just the presence of SYNTH_EXECUTOR_IMAGE.
+// Exit 0 when every probed class is blocked, 2 when any is reachable or
+// unconfirmed (a skip/unknown is never a pass).
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
@@ -17,6 +20,7 @@ import { tmpdir, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { scoreGymPatch } from "../dist/src/gym/scoring.js";
+import { sandboxScorerConfig } from "../dist/src/gym/sandbox-worker.js";
 
 const execFileAsync = promisify(execFile);
 const CASES = [{ module: "./lib.mjs", call: "probe", args: [], expect: "unreachable", label: "probe" }];
@@ -111,10 +115,14 @@ for (const entry of CLASSES) {
 await unlink(sqlitePath).catch(() => {});
 await unlink(socketPath).catch(() => {});
 
+// The boundary the scorer will actually use: `sandboxScorerConfig()` returns
+// undefined when SYNTH_SCORER_SANDBOX=0 even if SYNTH_EXECUTOR_IMAGE is set.
+const boundary = sandboxScorerConfig() ? "pod" : "host";
+
 if (process.argv.includes("--json")) {
-  console.log(JSON.stringify({ boundary: process.env.SYNTH_EXECUTOR_IMAGE ? "pod" : "host", hostUser: HOST_USER, rows }, null, 2));
+  console.log(JSON.stringify({ boundary, hostUser: HOST_USER, rows }, null, 2));
 } else {
-  console.log(`boundary: ${process.env.SYNTH_EXECUTOR_IMAGE ? "pod (gVisor)" : "host (Node permission model)"}  host user ${HOST_USER}`);
+  console.log(`boundary: ${boundary === "pod" ? "pod (gVisor)" : "host (Node permission model)"}  host user ${HOST_USER}`);
   for (const row of rows) console.log(`${row.status.toUpperCase().padEnd(11)} ${row.class}  ->  ${row.observed}`);
 }
-process.exit(rows.some((row) => row.status === "reachable") ? 2 : 0);
+process.exit(rows.some((row) => row.status === "reachable" || row.status === "unconfirmed") ? 2 : 0);
