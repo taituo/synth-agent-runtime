@@ -44,6 +44,16 @@ archived under [`history/`](history/); unwired modules are in
 - [`INFERENCE.md`](INFERENCE.md), [`RESPONSES.md`](RESPONSES.md), [`LIVE-CONTRACTS.md`](LIVE-CONTRACTS.md), [`LIVE-PROOF.md`](LIVE-PROOF.md) — gateway protocol, config-driven providers, contracts, live-proof harness.
 - [`PI-E2E.md`](PI-E2E.md) — *historical*: Pi checkout end-to-end test notes (the Pi adapter is quarantined).
 
+## Verification of the execution rungs
+
+- [`RUNG-PARITY.md`](RUNG-PARITY.md) — **current**: the synthetic-vs-real-filesystem differential harness and its accepted differences.
+- [`SCORER-SANDBOX.md`](SCORER-SANDBOX.md) — **current**: plan (not built) for the OS-level boundary that confines the scoring worker and the agent's tool path.
+
+## Gym
+
+- [`GYM-ONE-TURN.md`](GYM-ONE-TURN.md) — *historical*: the gym's move to one turn body and turn-per-activity (`gym-runner`; now merged into `main`).
+- [`GYM-P2-RESULTS.md`](GYM-P2-RESULTS.md) — *historical*: the recorded P2 fault-matrix results and their caveats.
+
 ## Status and verification
 
 - [`KNOWN-OPEN.md`](KNOWN-OPEN.md) — **current**: deliberately unfinished work, one line each on why it is open and what closing it needs.

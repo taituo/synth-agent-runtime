@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased — external review: dead weight removed, docs reconciled with the tree
+
+- **Dead weight.** `src/observability/trace.ts` (an earlier plain `Trace` sink,
+  no caller) moved to `docs/history/museum/src/observability/trace.ts` and
+  dropped from `src/index.ts`; tracing is OpenTelemetry (`otel.ts`).
+  `scripts/chaos-matrix.mjs` / `npm run chaos:matrix` removed: it ran the
+  quarantined `dist/test/chaos.test.js`, so it exited 1, and its remaining suites
+  already run in `npm test`. `docs/EXECUTION-PATHS.md` records both.
+- **Measured numbers.** README's "Tests executed" block now states the suites at
+  HEAD: root **276** (274 pass, 2 live-gVisor skips), Temporal **104**,
+  integrations syntax **101** files, gateway **3**.
+- **Stale claims corrected.** README no longer describes deleted in-memory /
+  JSON-file `DurabilityProvider`s (`PostgresPersistence` is the one shipped
+  provider). `docs/LIVE-PROOF.md`'s sample output and the "16 concurrent
+  workers" figure were updated to the current harness and the CI value (32);
+  `docs/LIVE-CONTRACTS.md` drops the retired chaos-matrix and child-process
+  SIGKILL entries; `docs/KNOWN-OPEN.md` and `docs/VERIFICATION.md` no longer
+  describe the gym as unmerged.
+- **Docs index.** `docs/README.md` now indexes `RUNG-PARITY.md`,
+  `SCORER-SANDBOX.md`, and the historical `GYM-ONE-TURN.md` /
+  `GYM-P2-RESULTS.md`.
+
 ## Unreleased — observability: one trace, native metrics, correlated logs
 
 - **Search attributes.** `durableAgentWorkflow` upserts opt-in

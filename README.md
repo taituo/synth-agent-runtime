@@ -91,7 +91,7 @@ the right node counts, and cancel a real long loop. See `docs/HARNESS.md`.
 
 PostgreSQL validates the proof atomically against `synth_leases`. An unfenced update is allowed only while the agent row is still at fencing generation `0`; once fenced ownership has begun, legacy/unfenced updates are rejected with `AGENT_FENCE_REQUIRED`.
 
-Local in-memory and JSON-file providers retain monotonic fenced generations for deterministic tests, while remaining usable as explicitly single-writer stores.
+`PostgresPersistence` is the one shipped `DurabilityProvider`; the in-memory and JSON-file providers were quarantined with the control-plane stack (`docs/history/museum/src/durability/`). The monotonic fenced-generation behaviour is a store property, tested in `test/postgres-control.test.ts` against the real database clock.
 
 ### Database-clock leases
 
@@ -141,7 +141,7 @@ Clients / OpenCode / Pi / Temporal client
         ┌───────────┴───────────┐
         │                       │
  AgentSnapshot writes      effect receipts
- hard-fenced in DB        claimed in DB
+ hard-fenced in DB        in Temporal state (or DB)
         │                       │
         └───────────┬───────────┘
                     │
@@ -168,13 +168,14 @@ Measured under Node v22.20.0 (`node --version`), on commit `HEAD`:
 
 ```text
 npm test  (root suite)
-198 passed / 0 failed
+276 tests: 274 passed / 0 failed / 2 skipped
+(the 2 skips are the live gVisor boundary proofs; set SYNTH_LIVE_GVISOR=1)
 
 npm test --prefix integrations/temporal  (durable workflow + turn body + graph harness)
-90 passed / 0 failed
+104 passed / 0 failed
 
 npm run integrations:syntax
-82 TypeScript integration files / 0 syntax diagnostics
+101 TypeScript integration files / 0 syntax diagnostics
 3 shell files / syntax OK
 
 integrations/opencode-http-gateway: npm test

@@ -8,17 +8,21 @@ v0.9 retains the live-system contract approach and adds hard-fencing/database-cl
 
 ## Always runnable
 
-- TypeScript build + root tests
-- distributed control-plane contract
-- deterministic chaos matrix
-- real child-process SIGKILL recovery
-- Responses protocol contracts
-- integration TypeScript/shell syntax checks
+- TypeScript build + root tests (`npm test`)
+- Postgres store contract (`npm run postgres:contract`)
+- Responses protocol contracts (`npm run responses:contract`)
+- integration TypeScript/shell syntax checks (`npm run integrations:syntax`)
+
+The deterministic chaos matrix and the real child-process SIGKILL test were
+retired with the homegrown runtime/chaos harness (`docs/history/museum/`); the
+durable SIGKILL/restart proof is now a Temporal live proof
+(`docs/VERIFICATION.md`).
 
 ## Infrastructure-dependent
 
 - PostgreSQL multi-connection contention, including lease and project-CAS winner tests
-- Pi checkout E2E using the pinned/current integration target
+- Pi checkout E2E using the pinned/current integration target (the Pi adapter is
+  now quarantined; this exercises the memory-workspace path)
 - Kubernetes/gVisor Pod deletion during execution
 - external gateway/provider probe
 

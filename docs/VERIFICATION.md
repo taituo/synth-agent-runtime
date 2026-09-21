@@ -115,5 +115,7 @@ the hosted runner) and are run by hand.
 provider attack script, and the ad-hoc gym probes. The durable ones are encoded
 above as tests; the provider attack's mechanism is covered at unit level by
 `test/provider-config.test.ts`, and the gym capability inventory by
-`scripts/scorer-isolation-probe.mjs`. The gym branch's scorer attacks live on
-`gym-runner` until that branch merges.
+`scripts/scorer-isolation-probe.mjs`. The gym's scorer attacks were encoded in
+`test/gym-vacuity.test.ts` when the `gym-runner` branch merged into `main`
+(`9fad1dd`); the remaining scorer-isolation gap is the host-boundary entry in
+`docs/KNOWN-OPEN.md`.

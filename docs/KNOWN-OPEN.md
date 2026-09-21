@@ -6,15 +6,21 @@ removed only when the closing work lands.
 
 ## Runtime and deploy
 
-- **The scored gym path is on `gym-runner`; `main` enforces the refusal only on
-  the shared turn path.** `runTurn` refuses a scored turn whose rung is not
-  isolated: `DurableTurnConfig.scored` carries the flag from the workflow and
-  `assertRungAllowedForScored` runs where the rung is resolved (before any model
-  call). The gym's own scored loop (`runGymAttempt`, `gym-activities.ts`) is on
-  the `gym-runner` branch and does not use `runTurn`, so until it merges and
-  routes through the shared harness (or calls the sandbox rung / the refusal
-  itself) a scored run there can still use the host `localEffectRunner`. Closing:
-  `gym-2` drives the shared sandbox rung and calls the refusal.
+- **The gym's scored sandbox rung is a parallel implementation, not the runtime
+  rung.** The gym is merged (its durable workflow drives `runTurn`
+  turn-per-activity, `gym-workflows.ts`) and it refuses a scored run on
+  `runner:"local"` (`gym-activities.ts`, `GymUnisolatedScoredRun`). But the
+  gym's sandbox runner (`integrations/gym/sandbox.ts`) builds its own
+  `ExecutionBroker([SyntheticExecutor, KubernetesExecutor], LocalRuntimeStateStore())`:
+  `workspace.read/write/replace/list` are served by the `SyntheticExecutor`
+  (worker RAM) and only `process.exec` reaches the Pod. The runtime rung's
+  `SandboxWorkspaceExecutor` does not implement `workspace.replace`
+  (`sandbox-workspace.ts` `WORKSPACE_EFFECTS` = read/write/list/delete), so the
+  gym's `replace_in_file` cannot simply be pointed at it. Separately,
+  `runTurn`'s `DurableTurnConfig.scored` refusal (`assertRungAllowedForScored`)
+  is wired but opt-in — no production caller sets `scored`, and the gym uses its
+  own refusal instead. Closing: one rung that serves `workspace.replace`, and
+  route the gym's scored run through it.
 - **Sandbox workspace checkpoints are diffs; huge workspaces still need the git
   transport.** `checkpointSandboxWorkspace` writes the workspace diff
   (`exportArtifact`) to the blob store and restores by digest. A very large
@@ -65,16 +71,17 @@ removed only when the closing work lands.
   job applies them: the cluster has no per-push coverage, so the manifest can
   rot. Closing: a self-hosted runner job that applies the manifest against a
   throwaway cluster (the same gap as the gVisor/Pi proofs below).
-- **The worker entry point still defaults to triage; the gym task layer is on
-  `gym-runner`.** `integrations/temporal/src/worker-entry.ts` wires the `runTurn`
-  activity to the event-triage turn. The durable turn now executes tools through
-  the rung when an agent's `turnConfig` supplies a system prompt, tool surface
-  and rung (see `CHANGELOG.md`, Unreleased), but `main` has no task
-  materialization/checkpoint layer: the synthetic rung's workspace lives for the
-  worker process's lifetime and does not survive a worker restart. The gym's
-  coding activity, task materialization and checkpoint store live on the
-  `gym-runner` branch and are not on `main`. Closing: merge that layer, or port
-  the gym activity onto the shared `turnConfig`/rung path here.
+- **The production worker entry point registers only the triage `runTurn`, and
+  the gym runs its own worker.** `integrations/temporal/src/worker-entry.ts`
+  wires the `runTurn` activity to the event-triage turn. The durable turn now
+  executes tools through the rung when an agent's `turnConfig` supplies a system
+  prompt, tool surface and rung (see `CHANGELOG.md`, Unreleased). The gym task
+  layer is now on `main` (`src/gym/*`, `integrations/temporal/src/gym-*.ts`), but
+  `gymAttemptWorkflow` and its `gymPrepareActivity`/`gymScoreActivity` are
+  registered by `integrations/gym/run-gym.ts`, not by `worker-entry.ts`; the
+  synthetic rung's workspace still lives for the worker process's lifetime and
+  does not survive a worker restart. Closing: one worker entry that registers the
+  gym workflows/activities and a durable workspace for the synthetic rung.
 
 ## Egress and artifacts
 

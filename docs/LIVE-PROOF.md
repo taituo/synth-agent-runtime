@@ -7,21 +7,22 @@ In a bare environment with no external infrastructure or credentials configured,
 ```text
 PASS core build + unit/contracts
 PASS integration syntax
-PASS process SIGKILL recovery
+PASS Temporal integration suite
 PASS Responses contracts
+SKIP Temporal worker-restart proof — temporal 127.0.0.1:7243 not reachable
 SKIP live Postgres — SYNTH_POSTGRES_URL not set
 SKIP Pi E2E — PI_REPO not set
 SKIP live Kubernetes Pod kill — SYNTH_K8S_LIVE != 1
 SKIP live gateway probe — SYNTH_GATEWAY_URL not set
 ```
 
-This is by design, not a gap: a SKIP is not evidence of correctness, and the harness deliberately refuses to report PASS for a check it cannot actually run. The external contracts remain in the package so CI or a real deployment environment can promote them to PASS by supplying the relevant environment variables/credentials.
+This is by design, not a gap: a SKIP is not evidence of correctness, and the harness deliberately refuses to report PASS for a check it cannot actually run, exiting 2 when any check skipped. The external contracts remain in the package so CI or a real deployment environment can promote them to PASS by supplying the relevant environment variables/credentials.
 
 ## This RC was independently verified live
 
-Separately from the repeatable `npm run live:proof` harness above, `v1.0.0-rc.1` was independently verified with all four infrastructure-dependent checks live and passing, outside a bare CI/sandbox environment:
+Separately from the repeatable `npm run live:proof` harness above, `v1.0.0-rc.1` was independently verified with all four infrastructure-dependent checks live and passing, outside a bare CI/sandbox environment (the Pi adapter has since been quarantined as unwired, so the Pi E2E now exercises the memory-workspace path only):
 
-- **Real PostgreSQL** — concurrency and fencing proven under 16 concurrent workers, including deliberate database-clock skew and a two-generation hard agent takeover (see `docs/POSTGRES.md`).
+- **Real PostgreSQL** — concurrency and fencing proven under 32 concurrent workers (CI sets `SYNTH_POSTGRES_WORKERS=32`; the script defaults to 16), including deliberate database-clock skew and a two-generation hard agent takeover (see `docs/POSTGRES.md`).
 - **Real pinned Pi checkout E2E** — see `docs/PI-E2E.md`.
 - **Real Kubernetes + gVisor pod-kill** — 3/3 green on a real cluster (see `docs/KUBERNETES-RUN.md`).
 - **A real external provider matrix** — abort-survival, `previous_response_id` continuations, tool calls, and 3-way concurrency against a live subscription-backed gateway.

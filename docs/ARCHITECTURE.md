@@ -33,8 +33,9 @@ control plane — is archived under `docs/history/`.)
                 │
      ┌──────────▼─────────────────────────────────────────────┐
      │ Durable stores (PostgreSQL)                            │
-     │ leases/fencing · effect receipts · mailbox cursors     │
-     │ world CAS · continuations · route health · rate limits │
+     │ leases/fencing · mailbox cursors · world CAS          │
+     │ continuations · route health · rate limits            │
+     │ (effect receipts: Temporal activity state, or here)   │
      └────────────────────────────────────────────────────────┘
 ```
 
