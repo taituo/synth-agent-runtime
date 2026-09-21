@@ -22,6 +22,7 @@ export * from "./gym/checkpoint.js";
 export * from "./workspace/native-git-source.js";
 export * from "./execution/types.js";
 export * from "./execution/workspace-errors.js";
+export * from "./execution/scored-rung.js";
 export * from "./execution/broker.js";
 export * from "./execution/synthetic.js";
 export * from "./durability/types.js";

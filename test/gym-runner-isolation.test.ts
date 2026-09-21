@@ -22,6 +22,7 @@ import {
   loadGymTask,
   materializeGymTask,
   parseGymRunner,
+  scoredRungAllowed,
   UnisolatedScoredRunError,
   DEFAULT_GYM_FIXTURE_CACHE_DIR,
   GymFixtureUnavailableError,
@@ -39,13 +40,18 @@ test("the default runner is sandbox/gVisor, and local is explicitly unisolated",
   const sandbox = describeGymRunner("sandbox");
   assert.equal(sandbox.isolation, "gvisor");
   assert.equal(sandbox.isolated, true);
-  assert.equal(sandbox.scoredAllowed, true);
 
   const local = describeGymRunner("local");
   assert.equal(local.isolation, "unisolated");
   assert.equal(local.label, "unisolated");
   assert.equal(local.isolated, false);
-  assert.equal(local.scoredAllowed, false);
+
+  // The one rule (`scoredRungAllowed`), read directly: a scored run needs an
+  // isolated rung; an unscored run may use the labelled unisolated arm. There is
+  // no separate `scoredAllowed` flag to disagree with `isolated`.
+  assert.equal(scoredRungAllowed(sandbox, true), true);
+  assert.equal(scoredRungAllowed(local, true), false);
+  assert.equal(scoredRungAllowed(local, false), true);
 });
 
 test("an unknown runner value is rejected, not silently treated as the default", () => {

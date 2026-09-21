@@ -53,9 +53,10 @@ claim inherits the weakest path it happens to run on.
   path remains only as a labelled, opt-out development mode.
 - **the gym's `localEffectRunner`**: still runs agent tools on the host and is a
   labelled **control** arm (`role:"control"`, `isolation:"unisolated"`), refused
-  for scored runs — the drivers pre-flight with `assertScoredRunnerAllowed`, and
-  the activities apply the runtime's shared `assertRungAllowedForScored` with the
-  `scored` flag threaded from the workflow input. It is not a production path:
+  for scored runs — the drivers pre-flight (`assertScoredRunnerAllowed`) and the
+  activities (`assertRungAllowedForScored`, with the `scored` flag threaded from
+  the workflow input) both decide via the same `scoredRungAllowed` predicate, so
+  there is no second `scoredAllowed` flag to drift. It is not a production path:
   a scored run uses `runner:"sandbox"`, where the gym's tools execute in the pod
   through the same `SandboxWorkspaceExecutor` the runtime sandbox rung uses
   (including `workspace.replace`). The runtime turn's own `config.scored` guard

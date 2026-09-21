@@ -8,6 +8,8 @@
  * filesystem, so a local run is `unisolated` and a scored run must be refused.
  * Nothing in this module pretends a host run is isolated.
  */
+import { scoredRungAllowed } from "../execution/scored-rung.js";
+
 export type GymRunnerKind = "local" | "sandbox";
 
 /** The boundary a run actually had, written into every result artifact. */
@@ -16,14 +18,12 @@ export type GymIsolation = "unisolated" | "gvisor";
 export interface GymRunnerBinding {
   kind: GymRunnerKind;
   isolation: GymIsolation;
-  /** True only for the gVisor pod. Local is never isolated. */
-  isolated: boolean;
   /**
-   * Whether a scored attempt may run on this runner. False for `local`: the
-   * agent's process can read `hidden.cases.json` on the host, so a score from it
-   * would be a ground-truth leak.
+   * True only for the gVisor pod. Local is never isolated. This is the single
+   * field the scored rule reads (`scoredRungAllowed`); there is deliberately no
+   * separate `scoredAllowed` flag to drift out of agreement with it.
    */
-  scoredAllowed: boolean;
+  isolated: boolean;
   /** Human-readable label for artifacts and logs. `unisolated` or `gvisor`. */
   label: GymIsolation;
 }
@@ -33,9 +33,9 @@ export const DEFAULT_GYM_RUNNER: GymRunnerKind = "sandbox";
 
 export function describeGymRunner(kind: GymRunnerKind): GymRunnerBinding {
   if (kind === "sandbox") {
-    return { kind, isolation: "gvisor", isolated: true, scoredAllowed: true, label: "gvisor" };
+    return { kind, isolation: "gvisor", isolated: true, label: "gvisor" };
   }
-  return { kind, isolation: "unisolated", isolated: false, scoredAllowed: false, label: "unisolated" };
+  return { kind, isolation: "unisolated", isolated: false, label: "unisolated" };
 }
 
 /**
@@ -61,5 +61,5 @@ export class UnisolatedScoredRunError extends Error {
 
 /** Throw unless a scored attempt is allowed on this runner. */
 export function assertScoredRunnerAllowed(kind: GymRunnerKind): void {
-  if (!describeGymRunner(kind).scoredAllowed) throw new UnisolatedScoredRunError(kind);
+  if (!scoredRungAllowed(describeGymRunner(kind), true)) throw new UnisolatedScoredRunError(kind);
 }

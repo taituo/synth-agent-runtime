@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased — cleanup: one scored-rung rule, minor findings swept
+
+- **One scored-rung rule.** New `src/execution/scored-rung.ts` exports the single
+  `scoredRungAllowed` predicate. `assertRungAllowedForScored` (runtime turn) and
+  `assertScoredRunnerAllowed` (gym drivers) both delegate to it, and the
+  redundant `GymRunnerBinding.scoredAllowed` field is gone — `isolated` is the
+  only isolation flag a runner carries, so a future runner kind cannot set two
+  flags inconsistently.
+- **Minor findings from the review swept:** removed the unused `condition`
+  import in `graph-workflow.ts`; verified `p2-faults.ts` now refuses an
+  unisolated scored run with exit 2 like `run-gym.ts` (test `driver-skips` #5);
+  the lane unknown-lane fallback (review S7), the isolation-probe label /
+  `unconfirmed` exit, and the supervisor-proof sample race were already fixed in
+  earlier commits and re-verified.
+
 ## Unreleased — one production worker entry (runtime + gym), ready to scale
 
 - **One worker.** `integrations/temporal/src/worker-entry.ts` now registers the

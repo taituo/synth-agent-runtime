@@ -8,6 +8,7 @@ import { WarmSandboxPool } from "../../../src/execution/kubernetes/pool.js";
 import { SandboxWorkspaceExecutor } from "../../../src/execution/kubernetes/sandbox-workspace.js";
 import { DEFAULT_KUBERNETES_RESOURCE_CLASSES } from "../../../src/execution/resource-class.js";
 import { SyntheticExecutor } from "../../../src/execution/synthetic.js";
+import { scoredRungAllowed } from "../../../src/execution/scored-rung.js";
 import type { Effect, EffectResult } from "../../../src/execution/types.js";
 import type { RuntimeStateStore } from "../../../src/durability/runtime-state.js";
 import type { AgentEngine, AgentEngineContext } from "../../../src/runtime/agent-engine.js";
@@ -113,13 +114,12 @@ export interface TurnRung {
 }
 
 /**
- * Refuse a scored run on an unisolated rung. The gym's activities apply this
- * same rule (they thread a `scored` flag from the workflow input), so neither
- * path carries a private copy. The caller supplies only the rung's isolation:
- * the decision is a property of the rung, not of how it is built.
+ * Refuse a scored run on an unisolated rung. The decision is the shared
+ * `scoredRungAllowed` predicate (the gym drivers apply the same one); this
+ * wrapper only names the refusal for the runtime turn.
  */
 export function assertRungAllowedForScored(rung: Pick<TurnRung, "isolated">, scored: boolean): void {
-  if (scored && rung.isolated !== true) {
+  if (!scoredRungAllowed(rung, scored)) {
     throw new Error("UNISOLATED_RUNG_REFUSED: a scored run requires an isolated (sandbox) rung");
   }
 }

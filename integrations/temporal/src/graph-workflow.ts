@@ -13,7 +13,6 @@
  * completed-node count, checked by the interpreter's `onNode` hook.
  */
 import {
-  condition,
   continueAsNew,
   defineQuery,
   defineSignal,
