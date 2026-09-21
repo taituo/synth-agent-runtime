@@ -124,9 +124,27 @@ comes first because it stops the drift — otherwise every addition grows the wr
 until the chain `agentId → workflow → effect → sandbox → pod → receipt` has been executed in a
 single run. Running it reveals what is actually missing; designing does not.
 
-**Phase 2 — Define the seam.** `ExecutionEnvironment` and `HarnessSession` as interfaces. The
-existing engine implements them first: it is already built and tested, so it proves the
-interface is real at no risk.
+> **Keep Phase 1 small, and do not improve `GatewayAgentEngine` to make the run look good.**
+> The run has to demonstrate the chain and nothing else. Any effort spent making the reference
+> harness behave more like a coding agent is effort spent growing the layer this document
+> exists to shrink. If the run is unimpressive because the harness is thin, that is the
+> correct result and it is the motivation for Phase 3.
+
+**Phase 2 — Define the seam.** `ExecutionEnvironment` and `HarnessSession` as interfaces.
+
+> **Design the interface against a real harness's API, not against the existing engine.**
+> This is the one place the drift can recur. An interface derived from what
+> `GatewayAgentEngine` needs would come out as `run(messages) → content + toolCalls +
+> observations`, because that is all it does. A real harness needs more: session lifecycle,
+> resume, interrupt, approval, streaming, compaction hooks. An interface shaped by the thin
+> engine would be too narrow, and the reference harness would once again be dictating the
+> platform abstraction.
+>
+> So: read at least one real harness's API first and design the seam to fit it, even if the
+> adapter is not implemented until Phase 3. Then have the existing engine implement the same
+> interfaces — as a *second* implementation that shows the seam is cheap to satisfy, never as
+> the source of its design. Two implementations, one of them real, is the check that the
+> abstraction is about harnesses in general rather than about the one we happen to have.
 
 **Phase 3 — One real adapter.** One harness, not three levels at once. The measurement is a
 real coding task completed in the sandbox by a harness Synth did not write.
