@@ -1,0 +1,25 @@
+{
+  "address": "127.0.0.1:7243",
+  "taskQueue": "synth-effect-receipt-1789983924835",
+  "status": "completed",
+  "attempts": [
+    1,
+    2
+  ],
+  "attempt1Seed": [],
+  "attempt2Seed": [
+    "agt_receipt_1789983924835:write_file:0:committed",
+    "agt_receipt_1789983924835:write_file:1:started"
+  ],
+  "firstEffectId": "agt_receipt_1789983924835:write_file:0",
+  "firstEffectExecutions": 1,
+  "firstEffectExecutionAttempts": [
+    1
+  ],
+  "executions": [
+    "agt_receipt_1789983924835:write_file:0#1",
+    "agt_receipt_1789983924835:write_file:1#1"
+  ],
+  "ok": true
+}
+

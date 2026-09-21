@@ -1,0 +1,23 @@
+{
+  "address": "127.0.0.1:7243",
+  "hintMs": 2000,
+  "blindParkMs": {
+    "initialMs": 300,
+    "maxMs": 600
+  },
+  "minParkGapMs": 1500,
+  "parkGapMs": 2055,
+  "wallMs": 5241,
+  "activityCalls": 4,
+  "callTimesMs": [
+    1789983826482,
+    1789983827500,
+    1789983829508,
+    1789983831563
+  ],
+  "finalStatus": "idle",
+  "lastError": null,
+  "honoursHint": true,
+  "ok": true
+}
+

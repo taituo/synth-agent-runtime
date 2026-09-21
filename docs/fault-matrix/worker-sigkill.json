@@ -1,0 +1,18 @@
+{
+  "address": "127.0.0.1:7243",
+  "taskQueue": "synth-durable-restart-1789983859893",
+  "committedCalls": 1,
+  "hangCalls": 2,
+  "attempts": [
+    1,
+    1,
+    2
+  ],
+  "committedNotRerun": true,
+  "hungTurnRetried": true,
+  "finalStatus": "idle",
+  "mailboxLength": 0,
+  "cancelledResult": true,
+  "ok": true
+}
+

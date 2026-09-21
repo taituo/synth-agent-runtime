@@ -1,0 +1,23 @@
+{
+  "fault": "temporal-server",
+  "mode": "inmemory",
+  "address": "127.0.0.1:7246",
+  "workflowId": "fault-temporal-mub24ros",
+  "taskQueue": "synth-fault-temporal-mub24ros",
+  "dbPersistent": false,
+  "attemptsBeforeRestart": [
+    1
+  ],
+  "portClosedAfterStop": true,
+  "statusAfterRestart": "ERROR(WorkflowNotFoundError: workflow not found for ID: fault-temporal-mub24ros)",
+  "attempts": [
+    1
+  ],
+  "questions": {
+    "retried": false,
+    "dataLost": true,
+    "humanNeeded": true
+  },
+  "ok": true
+}
+

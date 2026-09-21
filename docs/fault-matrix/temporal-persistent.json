@@ -1,0 +1,26 @@
+{
+  "fault": "temporal-server",
+  "mode": "persistent",
+  "address": "127.0.0.1:7245",
+  "workflowId": "fault-temporal-mub24lkr",
+  "taskQueue": "synth-fault-temporal-mub24lkr",
+  "dbPersistent": true,
+  "attemptsBeforeRestart": [
+    1
+  ],
+  "portClosedAfterStop": true,
+  "statusAfterRestart": "RUNNING",
+  "attempts": [
+    1,
+    2
+  ],
+  "result": "recovered",
+  "questions": {
+    "retried": true,
+    "dataLost": false,
+    "humanNeeded": false,
+    "sideEffectTwice": true
+  },
+  "ok": true
+}
+

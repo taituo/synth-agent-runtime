@@ -1,0 +1,28 @@
+{
+  "ok": true,
+  "namespace": "synth-audit-gvisor",
+  "runtimeClass": "gvisor",
+  "results": {
+    "execSuccess": {
+      "ok": true,
+      "stdout": "hello-from-memory",
+      "expected": true
+    },
+    "execWriteBack": {
+      "ok": true,
+      "workspaceText": "generated-in-sandbox",
+      "expected": true
+    },
+    "execTimeout": {
+      "ok": false,
+      "error": "EXECUTION_TIMEOUT",
+      "expected": true
+    },
+    "execSigkill": {
+      "ok": false,
+      "error": "git status failed in sandbox 730d439a-13c2-4a22-a9f2-e06d8c1bfe02: Error from server (NotFound): pods \"synth-sandbox-small-730d439a\" not found\n",
+      "expected": true
+    }
+  }
+}
+

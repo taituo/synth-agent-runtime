@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased — one fault matrix, six dependencies, four questions each
+
+- `docs/FAULT-MATRIX.md`: each dependency is removed in turn and the same four
+  questions (retried? data lost? human needed? side effect twice?) are answered
+  with an executed measurement, the discriminating quantity, and the committed
+  raw artifact under `docs/fault-matrix/`. Rows: Temporal server (persistent and
+  the deployed in-memory `7243`), Postgres, model gateway/provider, Kubernetes
+  API, sandbox pod, worker SIGKILL. Unknown cells are labelled UNKNOWN with the
+  reason (Postgres/API/sandbox `human needed` are not measured at workflow level;
+  Postgres has no production caller).
+- `scripts/fault-matrix.mjs` runs the matrix and shells out to the existing
+  fault proofs (`durable-restart-worker.ts`, `fault-rungs.ts`,
+  `retry-hint-live.ts`, `quota-exhausted-live.ts`, `effect-receipt-live.ts`),
+  with new probes only where none existed
+  (`integrations/temporal/fault-temporal-server.ts`,
+  `integrations/temporal/fault-gateway.ts`,
+  `integrations/temporal/fault-gateway-fatal.ts`,
+  `integrations/postgres/fault-postgres.ts`,
+  `integrations/kubernetes/fault-k8s-api.ts`,
+  `integrations/kubernetes/fault-sandbox-pod.ts`). Exit 0 all-pass, 1 fail,
+  2 skip — a skip is never a pass. Wired into `scripts/live-proofs.mjs` as the
+  `fault-matrix` proof with a 15-minute budget (live-proofs grew a per-proof
+  `timeoutMs`).
+- Findings recorded, not softened: the shared Temporal on `7243` was started
+  without `--db-filename`, so a restart loses every workflow
+  (`WorkflowNotFoundError`); with persistence a restart is transparent
+  (attempts `[1,2]`, status survived, result `recovered`). The k8s API outage
+  and the sandbox kill fail closed with no data written; the gateway retries
+  refused/502/hang/429 and does not retry 400; a permanent 4xx leaves the
+  workflow `failed` (a human is needed) while transient faults park and recover.
+- Node 22: root **291** (289 pass, 2 live skips); Temporal **105/105**; syntax
+  108 files / 0 diagnostics.
+
 ## Unreleased — egress is DNS-only (owner decision (a))
 
 - The generated sandbox NetworkPolicy is DNS-only: DNS (UDP/TCP 53 to kube-dns)

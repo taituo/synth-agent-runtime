@@ -1,0 +1,21 @@
+{
+  "fault": "sandbox-pod",
+  "namespace": "synth-audit-gvisor",
+  "control": {
+    "ok": true,
+    "stdout": "hello-from-memory"
+  },
+  "killed": {
+    "ok": false,
+    "error": "writeFile(seed.txt) failed: error: Internal error occurred: unable to upgrade connection: pod does not exist\n"
+  },
+  "inflightWriteSyncedBack": false,
+  "questions": {
+    "retried": false,
+    "dataLost": true,
+    "humanNeeded": null,
+    "sideEffectTwice": null
+  },
+  "ok": true
+}
+

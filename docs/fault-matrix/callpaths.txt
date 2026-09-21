@@ -1,0 +1,28 @@
+# Postgres call path (production callers of PostgresPersistence / openPostgresPersistence)
+
+$ grep -rn "PostgresPersistence\|openPostgresPersistence" src integrations --include=*.ts | grep -v /dist/ | grep -v node_modules | grep -v test/
+src/postgres/persistence.ts:26:export class PostgresPersistence implements DurabilityProvider, RuntimeStateStore, WorldStore {
+integrations/postgres/smoke.ts:1:import { openPostgresPersistence } from "./node-pg.js";
+integrations/postgres/smoke.ts:9:const opened = await openPostgresPersistence({ connectionString: url });
+integrations/postgres/fault-postgres.ts:12: *   human       -> no production caller of PostgresPersistence exists; the
+integrations/postgres/fault-postgres.ts:25:import { openPostgresPersistence } from "./node-pg.js";
+integrations/postgres/fault-postgres.ts:83:  const control = await openPostgresPersistence({ connectionString: url, pool: { connectionTimeoutMillis: 2_000 } });
+integrations/postgres/fault-postgres.ts:105:    const denied = await openPostgresPersistence({ connectionString: url, pool: { connectionTimeoutMillis: 2_000 } });
+integrations/postgres/fault-postgres.ts:124:  const restored = await openPostgresPersistence({ connectionString: url, pool: { connectionTimeoutMillis: 2_000 } });
+integrations/postgres/node-pg.ts:2:import { installPostgresSchema, PostgresDistributedControlStore, PostgresPersistence, type PgExecutor } from "../../src/index.js";
+integrations/postgres/node-pg.ts:4:export interface OpenPostgresPersistenceOptions {
+integrations/postgres/node-pg.ts:11:export async function openPostgresPersistence(options: OpenPostgresPersistenceOptions = {}) {
+integrations/postgres/node-pg.ts:20:    persistence: new PostgresPersistence(db),
+integrations/postgres/concurrency.ts:2:import { openPostgresPersistence } from "./node-pg.js";
+integrations/postgres/concurrency.ts:12:const opened = await Promise.all(Array.from({ length: workers }, () => openPostgresPersistence({ connectionString: url })));
+
+# 7243 Temporal server flags (in-memory: no --db-filename)
+$ tr "\\0" " " < /proc/2340016/cmdline
+temporal server start-dev --headless --port 7243 
+
+$ temporal server start-dev --help  # persistence note
+                                         Temporal state store. By
+                                         default, Workflow Executions are
+                                         lost when the server process dies.
+      --dynamic-config-value KEY=VALUE   Dynamic configuration value
+                                         using KEY=VALUE pairs. Keys must

@@ -66,6 +66,11 @@ const PROOFS = [
 
   { name: "postgres-concurrency", cwd: POSTGRES, runner: "tsx", script: "concurrency.ts", requires: "postgres" },
   { name: "postgres-smoke", cwd: POSTGRES, runner: "tsx", script: "smoke.ts", requires: "postgres" },
+
+  // The fault matrix is a superset of the fault proofs above (Temporal restart,
+  // provider faults, k8s API loss, sandbox kill, worker SIGKILL). It is slower
+  // than the rest, hence its own timeout.
+  { name: "fault-matrix", cwd: ".", runner: "node", script: "scripts/fault-matrix.mjs", requires: "temporal+k8s+gvisor", timeoutMs: 900_000 },
 ];
 
 function arg(name, fallback) {
@@ -141,7 +146,7 @@ function runProof(proof) {
     const child = spawn(bin, [proof.script], { cwd, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
     child.stdout.on("data", (chunk) => { output += chunk; });
     child.stderr.on("data", (chunk) => { output += chunk; });
-    const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, timeoutMs);
+    const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, proof.timeoutMs ?? timeoutMs);
     child.once("error", (error) => {
       clearTimeout(timer);
       resolvePromise({ proof, code: null, timedOut, durationMs: Date.now() - started, output: String(error) });

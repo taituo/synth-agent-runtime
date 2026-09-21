@@ -1,0 +1,24 @@
+{
+  "address": "127.0.0.1:7243",
+  "quotaHintMs": 7200000,
+  "parkedLastError": "QUOTA_EXHAUSTED:gateway returned HTTP 429: rate limited",
+  "quotaExhaustedLogSeen": true,
+  "quotaLogMeta": {
+    "sdkComponent": "workflow",
+    "taskQueue": "synth-quota-1789983832491",
+    "namespace": "default",
+    "workflowId": "agent/agt_quota_1789983835031",
+    "runId": "01a0c359-c3a3-7095-a073-9c0bf845866f",
+    "workflowType": "durableAgentWorkflow",
+    "agentId": "agt_quota_1789983835031",
+    "attempt": 1,
+    "backoffMs": 300,
+    "reason": "quota-exhausted",
+    "error": "QUOTA_EXHAUSTED:gateway returned HTTP 429: rate limited"
+  },
+  "finalStatus": "idle",
+  "finalLastError": null,
+  "waitedMs": 4238,
+  "ok": true
+}
+

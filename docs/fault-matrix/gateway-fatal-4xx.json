@@ -1,0 +1,15 @@
+{
+  "address": "127.0.0.1:7243",
+  "status": "failed",
+  "lastError": "gateway returned HTTP 400: bad request",
+  "activityCalls": 1,
+  "parked": false,
+  "questions": {
+    "retried": false,
+    "dataLost": null,
+    "humanNeeded": true,
+    "sideEffectTwice": false
+  },
+  "ok": true
+}
+

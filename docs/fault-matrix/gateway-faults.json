@@ -1,0 +1,55 @@
+{
+  "ok": true,
+  "fault": "gateway",
+  "retryConfig": {
+    "maxAttempts": 3,
+    "baseDelayMs": 250,
+    "maxDelayMs": 5000
+  },
+  "results": [
+    {
+      "scenario": "refused",
+      "error": "fetch failed",
+      "attempts": 3,
+      "providerCalls": 0,
+      "outcome": "errored",
+      "expected": "3 attempts (network error is retryable), then error",
+      "matched": true
+    },
+    {
+      "scenario": "http-502",
+      "attempts": 2,
+      "providerCalls": 1,
+      "outcome": "passed",
+      "expected": "turn recovers with attempts=2; provider served exactly 1",
+      "matched": true
+    },
+    {
+      "scenario": "hang",
+      "attempts": 2,
+      "providerCalls": 1,
+      "outcome": "passed",
+      "expected": "turn times out at ~1.5s, retries, succeeds; provider served 1",
+      "matched": true
+    },
+    {
+      "scenario": "http-429",
+      "attempts": 3,
+      "providerCalls": 1,
+      "outcome": "passed",
+      "expected": "turn recovers with attempts=3; provider served 1",
+      "matched": true
+    },
+    {
+      "scenario": "http-400",
+      "error": "gateway returned HTTP 400: scripted 400",
+      "statusCode": 400,
+      "attempts": 1,
+      "providerCalls": 1,
+      "outcome": "errored",
+      "expected": "exactly 1 attempt and status 400 (not retried)",
+      "matched": true
+    }
+  ]
+}
+

@@ -1,0 +1,33 @@
+{
+  "fault": "kubernetes-api",
+  "namespace": "synth-audit-gvisor",
+  "control": {
+    "reachable": true,
+    "exitCode": 0,
+    "stdout": "namespace/synth-audit-gvisor",
+    "stderr": ""
+  },
+  "attempts": [
+    {
+      "ms": 116,
+      "ok": false,
+      "error": "kubectl apply failed: error: error validating \"STDIN\": error validating data: failed to download openapi: Get \"https://127.0.0.1:59998/openapi/v2?timeout=32s\": dial tcp 127.0.0.1:59998: connect: connection refused; if you choose to ignore these errors, turn validation off with --validate=false"
+    },
+    {
+      "ms": 0,
+      "ok": false,
+      "error": "kubectl apply failed: error: error validating \"STDIN\": error validating data: failed to download openapi: Get \"https://127.0.0.1:59998/openapi/v2?timeout=32s\": dial tcp 127.0.0.1:59998: connect: connection refused; if you choose to ignore these errors, turn validation off with --validate=false"
+    }
+  ],
+  "podsBeforeFault": 3,
+  "podsAfterFault": 3,
+  "workspaceSentinelIntact": true,
+  "questions": {
+    "retried": false,
+    "dataLost": false,
+    "humanNeeded": null,
+    "sideEffectTwice": false
+  },
+  "ok": true
+}
+

@@ -1,0 +1,23 @@
+{
+  "fault": {
+    "failedClosed": true,
+    "error": "connect ECONNREFUSED 127.0.0.1:5432",
+    "ms": 1
+  },
+  "url": "postgres://synth:synth@127.0.0.1:5432/synth",
+  "namespace": "synth-audit-pg",
+  "control": {
+    "wroteAndRead": true,
+    "rowsForId": 1
+  },
+  "portClosed": true,
+  "dataSurvivedOutage": true,
+  "questions": {
+    "retried": false,
+    "dataLost": false,
+    "humanNeeded": null,
+    "sideEffectTwice": false
+  },
+  "ok": true
+}
+

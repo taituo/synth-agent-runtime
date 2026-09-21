@@ -175,7 +175,7 @@ npm test --prefix integrations/temporal  (durable workflow + turn body + graph h
 105 passed / 0 failed
 
 npm run integrations:syntax
-102 TypeScript integration files / 0 syntax diagnostics
+108 TypeScript integration files / 0 syntax diagnostics
 3 shell files / syntax OK
 
 integrations/opencode-http-gateway: npm test
