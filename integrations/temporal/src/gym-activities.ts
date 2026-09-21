@@ -33,7 +33,7 @@ import {
   type GatewayTurnOutcome,
   type GymScore,
 } from "../../../src/index.js";
-import { getPersistentSandboxRunner, hasPersistentSandboxRunner } from "../../gym/sandbox.js";
+import { getPersistentSandboxRunner, hasPersistentSandboxRunner, releasePersistentSandboxRunner } from "../../gym/sandbox.js";
 import { buildToEffect } from "./gateway-run-turn.js";
 import type { DurableToolSpec } from "./contracts.js";
 import type {
@@ -291,6 +291,9 @@ export function createGymActivities(): GymActivities {
     } else {
       score = await isolatedScoreGymPatch({ patchText: input.patch, baseRepoDir: input.prepared.baseRepoDir, cases });
     }
+    // The persistent pod outlives the turn loop; the attempt is over, so
+    // destroy it rather than leak it for the worker's lifetime.
+    await releasePersistentSandboxRunner(input.prepared.checkpointKey);
     return {
       arm: "durable",
       isolation: binding.isolation,

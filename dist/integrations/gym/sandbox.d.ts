@@ -1,4 +1,4 @@
-import { type Effect, type EffectResult, type EffectRunner } from "../../src/index.js";
+import { type Effect, type EffectResult, type KubernetesResourceClass, type SandboxBackend, type EffectRunner } from "../../src/index.js";
 export interface BuildSandboxRunnerOptions {
     /** Materialized bugged checkout (its tracked tree is materialized into the Pod). */
     repoDir: string;
@@ -13,18 +13,24 @@ export interface BuildSandboxRunnerOptions {
     kubectlContext?: string;
     runtimeClassName?: string;
     agentId?: string;
+    /** Test seam: a fake "pod" backend instead of kubectl. */
+    backend?: SandboxBackend;
+    /** Test seam: override the resource class. */
+    resourceClass?: KubernetesResourceClass;
 }
 export interface SandboxRunner {
     runner: EffectRunner;
     /**
      * Execute an execution-rung effect through the broker (the same path the
-     * runtime turn's `executeEffect` uses). `process.exec` escalates to the pod.
+     * runtime turn's `executeEffect` uses). Every workspace effect and
+     * `process.exec` runs in the pod.
      */
     executeEffect(effect: Effect, minFidelity?: number): Promise<EffectResult>;
     close(): Promise<void>;
 }
 export declare function hasPersistentSandboxRunner(key: string): boolean;
-export declare function releasePersistentSandboxRunner(key: string): void;
+/** Close and forget the runner for `key` (destroys its pod). */
+export declare function releasePersistentSandboxRunner(key: string): Promise<void>;
 /** Reuse the runner for `key` if it exists, else build and cache it. */
 export declare function getPersistentSandboxRunner(options: BuildSandboxRunnerOptions & {
     key: string;

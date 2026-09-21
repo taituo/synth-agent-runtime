@@ -3,9 +3,9 @@ import type { AgentId, WorkspaceId } from "../../../src/core/ids.js";
 import type { AgentMessage } from "../../../src/core/types.js";
 import { ExecutionBroker } from "../../../src/execution/broker.js";
 import { EXECUTOR_IMAGE } from "../../../src/execution/executor-image.js";
-import { KubernetesExecutor } from "../../../src/execution/kubernetes/executor.js";
 import { KubectlSandboxBackend } from "../../../src/execution/kubernetes/kubectl-backend.js";
 import { WarmSandboxPool } from "../../../src/execution/kubernetes/pool.js";
+import { SandboxWorkspaceExecutor } from "../../../src/execution/kubernetes/sandbox-workspace.js";
 import { DEFAULT_KUBERNETES_RESOURCE_CLASSES } from "../../../src/execution/resource-class.js";
 import { SyntheticExecutor } from "../../../src/execution/synthetic.js";
 import type { Effect, EffectResult } from "../../../src/execution/types.js";
@@ -88,6 +88,18 @@ export interface GatewayTurnRecord {
  */
 export interface TurnRung {
   executeEffect(effect: Effect, minFidelity?: number): Promise<EffectResult>;
+  /**
+   * True when every effect (including workspace.read/write/list) executes inside
+   * the trust boundary. The sandbox rung is isolated; the synthetic rung is not.
+   */
+  isolated?: boolean;
+  /** Sync the rung's workspace back to its checkpoint cache. */
+  checkpoint?(): Promise<void>;
+  /**
+   * True when the rung holds a resource that must outlive one turn (a persistent
+   * sandbox pod). `runTurn` then checkpoints instead of closing after each turn.
+   */
+  persistent?: boolean;
   close?(): Promise<void>;
 }
 
@@ -274,7 +286,21 @@ function seedWorkspace(workspaceId: WorkspaceId, files?: Record<string, string>)
   return workspace;
 }
 
+// A sandbox rung holds a persistent pod for the workspace, so it outlives one
+// turn; cache it per agent for the worker process's lifetime.
+const sandboxRungs = new Map<string, TurnRung>();
+
+/** Destroy every cached sandbox rung (worker shutdown, or between tests). */
+export async function closeSandboxRungs(): Promise<void> {
+  for (const rung of [...sandboxRungs.values()]) await rung.close?.().catch(() => {});
+  sandboxRungs.clear();
+}
+
 async function sandboxRung(config: Exclude<DurableRungConfig, { kind: "none" }> & { kind: "sandbox" }, input: RunTurnInput): Promise<TurnRung> {
+  const key = `temporal:${input.agentId}`;
+  const cached = sandboxRungs.get(key);
+  if (cached) return cached;
+
   const image = config.image ?? EXECUTOR_IMAGE;
   const classes = DEFAULT_KUBERNETES_RESOURCE_CLASSES
     .filter((entry) => entry.id !== "project-cell")
@@ -288,12 +314,13 @@ async function sandboxRung(config: Exclude<DurableRungConfig, { kind: "none" }> 
   const workspaceId = `temporal:${input.agentId}` as WorkspaceId;
   const workspace = seedWorkspace(workspaceId, config.files);
   const workspaces = new Map<WorkspaceId, MemoryWorkspace>([[workspaceId, workspace]]);
-  const executors = [
-    new SyntheticExecutor(workspaces),
-    ...classes.map((resourceClass) => new KubernetesExecutor({ resourceClass, backend, workspaces, pool })),
-  ];
+  // ONE RUNG: no SyntheticExecutor. workspace.read/write/replace/list and
+  // process.exec all execute in the pod; `workspace` is only the seed cache.
+  const executors = classes.map((resourceClass) => new SandboxWorkspaceExecutor({ resourceClass, backend, workspaces, pool }));
   const broker = new ExecutionBroker(executors);
-  return {
+  const rung: TurnRung = {
+    isolated: true,
+    persistent: true,
     executeEffect: (effect, minFidelity) => broker.execute(
       effect,
       {
@@ -303,8 +330,19 @@ async function sandboxRung(config: Exclude<DurableRungConfig, { kind: "none" }> 
       },
       minFidelity,
     ),
-    close: () => pool.close(),
+    checkpoint: async () => {
+      for (const executor of executors) {
+        if (executor.hasSandbox(workspaceId)) { await executor.checkpoint(workspaceId); return; }
+      }
+    },
+    close: async () => {
+      sandboxRungs.delete(key);
+      for (const executor of executors) await executor.close();
+      await pool.close();
+    },
   };
+  sandboxRungs.set(key, rung);
+  return rung;
 }
 
 /** Default rung factory: serializable config -> live synthetic/sandbox rung. */
@@ -315,6 +353,8 @@ export const defaultRungFactory: RungFactory = (config, input) => {
     const workspaces = new Map<WorkspaceId, MemoryWorkspace>([[workspaceId, workspace]]);
     const broker = new ExecutionBroker([new SyntheticExecutor(workspaces)]);
     return {
+      // Explicitly unisolated: workspace effects run in worker RAM.
+      isolated: false,
       executeEffect: (effect, minFidelity) => broker.execute(effect, { agentId: input.agentId as AgentId, workspaceId }, minFidelity),
     };
   }
@@ -373,7 +413,10 @@ export function createGatewayRunTurn(options: GatewayRunTurnOptions): AgentActiv
     } catch (error) {
       throw toTemporalError(error);
     } finally {
-      await rung?.close?.();
+      // A persistent rung (sandbox pod) outlives the turn: checkpoint it so the
+      // cache reflects the pod, but do not destroy it. A one-shot rung closes.
+      if (rung?.persistent) await rung.checkpoint?.().catch(() => {});
+      else await rung?.close?.();
     }
 
     const classifications = toolMode ? [] : parseClassifications(outcome.content, input.messages.length);

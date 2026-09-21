@@ -40,6 +40,7 @@ export * from "./execution/kubernetes/kubectl-backend.js";
 export * from "./execution/kubernetes/pool.js";
 export * from "./execution/kubernetes/workspace-sync.js";
 export * from "./execution/kubernetes/executor.js";
+export * from "./execution/kubernetes/sandbox-workspace.js";
 export * from "./execution/kubernetes/project-cell.js";
 export * from "./workspace/transaction.js";
 export * from "./runtime/transactional-turn.js";

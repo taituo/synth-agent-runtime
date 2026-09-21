@@ -1,25 +1,23 @@
 /**
  * Build the sandbox-backed `EffectRunner` for the gym's `runner=sandbox` mode.
  *
- * The plain arm and the durable arm must differ in exactly one variable —
- * durability — so when the sandbox mode is selected, both drive the same tools
- * over a gVisor/Kubernetes sandbox. NOTE: the recorded fault matrix did NOT use
- * this runner; every committed row ran `runner=local` (host, no isolation) for
- * both arms. This path is the isolated option, proven live by
- * `sandbox-live.ts`; it is not what produced the matrix numbers.
+ * ONE RUNG: all effects — `workspace.read/write/replace/list` AND
+ * `process.exec` — execute inside the runtime's persistent gVisor Pod via
+ * `SandboxWorkspaceExecutor`. There is deliberately NO `SyntheticExecutor` on
+ * this path: the old parallel broker ran workspace effects in worker RAM and
+ * only escalated `process.exec`, so the model-authored workspace was not
+ * boundary-enforced. The `MemoryWorkspace` here is only the seed/checkpoint
+ * cache; the pod's filesystem is the medium. (The synthetic/cheap rung and the
+ * labelled `local` control arm still exist elsewhere, but are never the medium
+ * for a scored sandboxed run.)
  *
- * This mirrors `integrations/kubernetes/mixed-chain.ts`: a `MemoryWorkspace`
- * backed by a local checkout, a `SyntheticExecutor` for workspace effects and a
- * `KubernetesExecutor` for `process.exec`, fronted by an `ExecutionBroker` with
- * per-effect receipts.
- *
- * The `LocalDirSource` is a read-only `TreeSource` over the materialized bugged
- * checkout; it is what the synchronizer materializes into the Pod and commits as
+ * A `LocalDirSource` is a read-only `TreeSource` over the materialized bugged
+ * checkout; the synchronizer materializes it into the Pod once and commits it as
  * the git baseline harvest diffs against.
  */
 import { lstat, readFile, readdir } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
-import { DEFAULT_KUBERNETES_RESOURCE_CLASSES, ExecutionBroker, KubernetesExecutor, KubectlSandboxBackend, LocalRuntimeStateStore, MemoryWorkspace, SyntheticExecutor, brokerEffectRunner, } from "../../src/index.js";
+import { DEFAULT_KUBERNETES_RESOURCE_CLASSES, ExecutionBroker, KubectlSandboxBackend, LocalRuntimeStateStore, MemoryWorkspace, SandboxWorkspaceExecutor, brokerEffectRunner, } from "../../src/index.js";
 const SKIP_DIRS = new Set([".git", "node_modules"]);
 class LocalDirSource {
     name;
@@ -77,18 +75,20 @@ class LocalDirSource {
 }
 /**
  * Persistent runners, keyed by attempt (agent + checkpoint key). A turn-per-
- * activity loop runs each turn in a fresh activity, so the MemoryWorkspace that
- * holds the agent's edits must outlive one activity: this map is that
- * continuity for the lifetime of the worker process. Across a worker restart the
- * map is cold and the caller restores from the attempt checkpoint (see
- * `gym-activities.ts`); a durable workspace store is the synth-1 dependency.
+ * activity loop runs each turn in a fresh activity, so the pod that holds the
+ * agent's edits must outlive one activity: this map is that continuity for the
+ * lifetime of the worker process. Across a worker restart the map is cold and
+ * the caller restores from the attempt checkpoint (see `gym-activities.ts`).
  */
 const persistentRunners = new Map();
 export function hasPersistentSandboxRunner(key) {
     return persistentRunners.has(key);
 }
-export function releasePersistentSandboxRunner(key) {
+/** Close and forget the runner for `key` (destroys its pod). */
+export async function releasePersistentSandboxRunner(key) {
+    const runner = persistentRunners.get(key);
     persistentRunners.delete(key);
+    await runner?.close().catch(() => { });
 }
 /** Reuse the runner for `key` if it exists, else build and cache it. */
 export async function getPersistentSandboxRunner(options) {
@@ -101,26 +101,27 @@ export async function getPersistentSandboxRunner(options) {
 }
 /** Construct the broker-backed runner. Throws if the image is missing. */
 export async function buildSandboxRunner(options) {
-    if (!options.image)
+    if (!options.image && !options.resourceClass)
         throw new Error("buildSandboxRunner requires a node+git image pinned by digest (the Pod runs run_visible_test)");
-    const base = DEFAULT_KUBERNETES_RESOURCE_CLASSES.find((entry) => entry.id === "sandbox-small");
+    const base = options.resourceClass ?? DEFAULT_KUBERNETES_RESOURCE_CLASSES.find((entry) => entry.id === "sandbox-small");
     if (!base)
         throw new Error("sandbox-small resource class missing");
     const resourceClass = {
         ...base,
-        image: options.image,
+        ...(options.image ? { image: options.image } : {}),
         ...(options.runtimeClassName ? { runtimeClassName: options.runtimeClassName } : {}),
         warmPool: undefined,
     };
-    const backend = new KubectlSandboxBackend({
+    const backend = options.backend ?? new KubectlSandboxBackend({
         ...(options.namespace ? { namespace: options.namespace } : {}),
         ...(options.kubectlContext ? { context: options.kubectlContext } : {}),
     });
     const workspace = new MemoryWorkspace({ source: new LocalDirSource(options.repoDir) });
     const workspaces = new Map([[workspace.id, workspace]]);
-    const synthetic = new SyntheticExecutor(workspaces);
-    const real = new KubernetesExecutor({ resourceClass, backend, workspaces });
-    const broker = new ExecutionBroker([synthetic, real], new LocalRuntimeStateStore());
+    // The one rung: no SyntheticExecutor. The pod's filesystem is the medium for
+    // workspace effects as well as process.exec.
+    const executor = new SandboxWorkspaceExecutor({ resourceClass, backend, workspaces });
+    const broker = new ExecutionBroker([executor], new LocalRuntimeStateStore());
     const context = {
         agentId: (options.agentId ?? "gym-agent"),
         workspaceId: workspace.id,
@@ -130,8 +131,7 @@ export async function buildSandboxRunner(options) {
     // `runGymAttempt` passes host absolute paths (`task.repoDir`) as `cwd` for its
     // git commands (harvest, checkpoint restore). Inside the pod the workspace
     // root IS the repo, so translate that path to the workspace root; any path
-    // under it becomes workspace-relative. Without this the pod runs
-    // `cd /workspace/tmp/<host path>` and every git command fails.
+    // under it becomes workspace-relative.
     const translatedCwd = (cwd) => {
         if (cwd === undefined)
             return undefined;
@@ -153,7 +153,7 @@ export async function buildSandboxRunner(options) {
         runner,
         executeEffect: (effect, minFidelity) => broker.execute(effect, context, minFidelity),
         async close() {
-            // Each broker exec is one-shot: the KubernetesExecutor destroys its Pod.
+            await executor.close();
         },
     };
 }

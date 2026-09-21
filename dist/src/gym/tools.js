@@ -57,7 +57,13 @@ export function brokerEffectRunner(broker, context, id = "broker") {
             const result = await execEffect("read", { id: nextId("read"), kind: "workspace.read", path });
             if (!result.ok)
                 throw new Error(result.error ?? `read failed: ${path}`);
-            return String(result.output);
+            // A pod-backed executor returns bytes (a plain Uint8Array). `String(bytes)`
+            // is comma-joined numbers, not text; decode explicitly. A host/synthetic
+            // read returns a Node Buffer, whose toString is already utf8.
+            const output = result.output;
+            if (output instanceof Uint8Array)
+                return new TextDecoder().decode(output);
+            return String(output);
         },
         async write(path, content) {
             const result = await execEffect("write", { id: nextId("write"), kind: "workspace.write", path, content });
