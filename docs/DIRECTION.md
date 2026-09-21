@@ -28,8 +28,14 @@ must never come from the durability layer.
 
 Note that a correct multi-turn loop already exists in the gym path: `gymAttemptWorkflow`
 iterates turns in the workflow, one model call per durable activity, carrying the transcript
-across them, parking on transient failure. That shape is right. The problem is that the
-generic path has a different, thinner shape, and the thin one carries the name "agent".
+across them, parking on transient failure. That shape is right *for the gym*. The problem is
+that the generic path has a different, thinner shape, and the thin one carries the name "agent".
+
+> **The gym loop is correct for the gym, and is not a template for harness adapters.** The gym
+> is our own bounded benchmark runner — `maxTurns`, a deadline, a score — so "one model call per
+> durable activity" suits it. A real harness owns its own loop and may run any number of model
+> and tool iterations between Synth session checkpoints. Do not derive harness session semantics
+> from the gym's activity granularity: that would be this same layering inversion a third time.
 
 ## The layers
 
@@ -140,11 +146,28 @@ single run. Running it reveals what is actually missing; designing does not.
 > engine would be too narrow, and the reference harness would once again be dictating the
 > platform abstraction.
 >
-> So: read at least one real harness's API first and design the seam to fit it, even if the
-> adapter is not implemented until Phase 3. Then have the existing engine implement the same
-> interfaces — as a *second* implementation that shows the seam is cheap to satisfy, never as
-> the source of its design. Two implementations, one of them real, is the check that the
-> abstraction is about harnesses in general rather than about the one we happen to have.
+> So: read a real harness's API first and design the seam to fit it. Then have the existing
+> engine implement the same interfaces — as a *second* implementation that shows the seam is
+> cheap to satisfy, never as the source of its design.
+>
+> **Phase 2 exit criteria**, all four:
+> 1. a real harness's API has been read and the seam designed against it;
+> 2. `ExecutionEnvironment` and `HarnessSession` are defined;
+> 3. `GatewayAgentEngine` implements them;
+> 4. a **compile-level adapter skeleton** exists for the real harness and type-checks against
+>    that harness's real types.
+>
+> Criterion 4 is what makes this a check rather than a claim. Reading an API and then writing
+> an interface the thin engine satisfies leaves exactly one implementation, which is the
+> situation this guard exists to prevent. No real coding task has to run yet — that is Phase 3.
+> The skeleton only has to compile against types we did not write.
+>
+> **Which harness.** Pi is the reality check for Phase 2, consistent with it being the Level 3
+> candidate. Read the OpenCode SDK alongside it as a cross-check — *does this seam look
+> immediately stupid in an SDK-shaped world?* — without building an adapter for it. A seam that
+> looks reasonable in both a small native integration and an SDK world is shaped like Synth
+> rather than like one harness. Which harness gets the first real adapter stays a Phase 3
+> decision.
 
 **Phase 3 — One real adapter.** One harness, not three levels at once. The measurement is a
 real coding task completed in the sandbox by a harness Synth did not write.
