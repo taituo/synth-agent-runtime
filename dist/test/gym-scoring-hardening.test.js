@@ -49,16 +49,24 @@ async function makeRepo(parent, lib = BUGGY) {
     await git(repo, "commit", "-q", "-m", "base");
     return repo;
 }
-test("SYNTH_REQUIRE_ISOLATION=1 refuses the host worker instead of running agent code", async () => {
+test("SYNTH_REQUIRE_ISOLATION=1 refuses the host worker, and the golden fix passes when it is off (A/B/C)", async () => {
     const parent = await mkdtemp(join(tmpdir(), "gym-iso-hard-"));
     const previous = process.env.SYNTH_REQUIRE_ISOLATION;
-    process.env.SYNTH_REQUIRE_ISOLATION = "1";
     try {
         const repo = await makeRepo(parent);
+        // A: with the flag set, the host worker is refused, not run.
+        process.env.SYNTH_REQUIRE_ISOLATION = "1";
         const score = await isolatedScoreGymPatch({ patchText: "", baseRepoDir: repo, cases: CASES });
         assert.equal(score.outcome, "errored");
         assert.match(score.detail ?? "", /SYNTH_REQUIRE_ISOLATION=1/);
         assert.equal(score.cases.length, 0);
+        // C: with the flag off, the SAME scorer runs the legitimate fix and passes.
+        // The refusal is a gate, not a broken scorer.
+        delete process.env.SYNTH_REQUIRE_ISOLATION;
+        const fixRepo = await makeRepo(join(parent, "fix"));
+        const golden = await patchFor(fixRepo, FIXED);
+        const passed = await isolatedScoreGymPatch({ patchText: golden, baseRepoDir: fixRepo, cases: CASES });
+        assert.equal(passed.outcome, "passed", JSON.stringify(passed.cases));
     }
     finally {
         if (previous === undefined)

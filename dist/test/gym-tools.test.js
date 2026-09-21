@@ -53,19 +53,24 @@ test("write_file refuses the visible test and runner config", async () => {
         await rm(parent, { recursive: true, force: true });
     }
 });
-test("read_file and list_files work, and path escapes are refused", async () => {
+test("read_file and list_files work, and path escapes are refused (A/B/C)", async () => {
     const parent = await mkdtemp(join(tmpdir(), "gym-tools-"));
     try {
         const repo = await makeRepo(parent);
         const tools = createGymTools(localEffectRunner(repo), { visibleTestPath: "test/visible.test.mjs" });
+        // C: the legitimate in-workspace relative path is ALLOWED.
         const read = await tools.execute({ name: "read_file", arguments: { path: "lib.mjs" } });
         assert.equal(read.ok, true);
         assert.match(read.observation, /slugify/);
         const list = await tools.execute({ name: "list_files", arguments: { path: "test" } });
         assert.equal(list.ok, true);
         assert.ok(list.observation.includes("visible.test.mjs"));
-        const escape = await tools.execute({ name: "read_file", arguments: { path: "../../../../etc/passwd" } });
-        assert.equal(escape.ok, false, "an escaping path must not read outside the workspace");
+        // A: `..` traversal is refused.
+        const traversal = await tools.execute({ name: "read_file", arguments: { path: "../../../../etc/passwd" } });
+        assert.equal(traversal.ok, false, "a traversing path must not read outside the workspace");
+        // B: an absolute path is refused, not silently rewritten inside the workspace.
+        const absolute = await tools.execute({ name: "read_file", arguments: { path: "/etc/passwd" } });
+        assert.equal(absolute.ok, false, "an absolute path must not read outside the workspace");
     }
     finally {
         await rm(parent, { recursive: true, force: true });

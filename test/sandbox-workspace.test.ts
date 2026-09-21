@@ -240,3 +240,31 @@ test("workspace.replace tolerates wrong leading indentation (the live durable fa
     await executor.close();
   }
 });
+
+test("workspace path escapes are refused in the pod, and an in-workspace path is allowed (A/B/C)", async () => {
+  const backend = new FakeSandboxBackend();
+  const workspaceId = "ws_paths" as WorkspaceId;
+  const cache = new MemoryWorkspace({ id: workspaceId });
+  const executor = new SandboxWorkspaceExecutor({ resourceClass, backend, workspaces: new Map([[workspaceId, cache]]) });
+  try {
+    const ctx = context(workspaceId);
+
+    // C: the legitimate in-workspace relative path is ALLOWED (the control).
+    await executor.execute({ id: "w", kind: "workspace.write", path: "src/a.txt", content: "hi" }, ctx);
+    const ok = await executor.execute({ id: "r", kind: "workspace.read", path: "src/a.txt" }, ctx);
+    assert.equal(ok.ok, true, ok.error);
+    assert.equal(new TextDecoder().decode(ok.output as Uint8Array), "hi");
+
+    // A: `..` traversal is refused with the shared error.
+    const traversal = await executor.execute({ id: "t", kind: "workspace.read", path: "../secret" }, ctx);
+    assert.equal(traversal.ok, false);
+    assert.match(traversal.error ?? "", /WORKSPACE_PATH_ESCAPES/);
+
+    // B: an absolute path is refused, not silently rewritten into the pod root.
+    const absolute = await executor.execute({ id: "a", kind: "workspace.read", path: "/etc/passwd" }, ctx);
+    assert.equal(absolute.ok, false);
+    assert.match(absolute.error ?? "", /WORKSPACE_PATH_ESCAPES/);
+  } finally {
+    await executor.close();
+  }
+});
