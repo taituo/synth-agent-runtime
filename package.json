@@ -21,6 +21,7 @@
     "live:lane-gateway": "integrations/temporal/node_modules/.bin/tsx scripts/lane-gateway-live.ts",
     "gym:dry-run": "integrations/temporal/node_modules/.bin/tsx integrations/gym/run-gym.ts --dry-run",
     "gym:run": "integrations/temporal/node_modules/.bin/tsx integrations/gym/run-gym.ts",
+    "gym:synthetic": "integrations/temporal/node_modules/.bin/tsx integrations/gym/synthetic-rung-compare.ts",
     "live:proof": "node scripts/live-proof.mjs",
     "live:proofs": "node scripts/live-proofs.mjs"
   },

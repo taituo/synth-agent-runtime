@@ -40,6 +40,7 @@ shape. See `docs/TEMPORAL.md` ("One worker entry, N replicas").
 | `integrations/gym/run-gym.ts` plain arm | the same task with no runtime | `role: "control"`, `isolation`; `assertScoredRunnerAllowed` refuses `runner:"local"` |
 | `integrations/gym/run-gym.ts` `--dry-run` | simulates durability with a local retry, drives `localEffectRunner` | `role: "control"`, `isolation: "unisolated"`, top-level `unisolated: true` |
 | `integrations/gym/p2-faults.ts` plain arm | fault-matrix comparison arm (child process) | `role: "control"`, `isolation`; `runner:"local"` refused (`GymUnisolatedScoredRun`) |
+| `integrations/gym/synthetic-rung-compare.ts` | the same task/harness on the synthetic rung (worker RAM, no exec) | `role: "control"`, `rung: "synthetic"`, `isolation: "unisolated"`; cannot score (harvest escalates) |
 | `src/gym/attempt.ts` (`runGymAttempt`) | the shared turn loop; in-process only when a **plain/dry** arm calls it | inherits the arm's label; the durable arm calls it inside a Temporal activity |
 | `src/gym/turn.ts` (`createGatewayGymTurn`) | a caller of the shared body for the plain arm | inherits the arm's label |
 

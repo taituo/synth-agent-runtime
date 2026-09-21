@@ -41,7 +41,7 @@ import {
 
 const SKIP_DIRS = new Set([".git", "node_modules"]);
 
-class LocalDirSource implements TreeSource {
+export class LocalDirSource implements TreeSource {
   readonly name: string;
   readonly #root: string;
 
