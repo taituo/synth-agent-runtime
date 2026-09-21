@@ -10,6 +10,7 @@
 import { spawn } from "node:child_process";
 import { mkdir as fsMkdir, readFile as fsReadFile, readdir as fsReaddir, writeFile as fsWriteFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { replaceInText } from "../execution/text-replace.js";
 import { PROTECTED_PATTERNS } from "./scoring.js";
 /** Reject absolute paths and `..` escapes; return the path used on disk. */
 function resolveWithin(root, path) {
@@ -143,10 +144,10 @@ export const GYM_TOOL_DEFINITIONS = [
     },
     {
         name: "replace_in_file",
-        description: "Replace one exact substring in a source file. The old text must occur exactly once.",
+        description: "Replace one substring in a source file. The old text must occur exactly once; if exact matching fails, leading indentation is ignored and the replacement is re-indented to the file.",
         parameters: {
             path: { type: "string", description: "Repo-relative file path.", required: true },
-            old_text: { type: "string", description: "Exact text to replace (must be unique in the file).", required: true },
+            old_text: { type: "string", description: "Text to replace (must be unique; leading indentation may differ from the file).", required: true },
             new_text: { type: "string", description: "Replacement text.", required: true },
         },
     },
@@ -220,11 +221,11 @@ export function createGymTools(runner, options) {
                         return { name: call.name, ok: false, blocked: true, observation: `refused: ${path} is read-only (test/runner config)` };
                     }
                     const content = await runner.read(path);
-                    const count = content.split(oldText).length - 1;
-                    if (count !== 1) {
-                        return { name: call.name, ok: false, observation: `old_text occurs ${count} times in ${path}; it must occur exactly once` };
+                    const result = replaceInText(content, oldText, newText);
+                    if (!result.ok) {
+                        return { name: call.name, ok: false, observation: `old_text occurs ${result.occurrences} times in ${path}; it must occur exactly once` };
                     }
-                    await runner.write(path, content.replace(oldText, newText));
+                    await runner.write(path, result.content);
                     return { name: call.name, ok: true, observation: `replaced text in ${path}` };
                 }
                 case "run_visible_test": {

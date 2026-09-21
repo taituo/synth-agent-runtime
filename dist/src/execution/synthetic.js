@@ -1,4 +1,5 @@
 import { normalizeRelative } from "../workspace/source.js";
+import { replaceInText } from "./text-replace.js";
 import { WORKSPACE_IS_DIRECTORY, WORKSPACE_NOT_DIRECTORY, WORKSPACE_NOT_FOUND, WORKSPACE_PATH_ESCAPES, ancestorPaths, escapesWorkspace, workspaceError, } from "./workspace-errors.js";
 const decoder = new TextDecoder();
 /** Lowest-fidelity executor: deterministic workspace operations only. */
@@ -74,11 +75,11 @@ export class SyntheticExecutor {
                     return { ok: false, error: workspaceError(WORKSPACE_IS_DIRECTORY, p) };
                 const bytes = (await workspace.read(p)) ?? new Uint8Array();
                 const current = decoder.decode(bytes);
-                const occurrences = effect.oldText.length === 0 ? 0 : current.split(effect.oldText).length - 1;
-                if (occurrences !== 1) {
-                    return { ok: false, error: `old_text occurs ${occurrences} times in ${p}; it must occur exactly once` };
+                const result = replaceInText(current, effect.oldText, effect.newText);
+                if (!result.ok) {
+                    return { ok: false, error: `old_text occurs ${result.occurrences} times in ${p}; it must occur exactly once` };
                 }
-                workspace.write(p, current.replace(effect.oldText, effect.newText));
+                workspace.write(p, result.content);
                 return { ok: true };
             }
             case "workspace.delete": {

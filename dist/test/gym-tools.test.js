@@ -102,6 +102,25 @@ test("replace_in_file makes a targeted edit and refuses a non-unique or protecte
         await rm(parent, { recursive: true, force: true });
     }
 });
+test("replace_in_file tolerates wrong leading indentation instead of losing the edit", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "gym-tools-"));
+    try {
+        const repo = await makeRepo(parent);
+        const tabbed = ["export function f() {", "\t\t\t\treturn g(hexDigits);", "\t\t\t}"].join("\n");
+        await writeFile(join(repo, "lib.mjs"), tabbed);
+        const tools = createGymTools(localEffectRunner(repo), { visibleTestPath: "test/visible.test.mjs" });
+        // The model's old_text has two tabs; the file has four.
+        const edit = await tools.execute({
+            name: "replace_in_file",
+            arguments: { path: "lib.mjs", old_text: "\t\treturn g(hexDigits);", new_text: "\t\treturn g(hexDigits, 16);" },
+        });
+        assert.equal(edit.ok, true, edit.observation);
+        assert.equal(await readFile(join(repo, "lib.mjs"), "utf8"), ["export function f() {", "\t\t\t\treturn g(hexDigits, 16);", "\t\t\t}"].join("\n"), "the replacement must be re-indented to the file");
+    }
+    finally {
+        await rm(parent, { recursive: true, force: true });
+    }
+});
 test("the tool set and system prompt are fixed for both arms", () => {
     assert.deepEqual(GYM_TOOL_DEFINITIONS.map((tool) => tool.name), ["list_files", "read_file", "write_file", "replace_in_file", "run_visible_test", "finish"]);
     const prompt = buildGymSystemPrompt("test/visible.test.mjs");

@@ -327,6 +327,7 @@ async function runDurableWorkflow(
     modelSubstituted: output.modelSubstituted,
     wallTimeMs: output.wallTimeMs,
     callCount: output.callCount,
+    ...(output.turns !== undefined ? { turns: output.turns } : {}),
     protectedPathsTouched: output.protectedPathsTouched,
     patchBytes: output.patchBytes ?? 0,
     ...(output.detail ? { detail: output.detail } : {}),

@@ -1,5 +1,6 @@
 import { decodeWorkspaceDiff } from "../../workspace/memory-workspace.js";
 import { normalizeRelative } from "../../workspace/source.js";
+import { replaceInText } from "../text-replace.js";
 import { WORKSPACE_IS_DIRECTORY, WORKSPACE_NOT_FOUND, WORKSPACE_NOT_DIRECTORY, WORKSPACE_PATH_ESCAPES, escapesWorkspace, workspaceError } from "../workspace-errors.js";
 import { WorkspaceSynchronizer } from "./workspace-sync.js";
 const WORKSPACE_EFFECTS = new Set(["workspace.read", "workspace.write", "workspace.replace", "workspace.list", "workspace.delete"]);
@@ -92,11 +93,11 @@ export class SandboxWorkspaceExecutor {
                     if (kind === "directory")
                         return { ok: false, error: workspaceError(WORKSPACE_IS_DIRECTORY, path) };
                     const current = new TextDecoder().decode(await this.#backend.readFile(sandbox, path));
-                    const occurrences = effect.oldText.length === 0 ? 0 : current.split(effect.oldText).length - 1;
-                    if (occurrences !== 1) {
-                        return { ok: false, error: `old_text occurs ${occurrences} times in ${path}; it must occur exactly once` };
+                    const result = replaceInText(current, effect.oldText, effect.newText);
+                    if (!result.ok) {
+                        return { ok: false, error: `old_text occurs ${result.occurrences} times in ${path}; it must occur exactly once` };
                     }
-                    await this.#backend.writeFile(sandbox, path, new TextEncoder().encode(current.replace(effect.oldText, effect.newText)));
+                    await this.#backend.writeFile(sandbox, path, new TextEncoder().encode(result.content));
                     return { ok: true };
                 }
                 case "workspace.delete": {

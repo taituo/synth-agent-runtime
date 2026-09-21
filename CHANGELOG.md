@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased — gym `replace_in_file` tolerates leading indentation (the durable arm's live failure)
+
+### The edit tool no longer loses the task to whitespace
+
+- A real-model durable run (`kimi-k2.7-code`, gVisor, `he/hex-decode`) failed with
+  0 B: the model indented its multi-line `old_text` with two tabs where the file
+  uses four, the exact match occurred zero times, the tool refused, and the
+  attempt reached `finish` with no edit. The plain arm only recovered by
+  accident, on a later turn, with a minimal one-line `old_text`.
+- `replace_in_file` / `workspace.replace` now use one shared contract
+  (`replaceInText`): an exact, unique match first, unchanged; only when the exact
+  match is absent (never to override ambiguity) a line-based match that ignores
+  leading indentation, with the replacement re-indented to the matched block. A
+  tolerant match must also be unique or the edit is refused. The tool description
+  and the system prompt say so, so both arms send the same text (`src/execution/text-replace.ts`,
+  used by `src/gym/tools.ts`, `src/execution/synthetic.ts` and
+  `src/execution/kubernetes/sandbox-workspace.ts`).
+- Result: the durable arm passed with the real model on the next bounded run
+  (4/4 turns, 358 B patch, held-out `passed`), as did the control arm (3/3 turns).
+- Tests: `test/text-replace.test.ts`, plus a tool-level and a pod-level
+  regression test in `test/gym-tools.test.ts` / `test/sandbox-workspace.test.ts`.
+
 ## Unreleased — gym adversarial channel sweep: the worker's environment no longer leaks parent secrets
 
 ### The scoring worker gets a minimal environment, not the verifier's
