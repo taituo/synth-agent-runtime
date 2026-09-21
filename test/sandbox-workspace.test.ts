@@ -214,3 +214,29 @@ test("workspace.replace runs in the pod: the edit lands, host RAM is not the med
     await executor.close();
   }
 });
+
+test("workspace.replace tolerates wrong leading indentation (the live durable failure)", async () => {
+  // The real durable attempt lost its turn to this: the model's old_text used
+  // two tabs where the file uses four. The effect must still land, re-indented.
+  const backend = new FakeSandboxBackend();
+  const workspaceId = "ws_replace_indent" as WorkspaceId;
+  const cache = new MemoryWorkspace({ id: workspaceId });
+  const executor = new SandboxWorkspaceExecutor({ resourceClass, backend, workspaces: new Map([[workspaceId, cache]]) });
+  try {
+    const ctx = context(workspaceId);
+    const file = ["function f() {", "\t\t\t\tcodePoint = parseInt(hexDigits, 10);", "\t\t\t}"].join("\n") + "\n";
+    await executor.execute({ id: "w", kind: "workspace.write", path: "he.js", content: file }, ctx);
+    const replace = await executor.execute(
+      { id: "p", kind: "workspace.replace", path: "he.js", oldText: "\t\tcodePoint = parseInt(hexDigits, 10);", newText: "\t\tcodePoint = parseInt(hexDigits, 16);" },
+      ctx,
+    );
+    assert.equal(replace.ok, true, replace.error);
+    const read = await executor.execute({ id: "r", kind: "workspace.read", path: "he.js" }, ctx);
+    assert.equal(
+      new TextDecoder().decode(read.output as Uint8Array),
+      ["function f() {", "\t\t\t\tcodePoint = parseInt(hexDigits, 16);", "\t\t\t}"].join("\n") + "\n",
+    );
+  } finally {
+    await executor.close();
+  }
+});

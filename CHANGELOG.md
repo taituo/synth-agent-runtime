@@ -1,5 +1,76 @@
 # Changelog
 
+## Unreleased — gym durable shape settled: the gym owns its loop, `durableAgentWorkflow` stays the lifecycle leaf
+
+- `SPEC-super-harness.md` item 1 requires one execution model (Temporal
+  workflows/activities), and its gym-2 bullet said "the gym drives the harness
+  workflow". Measured (`headline2-report.md`): the gym's durable arm is
+  `gymAttemptWorkflow -> gymPrepareActivity -> runTurn (xN, one per turn) ->
+  gymScoreActivity`, with no child workflow. Decided (b): keep that shape.
+- Justification (file:line in `docs/GYM-ONE-TURN.md`, "Decision (gym-7)"): the gym
+  is a bounded attempt (`maxTurns`/`deadlineMs`, transcript, patch harvest,
+  held-out score, `finish` as a terminal tool) whereas `durableAgentWorkflow` is
+  the long-lived interactive mailbox lifecycle (signals, cancel, park, no turn
+  cap). `SPEC-super-harness.md:48` already says to keep it the agent-lifecycle
+  leaf. Both workflows call the one turn body, `GatewayAgentEngine`, so item 1
+  holds; only the gym-specific attempt container differs.
+- The bar/spec and `docs/GYM-ONE-TURN.md` are updated so no claim contradicts the
+  code; `test/gym-durable-path.test.ts` pins that the gym workflow owns its loop
+  and never starts/references `durableAgentWorkflow`.
+- Evidence (scripted gateway, zero quota, live gVisor sandbox): workflow type
+  `gymAttemptWorkflow`, activities `gymPrepareActivity` x1 / `runTurn` x2 /
+  `gymScoreActivity` x1, **0 child workflows**, `passed`, 358 B.
+
+## Unreleased — gym `replace_in_file` tolerates leading indentation (the durable arm's live failure)
+
+### The edit tool no longer loses the task to whitespace
+
+- A real-model durable run (`kimi-k2.7-code`, gVisor, `he/hex-decode`) failed with
+  0 B: the model indented its multi-line `old_text` with two tabs where the file
+  uses four, the exact match occurred zero times, the tool refused, and the
+  attempt reached `finish` with no edit. The plain arm only recovered by
+  accident, on a later turn, with a minimal one-line `old_text`.
+- `replace_in_file` / `workspace.replace` now use one shared contract
+  (`replaceInText`): an exact, unique match first, unchanged; only when the exact
+  match is absent (never to override ambiguity) a line-based match that ignores
+  leading indentation, with the replacement re-indented to the matched block. A
+  tolerant match must also be unique or the edit is refused. The tool description
+  and the system prompt say so, so both arms send the same text (`src/execution/text-replace.ts`,
+  used by `src/gym/tools.ts`, `src/execution/synthetic.ts` and
+  `src/execution/kubernetes/sandbox-workspace.ts`).
+- Result: the durable arm passed with the real model on the next bounded run
+  (4/4 turns, 358 B patch, held-out `passed`), as did the control arm (3/3 turns).
+- Tests: `test/text-replace.test.ts`, plus a tool-level and a pod-level
+  regression test in `test/gym-tools.test.ts` / `test/sandbox-workspace.test.ts`.
+
+## Unreleased — gym adversarial channel sweep: the worker's environment no longer leaks parent secrets
+
+### The scoring worker gets a minimal environment, not the verifier's
+
+- The isolated worker was spawned with `{ ...process.env }` minus `GYM_HIDDEN_*`
+  and `NODE_TEST_CONTEXT`. That still handed agent code every other secret the
+  gym process holds — `SYNTH_GATEWAY_API_KEY`, `OPENROUTER_API_KEY`, arbitrary
+  tokens (measured: `hasSecret: ["SYNTH_GATEWAY_API_KEY","MY_API_TOKEN"]` inside
+  the worker). It now receives a small platform-essential allowlist
+  (`PATH`/`HOME`/`TMPDIR`/`TMP`/`TEMP`/`LANG`/`LC_ALL`/Windows roots) and nothing
+  else. Expected values are still never placed in the worker at all.
+
+### Every channel the worker can use is enumerated and pinned
+
+- `test/gym-forge-channels.test.ts` sweeps the review's channel inventory: env
+  secrets; absolute, `/proc/self/*`, `/proc/<ppid>/*`, `/etc/passwd`, fixture
+  tree, `require`/`import` and scorer-source reads; leaf/chain/relative/
+  intermediate symlinks to the held-out vectors; `process.binding`,
+  `worker_threads`, `module.register`, `node:sqlite`; `child_process` and all
+  writes. Each test asserts the channel is refused while the golden fix still
+  passes; the env, permission-model and symlink guards were each broken to
+  confirm the tests go red for the right reason.
+- The channels Node's permission model does not cover — network (TCP/UDP/DNS/
+  unix sockets), `node:test` `run({files})`, `process.kill` of the verifier, and
+  host metadata — are recorded as open holes with probe evidence in
+  `docs/KNOWN-OPEN.md`. They are a host-integrity escape, not a scorer pass
+  today, and their boundary is the gVisor pod, not this host worker.
+
 ## Unreleased — cleanup: one scored-rung rule, minor findings swept
 
 - **One scored-rung rule.** New `src/execution/scored-rung.ts` exports the single
@@ -542,6 +613,7 @@ local-runtime-state.ts` (used by the k8s mixed-chain proof).
   exercised deleted modules; their live-module coverage was salvaged first.
 - Node >= 22 is required: Node 18 breaks the gym scorer's permission model and
   produces false failures in the held-out-vector tests.
+
 
 ## Unreleased — gym scorer: the in-process signing oracle is removed
 

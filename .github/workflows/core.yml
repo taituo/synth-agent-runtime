@@ -59,6 +59,7 @@ jobs:
         run: >-
           node --test
           dist/test/gym-forge.test.js
+          dist/test/gym-forge-channels.test.js
           dist/test/gym-scoring.test.js
           dist/test/gym-scoring-hardening.test.js
           dist/test/gym-patch-paths.test.js

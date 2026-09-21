@@ -32,6 +32,11 @@
  *     allowlist (review round six). It is defense-in-depth only; real isolation
  *     needs an OS sandbox (see docs/KNOWN-OPEN.md). A runtime with no permission
  *     model is a refusal to run, not a fail-open.
+ *   - The worker inherits a MINIMAL environment, not the verifier's. Copying
+ *     `process.env` leaked the gateway API key and every other parent secret to
+ *     agent code (`gym-forge-channels` test). The allowlist below carries only
+ *     what a Node process needs to start; expected values and secrets are never
+ *     placed in it, and a falsy allowlist item is omitted rather than blanked.
  *   - Zero cases is `errored`, not a vacuous pass.
  */
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -285,6 +290,34 @@ async function sqliteDenyArgs(node: string): Promise<string[]> {
 }
 
 /**
+ * The only parent environment the scoring worker sees. Copying `process.env`
+ * leaked the gateway API key and every other parent secret to agent code; the
+ * worker needs none of it, so it gets a small platform-essential allowlist and
+ * nothing else. Expected values are never passed to the worker at all.
+ */
+const WORKER_ENV_ALLOWLIST: readonly string[] = [
+  "PATH",
+  "HOME",
+  "TMPDIR",
+  "TMP",
+  "TEMP",
+  "LANG",
+  "LC_ALL",
+  "SystemRoot",
+  "LOCALAPPDATA",
+  "APPDATA",
+];
+
+function workerEnvironment(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of WORKER_ENV_ALLOWLIST) {
+    const value = process.env[key];
+    if (value !== undefined) env[key] = value;
+  }
+  return env;
+}
+
+/**
  * The worker is untrusted agent code, so it must not be able to read the
  * held-out vectors off the filesystem (a worker read `hidden.cases.json` via
  * `/proc/<ppid>/cwd`). Node's permission model confines filesystem reads to the
@@ -421,11 +454,10 @@ export async function isolatedScoreGymPatch(options: IsolatedScoreOptions): Prom
     const workerPath = join(work, "worker.mjs");
     await writeFile(workerPath, WORKER_SOURCE);
 
-    // The child environment carries no secret and no expected output. Strip the
-    // nonce name the old scorer leaked, defensively.
-    const env: NodeJS.ProcessEnv = { ...process.env };
-    for (const key of Object.keys(env)) if (/^GYM_HIDDEN/i.test(key)) delete env[key];
-    delete env.NODE_TEST_CONTEXT;
+    // The child environment carries no secret and no expected output: a minimal
+    // allowlist, never a copy of the verifier's environment (which carried the
+    // gateway API key and any other parent secret to agent code).
+    const env = workerEnvironment();
 
     const node = options.nodeBin ?? process.execPath;
     const sandbox = await workerArgs(node, work);
