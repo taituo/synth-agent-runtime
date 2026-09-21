@@ -20,13 +20,18 @@ in-process production loop runs silently.
 | `integrations/temporal/src/gateway-run-turn.ts` | `runTurn` activity — the one turn body | shared `GatewayAgentEngine`; no HTTP client of its own |
 | `integrations/temporal/src/workflows.ts` | `durableAgentWorkflow` loop (mailbox + park/backoff timers) | the agent-lifecycle leaf |
 | `integrations/temporal/src/graph-workflow.ts`, `src/graph.ts` | graph interpreter: sequences, fan-out/join, branches, loops, child workflows, `continueAsNew`, `cancelGraph` | inside the workflow |
-| `integrations/temporal/src/gym-workflows.ts` | `gymAttemptWorkflow` — one turn per `runTurn` activity, workflow owns the loop | durable gym arm |
-| `integrations/temporal/src/gym-activities.ts` | `gymPrepareActivity` / `runTurn` / `gymScoreActivity`, one `engine.run` each | caller of the shared body |
+| `integrations/temporal/src/gym-workflows.ts` | `gymAttemptWorkflow` — one turn per `gymRunTurn` activity, workflow owns the loop | durable gym arm |
+| `integrations/temporal/src/gym-activities.ts` | `gymPrepareActivity` / `gymRunTurn` / `gymScoreActivity`, one `engine.run` each | caller of the shared body |
 | `integrations/temporal/supervisor/workflows.ts` | `superviseSessionWorkflow` check-in loop (durable timers) | one per supervised session |
 | `integrations/temporal/supervisor/schedule.ts` + `supervise.ts` | Temporal **Schedule** starts the supervisor and re-creates it if it dies | production start path; `supervisor:supervise` CLI |
 
-The runtime worker (`integrations/temporal/src/worker-entry.ts`) only registers
-these workflows/activities; it runs no turn loop of its own.
+The ONE production worker (`integrations/temporal/src/worker-entry.ts`) registers
+the runtime (`durableAgentWorkflow` + `runTurn`) and gym
+(`gymAttemptWorkflow` + `gymPrepareActivity`/`gymRunTurn`/`gymScoreActivity`)
+paths on the configured task queue; it runs no turn loop of its own. The gym's
+workflow bundle is `src/workflows-all.ts`. `integrations/temporal/gym-worker.ts`
+is a gym-only worker kept for the gym drivers/fault harness, not the production
+shape. See `docs/TEMPORAL.md` ("One worker entry, N replicas").
 
 ## Control (labelled, refused on a scored path)
 

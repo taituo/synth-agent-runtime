@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased — one production worker entry (runtime + gym), ready to scale
+
+- **One worker.** `integrations/temporal/src/worker-entry.ts` now registers the
+  runtime (`durableAgentWorkflow` + `runTurn`) AND the gym (`gymAttemptWorkflow` +
+  `gymPrepareActivity`/`gymRunTurn`/`gymScoreActivity`) on one configured task
+  queue; the workflows are one bundle (`src/workflows-all.ts`). The gym's turn
+  activity was renamed `runTurn` → `gymRunTurn` so the two sets can share a
+  worker — a worker registers one activity per type name.
+- **Native scaling knobs.** `src/worker.ts` passes
+  `maxConcurrentActivityTaskExecutions`/`maxConcurrentWorkflowTaskExecutions`
+  (`SYNTH_WORKER_MAX_CONCURRENT_*`), Worker Deployment versioning
+  (`SYNTH_WORKER_DEPLOYMENT_NAME` + `SYNTH_WORKER_BUILD_ID`), and serves
+  `GET /healthz` when `SYNTH_WORKER_HEALTH_PORT` is set. `runTemporalWorker` uses
+  `runUntil` with a SIGTERM/SIGINT handler, so a rollout drains in-flight work
+  instead of aborting it.
+- **Deployment.** `deploy/kubernetes/worker-deployment.yaml` runs 3 stateless
+  replicas on one shared queue, with concurrency env, a health port and
+  readiness/liveness probes, and a `terminationGracePeriodSeconds` drain window.
+- **Live proof.** One `worker-entry.js` process on one task queue ran a
+  `durableAgentWorkflow` triage turn and a scored `gymAttemptWorkflow` (gVisor,
+  `passed`, 358 B) on the same queue, served `GET /healthz` 200, and exited 0 on
+  SIGTERM.
+- Docs: `docs/TEMPORAL.md` "One worker entry, N replicas";
+  `docs/EXECUTION-PATHS.md` updated; `docs/KNOWN-OPEN.md` drops the "the gym runs
+  its own worker" item (the residual is only the synthetic rung's in-RAM
+  workspace).
+
 ## Unreleased — one scored-rung guard, applied by the gym too
 
 - **`assertRungAllowedForScored` now has production callers.** The gym's durable

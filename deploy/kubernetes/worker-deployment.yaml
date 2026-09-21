@@ -1,10 +1,26 @@
-# The Temporal worker is the runtime.
+# The Temporal worker IS the runtime.
 #
-# It runs the durable workflow and the `runTurn` activity (the shared
-# GatewayAgentEngine). It is a trusted control-plane process: it holds the
-# gateway credentials and (for the execution rung) the Kubernetes credentials,
-# and it dispatches model-authored code into gVisor executor Pods. It is NOT
-# applied by CI — the cluster-side proof is manual (`deploy/kubernetes/README.md`).
+# ONE entry point (`integrations/temporal/src/worker-entry.ts`, compiled to
+# `.../worker-entry.js`) registers BOTH the runtime workflows/activities
+# (`durableAgentWorkflow` + `runTurn`) and the gym workflows/activities
+# (`gymAttemptWorkflow` + `gymPrepareActivity`/`gymRunTurn`/`gymScoreActivity`)
+# on one task queue. There is no separate gym worker to deploy.
+#
+# Scaling: the worker is stateless — all durable state is in Temporal, all
+# shared store state is in Postgres — so scale by changing `spec.replicas`.
+# Every replica polls the same `TEMPORAL_TASK_QUEUE`; Temporal dispatches each
+# task to exactly one replica. No homegrown control plane.
+#
+# Killing a replica (rollout, OOM, eviction) does not lose work: the in-flight
+# activity's heartbeat fails on another replica, Temporal retries it there, and
+# committed workflow history is replayed, not re-executed. Proven live by
+# `integrations/temporal/durable-restart-worker.ts` (SIGKILL mid-turn, call
+# counts before/after) and `graph-restart-worker.ts` (SIGKILL mid-graph).
+#
+# It is a trusted control-plane process: it holds the gateway credentials and
+# (for the execution rung) the Kubernetes credentials, and it dispatches
+# model-authored code into gVisor executor Pods. The cluster-side proof is
+# manual (`deploy/kubernetes/README.md`); this manifest is not applied by CI.
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -14,9 +30,25 @@ metadata:
 data:
   TEMPORAL_ADDRESS: "temporal-frontend.temporal.svc.cluster.local:7233"
   TEMPORAL_NAMESPACE: "default"
+  # All replicas share one queue; scale with `spec.replicas`.
   TEMPORAL_TASK_QUEUE: "synth-agent-runtime"
   GATEWAY_BASE_URL: "http://synth-gateway.synth-control-plane.svc.cluster.local:8787"
   GATEWAY_MODEL: "worker/cheap"
+  # Native Temporal worker concurrency. Size for the pods' CPU/memory; a turn is
+  # mostly network-wait, so activities can exceed cores. Use either these knobs
+  # or the Tuner, not both.
+  SYNTH_WORKER_MAX_CONCURRENT_ACTIVITIES: "16"
+  SYNTH_WORKER_MAX_CONCURRENT_WORKFLOWS: "32"
+  # `GET /healthz` (200 ready / 503 draining) for the probes below.
+  SYNTH_WORKER_HEALTH_PORT: "8085"
+  # Worker Deployment versioning (safe rolling deploys). Set a build id per
+  # image (e.g. the git SHA) and a deployment name; AUTO_UPGRADE moves a run to
+  # the new version on its next task, PINNED keeps it on its build. Register the
+  # version with `temporal worker deployment` before rolling out. Omit both to
+  # run unversioned.
+  # SYNTH_WORKER_DEPLOYMENT_NAME: "synth-agent-runtime"
+  # SYNTH_WORKER_BUILD_ID: "REPLACE_WITH_GIT_SHA"
+  # SYNTH_WORKER_DEFAULT_VERSIONING_BEHAVIOR: "AUTO_UPGRADE"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -26,7 +58,9 @@ metadata:
   labels:
     app.kubernetes.io/name: synth-temporal-worker
 spec:
-  replicas: 1
+  # Stateless replicas behind one shared task queue. Raise this number to scale;
+  # nothing else changes.
+  replicas: 3
   selector:
     matchLabels:
       app.kubernetes.io/name: synth-temporal-worker
@@ -35,6 +69,9 @@ spec:
       labels:
         app.kubernetes.io/name: synth-temporal-worker
     spec:
+      # Give the worker time to drain in-flight activities on SIGTERM before the
+      # kubelet SIGKILLs it (the worker's runUntil + shutdownGraceTime drain).
+      terminationGracePeriodSeconds: 40
       # The worker is trusted control-plane code; it runs in the restricted
       # namespace and never mounts a host path. Untrusted code runs only in the
       # sandbox namespace behind the gVisor RuntimeClass.
@@ -54,6 +91,23 @@ spec:
                 name: synth-temporal-worker
             - secretRef:
                 name: synth-temporal-worker-secrets
+          ports:
+            - name: health
+              containerPort: 8085
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            failureThreshold: 6
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -61,8 +115,8 @@ spec:
               drop: ["ALL"]
           resources:
             requests:
-              cpu: "100m"
-              memory: "256Mi"
+              cpu: "250m"
+              memory: "512Mi"
             limits:
               cpu: "1"
               memory: "1Gi"

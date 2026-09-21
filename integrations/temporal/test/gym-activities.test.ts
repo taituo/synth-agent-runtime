@@ -71,7 +71,7 @@ test("an unscored attempt passes the isolation gate on runner:local (the control
 test("runTurn refuses a scored turn on runner:local before touching the rung", async () => {
   const activities = createGymActivities();
   await assert.rejects(
-    () => activities.runTurn({ prepared: prepared({ runner: "local" }), turn: 0, transcript: [] }),
+    () => activities.gymRunTurn({ prepared: prepared({ runner: "local" }), turn: 0, transcript: [] }),
     (error: unknown) => {
       const e = error as { nonRetryable?: boolean; type?: string };
       assert.equal(e.nonRetryable, true);

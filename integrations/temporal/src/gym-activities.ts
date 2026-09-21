@@ -3,7 +3,7 @@
  *
  *   gymPrepareActivity  materialize the bugged task on the host; build the gym
  *                       system/user prompts and the serializable tool surface.
- *   runTurn             ONE model turn through the runtime's one body,
+ *   gymRunTurn          ONE model turn through the runtime's one body,
  *                       `GatewayAgentEngine`, with the gym's `turnConfig`
  *                       (`buildToEffect`) and the sandbox rung's `executeEffect`.
  *                       Harvest the agent's patch and checkpoint it.
@@ -71,7 +71,7 @@ function currentAttempt(): number {
  * applies when it selects a rung — so the gym does not carry a second,
  * independent refusal that can drift. The refusal is wrapped as a non-retryable
  * activity failure so a refused scored attempt fails fast instead of parking.
- * `gymPrepareActivity`, `runTurn` and `gymScoreActivity` all call this.
+ * `gymPrepareActivity`, `gymRunTurn` and `gymScoreActivity` all call this.
  */
 function assertScoredRungAllowed(kind: "local" | "sandbox", scored: boolean): void {
   try {
@@ -176,7 +176,7 @@ export function createGymActivities(): GymActivities {
     }
   };
 
-  const runTurn = async (input: GymTurnActivityInput): Promise<GymTurnActivityResult> => {
+  const gymRunTurn = async (input: GymTurnActivityInput): Promise<GymTurnActivityResult> => {
     const heartbeat = setInterval(heartbeatFor(), 15_000);
     try {
       const { prepared, transcript } = input;
@@ -308,5 +308,5 @@ export function createGymActivities(): GymActivities {
     };
   };
 
-  return { gymPrepareActivity, runTurn, gymScoreActivity };
+  return { gymPrepareActivity, gymRunTurn, gymScoreActivity };
 }

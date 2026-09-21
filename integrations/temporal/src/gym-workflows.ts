@@ -28,7 +28,7 @@ import {
   rootCauseMessage,
 } from "./correlation.js";
 
-const { gymPrepareActivity, runTurn, gymScoreActivity } = proxyActivities<GymActivities>({
+const { gymPrepareActivity, gymRunTurn, gymScoreActivity } = proxyActivities<GymActivities>({
   startToCloseTimeout: "30 minutes",
   // The activity heartbeats every 15s; a 1-minute timeout bounds worker-death
   // detection while a slow reasoning turn is still allowed to finish.
@@ -53,7 +53,7 @@ async function runTurnWithPark(
   let parkAttempt = 0;
   while (true) {
     try {
-      return await runTurn({ prepared, turn, transcript });
+      return await gymRunTurn({ prepared, turn, transcript });
     } catch (error) {
       const cause = rootCauseMessage(error);
       if (isNonRetryableFailure(error)) throw error;

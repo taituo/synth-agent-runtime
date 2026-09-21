@@ -165,6 +165,12 @@ export interface GymScoreActivityInput {
 /** Activities the turn-per-activity gym workflow proxies. */
 export interface GymActivities {
   gymPrepareActivity(input: GymAttemptActivityInput): Promise<GymPreparedAttempt>;
-  runTurn(input: GymTurnActivityInput): Promise<GymTurnActivityResult>;
+  /**
+   * One gym turn. Named `gymRunTurn`, not `runTurn`, so the gym workflow and the
+   * runtime `durableAgentWorkflow` can share ONE worker and task queue: both
+   * otherwise proxy an activity type literally named `runTurn` with different
+   * inputs, and a worker can register only one activity per type name.
+   */
+  gymRunTurn(input: GymTurnActivityInput): Promise<GymTurnActivityResult>;
   gymScoreActivity(input: GymScoreActivityInput): Promise<GymAttemptActivityOutput>;
 }

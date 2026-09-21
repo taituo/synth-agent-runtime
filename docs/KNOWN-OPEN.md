@@ -56,17 +56,13 @@ removed only when the closing work lands.
   job applies them: the cluster has no per-push coverage, so the manifest can
   rot. Closing: a self-hosted runner job that applies the manifest against a
   throwaway cluster (the same gap as the gVisor/Pi proofs below).
-- **The production worker entry point registers only the triage `runTurn`, and
-  the gym runs its own worker.** `integrations/temporal/src/worker-entry.ts`
-  wires the `runTurn` activity to the event-triage turn. The durable turn now
-  executes tools through the rung when an agent's `turnConfig` supplies a system
-  prompt, tool surface and rung (see `CHANGELOG.md`, Unreleased). The gym task
-  layer is now on `main` (`src/gym/*`, `integrations/temporal/src/gym-*.ts`), but
-  `gymAttemptWorkflow` and its `gymPrepareActivity`/`gymScoreActivity` are
-  registered by `integrations/gym/run-gym.ts`, not by `worker-entry.ts`; the
-  synthetic rung's workspace still lives for the worker process's lifetime and
-  does not survive a worker restart. Closing: one worker entry that registers the
-  gym workflows/activities and a durable workspace for the synthetic rung.
+- **The synthetic rung's workspace does not survive a worker restart.** A cheap
+  unscored run uses the in-process `SyntheticExecutor`, whose `MemoryWorkspace`
+  lives for the worker process's lifetime; the scored sandbox rung checkpoints to
+  the blob store instead (`integrations/gym/sandbox.ts`). Closing: a durable
+  workspace for the synthetic rung. (The production worker now registers the
+  runtime and gym paths on one task queue — `integrations/temporal/src/worker-entry.ts`,
+  `docs/TEMPORAL.md` "One worker entry, N replicas".)
 
 ## Egress and artifacts
 

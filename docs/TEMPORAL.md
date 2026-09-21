@@ -31,6 +31,44 @@ Host timing that used to be a hand-run loop is a Temporal timer or Schedule:
   to a real tmux pane, and after the first supervisor ends the schedule starts a
   fresh one.
 
+## One worker entry, N replicas
+
+Production starts ONE worker (`integrations/temporal/src/worker-entry.ts`). It
+registers the runtime and gym workflow/activity sets on the configured task
+queue:
+
+| set | workflows | activities |
+|---|---|---|
+| runtime | `durableAgentWorkflow` | `runTurn` |
+| gym | `gymAttemptWorkflow` | `gymPrepareActivity`, `gymRunTurn`, `gymScoreActivity` |
+
+The gym turn activity is named `gymRunTurn` (not `runTurn`) precisely so both
+sets can share one worker — a worker registers one activity per type name, and
+both workflows would otherwise proxy a `runTurn`. The workflows are one bundle
+(`src/workflows-all.ts`); the graph harness and the session supervisor keep their
+own focused workers.
+
+The worker is stateless — durable state is Temporal's, shared store state is
+Postgres — so scaling is `spec.replicas` on
+`deploy/kubernetes/worker-deployment.yaml`. Every replica polls the same
+`TEMPORAL_TASK_QUEUE`; Temporal dispatches each task to exactly one replica. Tune
+`SYNTH_WORKER_MAX_CONCURRENT_ACTIVITIES` / `SYNTH_WORKER_MAX_CONCURRENT_WORKFLOWS`,
+and set `SYNTH_WORKER_HEALTH_PORT` for the `/healthz` readiness/liveness probe
+(200 ready, 503 draining).
+
+On SIGTERM the worker drains: `runUntil` stops polling, in-flight activities
+finish within Temporal's `shutdownGraceTime`, then the process exits. A replica
+killed before it can finish is not data loss — Temporal retries the in-flight
+activity on another replica — proven live by `durable-restart-worker.ts` and
+`graph-restart-worker.ts` (SIGKILL, call counts before/after, committed nodes not
+re-run).
+
+Safe rolling deploys use Temporal Worker Deployment versioning: set
+`SYNTH_WORKER_DEPLOYMENT_NAME` + `SYNTH_WORKER_BUILD_ID` (per-image SHA) and
+register the version before rolling out; `PINNED` keeps a run on its build,
+`AUTO_UPGRADE` moves it on the next task. Without them the worker runs
+unversioned.
+
 ## Workflow sandbox constraints
 
 Temporal workflow code runs in a restricted V8 isolate, not a full Node/browser global scope: notably, the global `structuredClone` is not available there (it is available in ordinary Node worker/activity code). `durableAgentWorkflow` uses a sandbox-safe JSON round-trip clone (`clone()` in `src/correlation.ts`) instead. Anything imported into workflow code — including interceptor modules bundled via `workflowInterceptorModules` — must stay within this restricted API surface.
