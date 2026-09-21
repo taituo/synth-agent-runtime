@@ -43,8 +43,10 @@ current checklist; `docs/KNOWN-OPEN.md` itemises the open work.
 [ ] rolling schema/application upgrade test
 [ ] soak test with forced worker/provider/pod restarts
 [~] production IAM + distributed rate limiting + durable audit — shared rate
-    limiting is closed (SharedTenantRateLimitPolicy + PostgresRateLimitStore,
-    verified live). A real identity provider and a durable audit sink are open.
+    limiting is implemented (SharedTenantRateLimitPolicy + PostgresRateLimitStore)
+    and tested against a fake `PgExecutor` (`test/postgres.test.ts`), but it is
+    not yet exercised by the live Postgres concurrency proof or a multi-replica
+    deployment. A real identity provider and a durable audit sink are open.
 [x] durable named event-consumer ACK + safe retention watermark
 [x] task/artifact per-record revision/CAS (compareAndSwapTask/Artifact)
 [ ] continuation size, encryption, retention and cleanup policy

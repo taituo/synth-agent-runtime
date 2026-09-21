@@ -17,7 +17,9 @@
   workers" figure were updated to the current harness and the CI value (32);
   `docs/LIVE-CONTRACTS.md` drops the retired chaos-matrix and child-process
   SIGKILL entries; `docs/KNOWN-OPEN.md` and `docs/VERIFICATION.md` no longer
-  describe the gym as unmerged.
+  describe the gym as unmerged. `docs/RELEASE-GATE.md` and `docs/ROADMAP.md`
+  no longer call shared rate limiting "verified live": it is implemented and
+  tested against a fake `PgExecutor`, not the live multi-replica path.
 - **Docs index.** `docs/README.md` now indexes `RUNG-PARITY.md`,
   `SCORER-SANDBOX.md`, and the historical `GYM-ONE-TURN.md` /
   `GYM-P2-RESULTS.md`.

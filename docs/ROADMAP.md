@@ -8,7 +8,7 @@ The next milestone is not another broad runtime abstraction layer. It is a GA ha
 
 1. **Sustained multi-replica soak/load testing.** Keep two or more control-plane replicas racing under *sustained* load, not just a bounded repro, including forced worker/provider/pod restarts.
 2. **Rolling schema/application upgrade testing.** Prove a rolling upgrade of schema and application code against a live deployment without correctness loss.
-3. **Distributed rate limiting.** Replace the current per-process `InMemoryTenantRateLimitPolicy` with a shared, distributed quota/rate-limit implementation so a tenant's effective limit does not scale with replica count.
+3. **Distributed rate limiting, deployed and proven.** The shared implementation exists (`SharedTenantRateLimitPolicy` + `PostgresRateLimitStore`) but the deployed gateway still uses whatever `tenantPolicy` it is given, and the shared path is only tested against a fake `PgExecutor`. Wire it in and prove a tenant's effective limit does not scale with replica count under ≥2 live replicas.
 4. **Per-record task/artifact CAS.** Extend revision/compare-and-swap ownership rules to individual task/artifact records, which are currently last-write-wins bodies (project membership/decisions already have CAS).
 5. **Continuation retention/encryption policy.** Add size limits, encryption/retention policy, and cleanup scheduling for Responses continuation state; TTL already exists.
 6. **Production IAM + durable audit.** A real identity provider, scoped secret handling, and a durable audit sink to replace the reference `StaticBearerAuthenticator`.

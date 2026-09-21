@@ -184,7 +184,8 @@ integrations/opencode-http-gateway: npm test
 
 Also independently verified live, outside this repeatable suite (not
 re-runnable without external infrastructure/credentials): real PostgreSQL
-concurrency and fencing under **32** concurrent workers, a real pinned Pi
+concurrency and fencing under concurrent workers (the live RC run used 16; CI
+now sets `SYNTH_POSTGRES_WORKERS=32`), a real pinned Pi
 checkout E2E, a real Kubernetes + gVisor pod-kill, and a full
 external-provider matrix (unknown-model/malformed/missing-model errors,
 abort-survival, `previous_response_id` continuation, tool calls, 3-way
@@ -231,6 +232,6 @@ smoke test, and OpenRouter limits are unmeasured. The Temporal worker deploy
 manifest (`deploy/kubernetes/worker-deployment.yaml`) is a documented shape,
 not applied in CI. Remaining work before a GA `1.0.0` tag is operational
 hardening: a single enforced boundary for all agent-controlled execution,
-sustained soak/load testing, rolling-upgrade testing, distributed rate
-limiting, per-record task/artifact CAS, and continuation
+sustained soak/load testing, rolling-upgrade testing, distributed rate-limit
+enforcement across live replicas, per-record task/artifact CAS, and continuation
 retention/encryption policy.
