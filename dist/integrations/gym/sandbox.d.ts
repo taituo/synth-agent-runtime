@@ -1,4 +1,4 @@
-import { type Effect, type EffectResult, type KubernetesResourceClass, type SandboxBackend, type EffectRunner } from "../../src/index.js";
+import { type BlobStore, type Effect, type EffectResult, type KubernetesResourceClass, type SandboxBackend, type EffectRunner } from "../../src/index.js";
 export interface BuildSandboxRunnerOptions {
     /** Materialized bugged checkout (its tracked tree is materialized into the Pod). */
     repoDir: string;
@@ -13,6 +13,16 @@ export interface BuildSandboxRunnerOptions {
     kubectlContext?: string;
     runtimeClassName?: string;
     agentId?: string;
+    /**
+     * Seed the cache workspace from a durable checkpoint before the first effect
+     * materializes the Pod. Used on a cold worker (after a SIGKILL) so the resumed
+     * attempt continues from the crashed attempt's committed edits instead of the
+     * bugged source. The digest comes from the existing blob store.
+     */
+    restore?: {
+        blobStore: BlobStore;
+        digest: string;
+    };
     /** Test seam: a fake "pod" backend instead of kubectl. */
     backend?: SandboxBackend;
     /** Test seam: override the resource class. */
@@ -26,6 +36,13 @@ export interface SandboxRunner {
      * `process.exec` runs in the pod.
      */
     executeEffect(effect: Effect, minFidelity?: number): Promise<EffectResult>;
+    /**
+     * Durably checkpoint the pod workspace into `blobStore` (sync the pod back,
+     * then write the workspace diff) and return the digest. Undefined when there
+     * is no live pod (no effect ran this turn), so the caller carries the previous
+     * digest forward rather than dropping the reference.
+     */
+    checkpointWorkspace(blobStore: BlobStore): Promise<string | undefined>;
     close(): Promise<void>;
 }
 export declare function hasPersistentSandboxRunner(key: string): boolean;

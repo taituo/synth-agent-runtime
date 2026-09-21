@@ -17,7 +17,7 @@
  */
 import { lstat, readFile, readdir } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
-import { DEFAULT_KUBERNETES_RESOURCE_CLASSES, ExecutionBroker, KubectlSandboxBackend, LocalRuntimeStateStore, MemoryWorkspace, SandboxWorkspaceExecutor, brokerEffectRunner, } from "../../src/index.js";
+import { DEFAULT_KUBERNETES_RESOURCE_CLASSES, ExecutionBroker, KubectlSandboxBackend, LocalRuntimeStateStore, MemoryWorkspace, SandboxWorkspaceExecutor, brokerEffectRunner, checkpointSandboxWorkspace, restoreSandboxWorkspace, } from "../../src/index.js";
 const SKIP_DIRS = new Set([".git", "node_modules"]);
 class LocalDirSource {
     name;
@@ -117,6 +117,12 @@ export async function buildSandboxRunner(options) {
         ...(options.kubectlContext ? { context: options.kubectlContext } : {}),
     });
     const workspace = new MemoryWorkspace({ source: new LocalDirSource(options.repoDir) });
+    // A cold resume restores the crashed attempt's committed workspace diff into
+    // the cache BEFORE the first effect materializes the Pod. The bytes come from
+    // the blob store by digest, not from host RAM.
+    if (options.restore) {
+        await restoreSandboxWorkspace(options.restore.blobStore, options.restore.digest, workspace);
+    }
     const workspaces = new Map([[workspace.id, workspace]]);
     // The one rung: no SyntheticExecutor. The pod's filesystem is the medium for
     // workspace effects as well as process.exec.
@@ -152,6 +158,10 @@ export async function buildSandboxRunner(options) {
     return {
         runner,
         executeEffect: (effect, minFidelity) => broker.execute(effect, context, minFidelity),
+        async checkpointWorkspace(blobStore) {
+            const ref = await checkpointSandboxWorkspace(executor, workspace.id, blobStore);
+            return ref?.digest;
+        },
         async close() {
             await executor.close();
         },

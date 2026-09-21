@@ -123,9 +123,11 @@ export function renderGymObservation(name: string, ok: boolean, output: unknown,
   return error ?? "error";
 }
 
-function checkpointStore(): BlobGymCheckpointStore {
+function checkpointStore(): { store: BlobGymCheckpointStore; blobs: FileSystemBlobStore } {
   const dir = process.env.SYNTH_GYM_CHECKPOINT_DIR ?? "/tmp/opencode/gym-checkpoints";
-  return new BlobGymCheckpointStore(new FileSystemBlobStore(join(dir, "blobs")), join(dir, "pointers"));
+  // ONE blob store for both the checkpoint record and the workspace diff.
+  const blobs = new FileSystemBlobStore(join(dir, "blobs"));
+  return { store: new BlobGymCheckpointStore(blobs, join(dir, "pointers")), blobs };
 }
 
 export function createGymActivities(): GymActivities {
@@ -182,6 +184,12 @@ export function createGymActivities(): GymActivities {
       }
       const key = prepared.checkpointKey;
       const cold = !hasPersistentSandboxRunner(key);
+      const { store: checkpoint, blobs } = checkpointStore();
+      // The latest checkpoint is the durable reference: its workspace digest (a
+      // workspace diff in the blob store) is what a cold worker restores from,
+      // and its patch is the legacy fallback for records written before the
+      // workspace digest existed.
+      const previous = await checkpoint.load(key);
       const sandbox = await getPersistentSandboxRunner({
         repoDir: prepared.repoDir,
         image: attempt.image,
@@ -190,21 +198,20 @@ export function createGymActivities(): GymActivities {
         ...(attempt.runtimeClassName ? { runtimeClassName: attempt.runtimeClassName } : {}),
         agentId: attempt.agentId,
         key,
+        // A cold cache means a fresh worker process: restore the agent's
+        // committed workspace from the durable checkpoint into the cache before
+        // the first effect materializes the new Pod.
+        ...(cold && previous?.workspaceDigest ? { restore: { blobStore: blobs, digest: previous.workspaceDigest } } : {}),
       });
-      const checkpoint = checkpointStore();
-      // A cold cache means a fresh worker process: restore the agent's work
-      // product (the checkpointed patch) before the turn, so the transcript and
-      // the workspace agree.
-      if (cold) {
-        const saved = await checkpoint.load(key);
-        if (saved && saved.patchText.trim().length > 0) {
-          const restorePath = ".gym-restore.patch";
-          await sandbox.runner.write(restorePath, saved.patchText);
-          const applied = await sandbox.runner.exec(`git apply ${restorePath}`, { cwd: prepared.repoDir });
-          await sandbox.runner.exec(`rm -f ${restorePath}`, { cwd: prepared.repoDir });
-          if (applied.code !== 0) {
-            throw new Error(`failed to restore checkpoint: ${applied.stderr || applied.stdout}`);
-          }
+      // Legacy checkpoints (and local attempts) carry no workspace digest; fall
+      // back to replaying the harvested patch into the fresh pod.
+      if (cold && previous && !previous.workspaceDigest && previous.patchText.trim().length > 0) {
+        const restorePath = ".gym-restore.patch";
+        await sandbox.runner.write(restorePath, previous.patchText);
+        const applied = await sandbox.runner.exec(`git apply ${restorePath}`, { cwd: prepared.repoDir });
+        await sandbox.runner.exec(`rm -f ${restorePath}`, { cwd: prepared.repoDir });
+        if (applied.code !== 0) {
+          throw new Error(`failed to restore checkpoint: ${applied.stderr || applied.stdout}`);
         }
       }
 
@@ -249,12 +256,21 @@ export function createGymActivities(): GymActivities {
         { role: "assistant", content: outcome.content },
         ...rendered.map((observation) => ({ role: "tool" as const, name: observation.name, content: observation.content })),
       ];
+      // After the turn's effects commit, checkpoint the POD WORKSPACE (not only
+      // the git patch) into the same blob store, and carry its digest in the
+      // durable checkpoint record. A resumed attempt restores from that digest,
+      // so committed edits that git alone would not carry survive a SIGKILL. A
+      // turn with no workspace effect leaves no live pod; carry the previous
+      // digest forward rather than dropping the reference.
+      const workspaceDigest = (await sandbox.checkpointWorkspace(blobs)) ?? previous?.workspaceDigest;
       await checkpoint.save(key, {
         turnIndex: input.turn + 1,
         patchText: patch,
         transcript: nextTranscript,
         requestedModel: outcome.requestedModel,
         servedModel: outcome.servedModel,
+        ...(workspaceDigest ? { workspaceDigest } : {}),
+        ...(previous?.digest ? { parentDigest: previous.digest } : {}),
       });
       return {
         content: outcome.content,

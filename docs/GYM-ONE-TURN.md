@@ -113,15 +113,40 @@ activities**, 1 `gymPrepareActivity`, 1 `gymScoreActivity`, 2 model requests,
 activities: turn 1's `replace_in_file` and turn 2's `run_visible_test` both went
 through the same persistent rung, and the visible test passed on turn 1's edit.
 
-### Workspace-across-activities dependency
+### Workspace durability across a worker restart
 
 Between turns the workspace is the persistent rung keyed by the attempt
-(`sandbox.ts`), so it survives any number of activities in one worker process.
-Across a worker restart the rung is cold and the `runTurn` activity restores the
-attempt's checkpointed patch (`BlobGymCheckpointStore`) before the turn. That is
-the existing primitive; a truly durable workspace store (so the pod mounts the
-same state without a patch replay) is the `synth-1` dependency, not yet landed
-on `main` (`git log main -- src/execution` shows no workspace store).
+(`integrations/gym/sandbox.ts`), so it survives any number of activities in one
+worker process. Across a worker SIGKILL the rung is cold; the resumed attempt
+restores the agent's committed work from a durable workspace checkpoint instead
+of re-materializing the bugged base:
+
+- **Checkpoint (who).** After each turn's effects commit, the `runTurn` activity
+  calls `sandbox.checkpointWorkspace(blobs)`
+  (`integrations/temporal/src/gym-activities.ts` -> `checkpointSandboxWorkspace`,
+  `src/execution/kubernetes/sandbox-workspace.ts:261`): sync the pod back into the
+  cache workspace, then write the workspace diff to the SAME blob store and
+  return a digest. The digest is carried in the checkpoint record
+  (`GymCheckpoint.workspaceDigest`, `src/gym/checkpoint.ts`), whose pointer lives
+  in the existing blob/index store (`BlobGymCheckpointStore`) — a durable
+  reference, not process memory.
+- **Restore (who).** On a cold worker the activity loads that record and passes
+  `restore: { blobStore, digest }` to `getPersistentSandboxRunner`
+  (`integrations/gym/sandbox.ts`), which calls `restoreSandboxWorkspace`
+  (`src/execution/kubernetes/sandbox-workspace.ts:278`) into the cache BEFORE the
+  first effect materializes the new Pod. The bytes come from the blob store by
+  digest.
+- **Legacy fallback.** A record without `workspaceDigest` (written before this
+  field existed) still replays its `patchText` with `git apply`, so old
+  checkpoints keep working.
+
+Evidence: `test/gym-sandbox-rung.test.ts` ("a cold sandbox runner restores the
+checkpointed workspace") proves the checkpoint -> cold-restore path with a fake
+Pod backend and a no-restore control; and the live kill/resume (scripted
+gateway, zero quota) SIGKILLs worker A during turn 2, resumes on worker B at
+`attempt=2`, sees `run_visible_test` PASS on the resumed turn, decodes the
+restored workspace diff to the `he.js` change, and scores `passed` 358 B.
+Disabling the restore turns the same kill/resume into `failed` 0 B.
 
 ## Decision (gym-7) — the gym does not drive `durableAgentWorkflow`
 

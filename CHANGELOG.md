@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased — gym durable attempt: the workspace survives a worker SIGKILL (defect 8)
+
+- Defect 8: `checkpointSandboxWorkspace` / `restoreSandboxWorkspace` and the
+  `synth_workspace_checkpoints` table existed but nothing in production called
+  them, so control-plane durability was not work-product durability. The gym's
+  durable attempt now checkpoints the sandbox workspace after each turn and
+  restores it on a cold worker:
+  - **Checkpoint:** `runTurn`
+    (`integrations/temporal/src/gym-activities.ts`) calls
+    `sandbox.checkpointWorkspace(blobs)` -> `checkpointSandboxWorkspace`
+    (`src/execution/kubernetes/sandbox-workspace.ts:261`), which syncs the pod
+    back and writes the workspace diff to the existing blob store; the digest is
+    carried in the checkpoint record (`GymCheckpoint.workspaceDigest`,
+    `src/gym/checkpoint.ts`) whose pointer is the durable reference. One store is
+    used for both the record and the diff — no second store.
+  - **Restore:** a cold worker passes `restore: { blobStore, digest }` to
+    `getPersistentSandboxRunner` (`integrations/gym/sandbox.ts`), which calls
+    `restoreSandboxWorkspace` (`sandbox-workspace.ts:278`) into the cache before
+    the first effect materializes the new Pod. A record without a digest still
+    replays its patch (legacy fallback).
+- Evidence. Unit: `test/gym-sandbox-rung.test.ts` (checkpoint -> cold restore
+  with a fake Pod backend, plus a no-restore control). Live kill/resume
+  (scripted gateway, zero quota): worker A edits then is SIGKILLed mid-turn-2;
+  worker B resumes at activity `attempt=2`, `run_visible_test` reports PASS on
+  the resumed turn, the restored workspace diff decodes to the `he.js` change,
+  and the run scores `passed` 358 B. Disabling the restore makes the same
+  kill/resume `failed` 0 B (failing-first).
+
 ## Unreleased — gym durable shape settled: the gym owns its loop, `durableAgentWorkflow` stays the lifecycle leaf
 
 - `SPEC-super-harness.md` item 1 requires one execution model (Temporal

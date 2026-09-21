@@ -13,6 +13,14 @@ export interface GymCheckpoint {
     transcript: GymCheckpointEntry[];
     requestedModel?: string | null;
     servedModel?: string | null;
+    /**
+     * Digest of the sandbox workspace checkpoint (a workspace diff in the same
+     * blob store): the durable reference a resumed attempt restores from so the
+     * pod's committed edits survive a worker SIGKILL. Absent on local/control
+     * attempts (no pod) and on checkpoints written before this field existed; the
+     * `patchText` is then the fallback replay.
+     */
+    workspaceDigest?: string;
     /** Digest of the previous checkpoint, for the provenance chain. */
     parentDigest?: string;
 }
