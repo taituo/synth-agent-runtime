@@ -125,6 +125,11 @@ on `main` (`git log main -- src/execution` shows no workspace store).
 
 ## Decision (gym-7) — the gym does not drive `durableAgentWorkflow`
 
+> Naming: this decision was written when the gym's turn activity was called
+> `runTurn`; it is now `gymRunTurn`, renamed so the gym and the runtime can share
+> one worker (a worker registers one activity per type name). The historical
+> sections below keep the old name.
+
 `SPEC-super-harness.md` item 1 says every path is a Temporal workflow/activity,
 and its gym-2 workstream said "the gym drives the harness workflow". Measured
 (`gym-hero` report, real-model run 2): the gym's durable arm is
