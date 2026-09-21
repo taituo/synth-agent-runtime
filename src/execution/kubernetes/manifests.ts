@@ -173,18 +173,9 @@ export function buildSandboxNetworkPolicy(
     });
   }
 
-  if (profile.mode === "egress-proxy") {
-    egress.push({
-      to: [
-        {
-          namespaceSelector: selectorExpression(profile.egressProxyNamespaceSelector),
-          podSelector: selectorExpression(profile.egressProxyPodSelector),
-        },
-      ],
-      ports: [{ protocol: "TCP", port: profile.egressProxyPort ?? 3128 }],
-    });
-  } else if (profile.mode === "cluster") {
-    // Deliberately cluster-only by default; no 0.0.0.0/0 rule is generated.
+  if (profile.mode === "cluster") {
+    // Deliberately cluster-only; no 0.0.0.0/0 rule is generated. Only the
+    // `project-cell` class uses this, and no production path uses that class.
     egress.push({ to: [{ namespaceSelector: {} }] });
   }
 

@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased — egress is DNS-only (owner decision (a))
+
+- The generated sandbox NetworkPolicy is DNS-only: DNS (UDP/TCP 53 to kube-dns)
+  and nothing else. Removed the TCP 3128 rule to `synth-egress-proxy`
+  (`src/execution/kubernetes/manifests.ts:161-189`) and the `egress-proxy` mode
+  plus its `egressProxy*` fields (`src/execution/resource-class.ts`); the three
+  sandbox classes now use `network.mode = "dns-only"`. `project-cell` keeps
+  `mode = "cluster"` but no production path uses it (the runtime rung filters it
+  out; only `ProjectCellManager`/tests reference it) — stated in the code and in
+  the deploy README.
+- Removed the unused `deploy/kubernetes/egress-namespace.yaml` (`synth-egress`);
+  nothing referenced it.
+- Docs: `deploy/kubernetes/README.md` no longer says to deploy a proxy. It states
+  egress is DNS-only, a scored run needs no network because the repo is
+  materialised into the pod, and an allowlist is added only when a real task
+  fails for lack of network, derived from what it actually tried to reach.
+- Failing-first: re-adding a 3128 egress rule turns the new
+  `test/kubernetes.test.ts` "the sandbox NetworkPolicy is DNS-only" test red; the
+  live gVisor boundary test still passes 5/5 (the pod reaches nothing).
+- README numbers re-measured: root **291** (289 pass, 2 live skips).
+
 ## Unreleased — boundary test: parameterised, with real network controls
 
 - `test/gym-sandbox-boundary.test.ts` no longer hardcodes `/home/tiny/...`,

@@ -139,8 +139,28 @@ test("sandbox manifest uses restricted isolation and gVisor", () => {
   const network = buildSandboxNetworkPolicy("test", "network", "sandbox", cls.network) as any;
   assert.deepEqual(network.spec.policyTypes, ["Ingress", "Egress"]);
   assert.ok(network.spec.egress.some((rule: any) => rule.ports?.some((port: any) => port.port === 53)));
-  assert.ok(network.spec.egress.some((rule: any) => rule.ports?.some((port: any) => port.port === 3128)));
   assert.equal(JSON.stringify(network).includes("0.0.0.0/0"), false);
+  // Egress is DNS-only: no proxy (3128) and no other non-DNS rule.
+  for (const rule of network.spec.egress) {
+    for (const port of rule.ports ?? []) assert.equal(port.port, 53, "every sandbox egress port must be DNS (53)");
+  }
+});
+
+test("the sandbox NetworkPolicy is DNS-only: no non-DNS egress rule (fails if 3128 is re-added)", () => {
+  for (const cls of DEFAULT_KUBERNETES_RESOURCE_CLASSES.filter((entry) => entry.id !== "project-cell")) {
+    assert.equal(cls.network.mode, "dns-only", `${cls.id} must use the DNS-only profile`);
+    const network = buildSandboxNetworkPolicy("test", `net-${cls.id}`, "sandbox", cls.network) as any;
+    // Exactly one egress rule, the DNS one: UDP/TCP 53 to kube-dns.
+    assert.equal(network.spec.egress.length, 1, `${cls.id} must have exactly the DNS egress rule`);
+    const rule = network.spec.egress[0];
+    assert.deepEqual(
+      (rule.ports ?? []).map((port: any) => `${port.protocol}:${port.port}`).sort(),
+      ["TCP:53", "UDP:53"],
+      `${cls.id} egress must be DNS only`,
+    );
+    assert.equal(JSON.stringify(network).includes("3128"), false, `${cls.id} must not allow a proxy port`);
+    assert.equal(JSON.stringify(network).includes("0.0.0.0/0"), false, `${cls.id} must not allow the internet`);
+  }
 });
 
 test("warm pool reuses a reset sandbox", async () => {

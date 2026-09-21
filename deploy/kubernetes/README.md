@@ -73,17 +73,16 @@ The sandbox never needs Kubernetes API access.
 
 ## 4. Egress
 
-The default classes use `network.mode = egress-proxy`. Their generated
-NetworkPolicy allows DNS plus TCP to a Pod labelled:
+The default sandbox classes use `network.mode = dns-only`. Their generated
+NetworkPolicy allows DNS (UDP/TCP 53 to kube-dns) and **nothing else**: no proxy
+rule, no `0.0.0.0/0`, and no `synth-egress` namespace to create.
 
-```text
-namespace: synth.openai.dev/egress=true
-pod:       app.kubernetes.io/name=synth-egress-proxy
-```
-
-Deploy your own authenticated/filtering proxy there and set `HTTP_PROXY` /
-`HTTPS_PROXY` in the resource class if required. There is intentionally no
-`0.0.0.0/0` egress rule.
+A scored run needs no network — the repo is materialised into the Pod before the
+agent runs. An allowlist is added only when a real task fails for lack of
+network, and it is derived from what that task actually tried to reach, never
+from a guess. (The `project-cell` class uses `network.mode = cluster`, DNS plus
+cluster-internal traffic, but no production path uses that class; the runtime
+sandbox rung filters it out.)
 
 ## 5. Warm pool
 

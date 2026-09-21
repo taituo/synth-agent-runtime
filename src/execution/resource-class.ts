@@ -1,7 +1,22 @@
 import { EXECUTOR_IMAGE } from "./executor-image.js";
 
 export type WorkspaceMedium = "Memory" | "Node";
-export type NetworkMode = "none" | "egress-proxy" | "cluster";
+/**
+ * Egress profile for a sandbox class.
+ *
+ * `dns-only` is the sandbox profile: the generated NetworkPolicy allows DNS to
+ * kube-dns and nothing else. A scored run needs no network because the repo is
+ * materialised into the Pod; an allowlist is added only when a real task fails
+ * for lack of network, derived from what it actually tried to reach.
+ *
+ * `cluster` additionally allows cluster-internal traffic. It exists only for the
+ * `project-cell` class, which no production path uses: the runtime sandbox rung
+ * filters `project-cell` out (`integrations/temporal/src/gateway-run-turn.ts`)
+ * and only `ProjectCellManager`/tests reference it.
+ *
+ * `none` emits no egress rule at all.
+ */
+export type NetworkMode = "none" | "dns-only" | "cluster";
 
 export interface ResourceQuantitySet {
   cpuRequest: string;
@@ -28,10 +43,6 @@ export interface NetworkPolicyProfile {
   /** DNS namespace/pod selectors. */
   dnsNamespaceSelector?: Record<string, string>;
   dnsPodSelector?: Record<string, string>;
-  /** Optional egress proxy destination. Only used when mode=egress-proxy. */
-  egressProxyNamespaceSelector?: Record<string, string>;
-  egressProxyPodSelector?: Record<string, string>;
-  egressProxyPort?: number;
 }
 
 export interface KubernetesResourceClass {
@@ -81,13 +92,6 @@ function restrictedNetwork(mode: NetworkMode): NetworkPolicyProfile {
     controlPlanePodSelector: CONTROL_PLANE_POD,
     dnsNamespaceSelector: KUBE_SYSTEM_NS,
     dnsPodSelector: DNS_PODS,
-    ...(mode === "egress-proxy"
-      ? {
-          egressProxyNamespaceSelector: { "synth.openai.dev/egress": "true" },
-          egressProxyPodSelector: { "app.kubernetes.io/name": "synth-egress-proxy" },
-          egressProxyPort: 3128,
-        }
-      : {}),
   };
 }
 
@@ -112,7 +116,7 @@ export const DEFAULT_KUBERNETES_RESOURCE_CLASSES: readonly KubernetesResourceCla
     tmpSizeLimit: "512Mi",
     activeDeadlineSeconds: 30 * 60,
     terminationGracePeriodSeconds: 5,
-    network: restrictedNetwork("egress-proxy"),
+    network: restrictedNetwork("dns-only"),
     command: ["/bin/sh", "-lc"],
     args: ["trap : TERM INT; sleep infinity & wait"],
     warmPool: { minReady: 2, maxReady: 4, maxTotal: 12, idleTtlMs: 10 * 60_000 },
@@ -136,7 +140,7 @@ export const DEFAULT_KUBERNETES_RESOURCE_CLASSES: readonly KubernetesResourceCla
     tmpSizeLimit: "1Gi",
     activeDeadlineSeconds: 45 * 60,
     terminationGracePeriodSeconds: 5,
-    network: restrictedNetwork("egress-proxy"),
+    network: restrictedNetwork("dns-only"),
     command: ["/bin/sh", "-lc"],
     args: ["trap : TERM INT; sleep infinity & wait"],
     warmPool: { minReady: 1, maxReady: 3, maxTotal: 8, idleTtlMs: 10 * 60_000 },
@@ -160,7 +164,7 @@ export const DEFAULT_KUBERNETES_RESOURCE_CLASSES: readonly KubernetesResourceCla
     tmpSizeLimit: "8Gi",
     activeDeadlineSeconds: 60 * 60,
     terminationGracePeriodSeconds: 10,
-    network: restrictedNetwork("egress-proxy"),
+    network: restrictedNetwork("dns-only"),
     command: ["/bin/sh", "-lc"],
     args: ["trap : TERM INT; sleep infinity & wait"],
     warmPool: { minReady: 0, maxReady: 2, maxTotal: 4, idleTtlMs: 5 * 60_000 },
@@ -184,6 +188,10 @@ export const DEFAULT_KUBERNETES_RESOURCE_CLASSES: readonly KubernetesResourceCla
     tmpSizeLimit: "10Gi",
     activeDeadlineSeconds: 6 * 60 * 60,
     terminationGracePeriodSeconds: 15,
+    // Not a production sandbox path: the runtime rung filters `project-cell`
+    // out and only `ProjectCellManager`/tests use it, so the cluster-wide egress
+    // profile never reaches an agent run. Kept rather than deleted so the
+    // `ProjectCellManager` surface stays tested; see the NetworkMode doc.
     network: restrictedNetwork("cluster"),
     command: ["/bin/sh", "-lc"],
     args: ["trap : TERM INT; sleep infinity & wait"],
