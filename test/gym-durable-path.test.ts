@@ -74,6 +74,20 @@ test("gym-worker.ts registers the gym workflow and its activity", () => {
   assert.match(GYM_ACTIVITIES, /turnScopedEffectId/, "the turn must scope effect ids per turn (no broker replay)");
 });
 
+test("the gym workflow owns its loop and does not drive durableAgentWorkflow (gym-7 decision)", () => {
+  // durableAgentWorkflow (workflows.ts) is the long-lived interactive mailbox
+  // lifecycle: signals, cancel, park, no turn cap or deadline. The gym attempt
+  // is a bounded prepare -> runTurn xN -> score workflow with its own transcript,
+  // patch harvest and held-out score, so it owns its loop instead of driving the
+  // interactive lifecycle. See docs/GYM-ONE-TURN.md "Decision (gym-7)".
+  assert.ok(!GYM_WORKFLOWS.includes("durableAgentWorkflow"), "gym-workflows.ts must not reference durableAgentWorkflow");
+  assert.ok(
+    !/startChild|executeChild|getChildWorkflowHandle|ChildWorkflow/.test(GYM_WORKFLOWS),
+    "the gym workflow must not start a child workflow",
+  );
+  assert.match(GYM_WORKFLOWS, /proxyActivities<GymActivities>/, "the gym workflow drives its own activities directly");
+});
+
 test("there is exactly one gateway turn body, and the gym turn is a thin adapter over it", () => {
   const gymTurn = readFileSync(repoFile("src/gym/turn.ts"), "utf8");
   assert.match(gymTurn, /createGatewayAgentEngine/, "the gym turn must construct the shared engine");

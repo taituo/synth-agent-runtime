@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased — gym durable shape settled: the gym owns its loop, `durableAgentWorkflow` stays the lifecycle leaf
+
+- `SPEC-super-harness.md` item 1 requires one execution model (Temporal
+  workflows/activities), and its gym-2 bullet said "the gym drives the harness
+  workflow". Measured (`headline2-report.md`): the gym's durable arm is
+  `gymAttemptWorkflow -> gymPrepareActivity -> runTurn (xN, one per turn) ->
+  gymScoreActivity`, with no child workflow. Decided (b): keep that shape.
+- Justification (file:line in `docs/GYM-ONE-TURN.md`, "Decision (gym-7)"): the gym
+  is a bounded attempt (`maxTurns`/`deadlineMs`, transcript, patch harvest,
+  held-out score, `finish` as a terminal tool) whereas `durableAgentWorkflow` is
+  the long-lived interactive mailbox lifecycle (signals, cancel, park, no turn
+  cap). `SPEC-super-harness.md:48` already says to keep it the agent-lifecycle
+  leaf. Both workflows call the one turn body, `GatewayAgentEngine`, so item 1
+  holds; only the gym-specific attempt container differs.
+- The bar/spec and `docs/GYM-ONE-TURN.md` are updated so no claim contradicts the
+  code; `test/gym-durable-path.test.ts` pins that the gym workflow owns its loop
+  and never starts/references `durableAgentWorkflow`.
+- Evidence (scripted gateway, zero quota, live gVisor sandbox): workflow type
+  `gymAttemptWorkflow`, activities `gymPrepareActivity` x1 / `runTurn` x2 /
+  `gymScoreActivity` x1, **0 child workflows**, `passed`, 358 B.
+
 ## Unreleased — gym `replace_in_file` tolerates leading indentation (the durable arm's live failure)
 
 ### The edit tool no longer loses the task to whitespace
