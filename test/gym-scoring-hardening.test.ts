@@ -16,7 +16,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { isolatedScoreGymPatch, type GymCase } from "../src/index.js";
+import { isolatedScoreGymPatch, sandboxScorerConfig, type GymCase } from "../src/index.js";
 
 const execFileAsync = promisify(execFile);
 const require_ = createRequire(import.meta.url);
@@ -68,6 +68,43 @@ test("SYNTH_REQUIRE_ISOLATION=1 refuses the host worker instead of running agent
   } finally {
     if (previous === undefined) delete process.env.SYNTH_REQUIRE_ISOLATION;
     else process.env.SYNTH_REQUIRE_ISOLATION = previous;
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("the pod boundary is selected by configuration; sandbox:false forces the host path", async () => {
+  const saved = {
+    image: process.env.SYNTH_EXECUTOR_IMAGE,
+    gate: process.env.SYNTH_SCORER_SANDBOX,
+    require: process.env.SYNTH_REQUIRE_ISOLATION,
+  };
+  const parent = await mkdtemp(join(tmpdir(), "gym-iso-config-"));
+  try {
+    delete process.env.SYNTH_EXECUTOR_IMAGE;
+    delete process.env.SYNTH_SCORER_SANDBOX;
+    assert.equal(sandboxScorerConfig(), undefined, "no cluster image means no OS boundary is configured");
+
+    process.env.SYNTH_EXECUTOR_IMAGE = `registry.example/synth-executor@sha256:${"a".repeat(64)}`;
+    assert.equal(sandboxScorerConfig()?.image, process.env.SYNTH_EXECUTOR_IMAGE, "an image selects the pod boundary");
+    process.env.SYNTH_SCORER_SANDBOX = "0";
+    assert.equal(sandboxScorerConfig(), undefined, "SYNTH_SCORER_SANDBOX=0 forces the host path");
+
+    // An image is configured, but this caller explicitly forces the host, so a
+    // required-isolation run must still refuse rather than run agent code there.
+    delete process.env.SYNTH_SCORER_SANDBOX;
+    process.env.SYNTH_REQUIRE_ISOLATION = "1";
+    const repo = await makeRepo(parent);
+    const score = await isolatedScoreGymPatch({ patchText: "", baseRepoDir: repo, cases: CASES, sandbox: false });
+    assert.equal(score.outcome, "errored");
+    assert.match(score.detail ?? "", /SYNTH_REQUIRE_ISOLATION=1/);
+  } finally {
+    const restore = (key: string, value: string | undefined): void => {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    };
+    restore("SYNTH_EXECUTOR_IMAGE", saved.image);
+    restore("SYNTH_SCORER_SANDBOX", saved.gate);
+    restore("SYNTH_REQUIRE_ISOLATION", saved.require);
     await rm(parent, { recursive: true, force: true });
   }
 });

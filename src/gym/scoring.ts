@@ -40,6 +40,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, sep } from "node:path";
 import type { Readable } from "node:stream";
 import { promisify } from "node:util";
+import { sandboxScorerConfig, scoreInSandbox, type SandboxScorerConfig } from "./sandbox-worker.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -166,6 +167,12 @@ export interface IsolatedScoreOptions {
   cases: readonly GymCase[];
   timeoutMs?: number;
   nodeBin?: string;
+  /**
+   * Run the worker in the gVisor pod instead of the host. Defaults to
+   * `sandboxScorerConfig()` (the `SYNTH_EXECUTOR_IMAGE` etc. environment);
+   * pass `false` to force the host path.
+   */
+  sandbox?: SandboxScorerConfig | false;
 }
 
 /** The evaluation worker. Agent code runs here; expected outputs never do. */
@@ -362,10 +369,11 @@ export async function isolatedScoreGymPatch(options: IsolatedScoreOptions): Prom
     return { outcome: "errored", touchedPaths, cases: [], detail: "no hidden cases: refusing a vacuous pass" };
   }
   // There is ONE enforced boundary for agent-controlled execution: the gVisor
-  // pod. Until the pod path is wired, the host worker is an untrusted context,
-  // named as such. A deployment that requires isolation sets this and the
-  // scorer refuses rather than silently running agent code on the host.
-  if (process.env.SYNTH_REQUIRE_ISOLATION === "1") {
+  // pod. When a cluster image is configured (or the caller injects one) the
+  // worker runs there. A deployment that requires isolation but has no cluster
+  // refuses rather than silently running agent code on the host.
+  const podSandbox = options.sandbox === false ? undefined : (options.sandbox ?? sandboxScorerConfig());
+  if (!podSandbox && process.env.SYNTH_REQUIRE_ISOLATION === "1") {
     return {
       outcome: "errored",
       touchedPaths,
@@ -395,6 +403,19 @@ export async function isolatedScoreGymPatch(options: IsolatedScoreOptions): Prom
     const escaping = await findEscapingSymlink(clone);
     if (escaping) {
       return { outcome: "tampered", touchedPaths, cases: [], detail: `checkout contains a symlink that escapes it: ${relative(clone, escaping)}` };
+    }
+
+    // The OS boundary: run the worker in the gVisor pod. The applied checkout is
+    // materialized into the pod; the verifier keeps the expected values.
+    if (podSandbox) {
+      const scored = await scoreInSandbox({
+        cloneDir: clone,
+        cases: options.cases,
+        workerSource: WORKER_SOURCE,
+        timeoutMs: options.timeoutMs ?? 30_000,
+        config: podSandbox,
+      });
+      return { outcome: scored.outcome, touchedPaths, cases: scored.cases, ...(scored.detail ? { detail: scored.detail } : {}) };
     }
 
     const workerPath = join(work, "worker.mjs");
@@ -504,6 +525,8 @@ export interface ScoreGymPatchOptions {
   cases: readonly GymCase[];
   timeoutMs?: number;
   nodeBin?: string;
+  /** See {@link IsolatedScoreOptions.sandbox}. */
+  sandbox?: SandboxScorerConfig | false;
 }
 
 export async function scoreGymPatch(options: ScoreGymPatchOptions): Promise<GymScore> {
