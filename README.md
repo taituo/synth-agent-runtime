@@ -12,7 +12,7 @@ The runtime is designed for agents that may run unattended for minutes, hours, o
 
 At the center of the design is a separation between **agent reasoning, durable state, and physical execution**. An agent can work against a fast in-memory workspace, a persistent project environment, or an isolated Kubernetes/gVisor sandbox without changing the higher-level agent model. Expensive or consequential operations can be pushed behind explicit execution and effect boundaries rather than being implicit side effects of an LLM conversation.
 
-Durability is **Temporal's job**: `durableAgentWorkflow` owns the agent loop and mailbox, and every turn executes as the `runTurn` activity through the shared `GatewayAgentEngine` turn body (`src/runtime/gateway-engine.ts`). There is no homegrown durable-turn or control-plane stack — the earlier `AgentRuntime`/`DurableTurn`/`CommandCoordinator`/`Supervisor` modules were deleted, because they duplicated what Temporal provides. Postgres remains the store for what is genuinely store-shaped: leases and fencing tokens, mailbox cursors, world revisions, and rate limits. Effect receipts live in Temporal activity state (`TemporalActivityStateStore`), so a retried `runTurn` activity dedupes a committed effect by `effect.id`; `PostgresPersistence` still implements the same `RuntimeStateStore` contract where a shared/relational receipt store is wanted. Its 32-worker concurrency + hard-fencing proof runs in CI (`integrations/postgres/concurrency.ts`, `postgres-live.yml`).
+Durability is **Temporal's job**: `durableAgentWorkflow` owns the agent's **lifecycle and mailbox** — not its agent loop, which belongs to a harness (see `docs/DIRECTION.md`). Each turn executes as the `runTurn` activity through `GatewayAgentEngine` (`src/runtime/gateway-engine.ts`), which is the **reference harness**: a dependency-free turn body for testing the runtime, not the definition of an agent and not something to grow. There is no homegrown durable-turn or control-plane stack — the earlier `AgentRuntime`/`DurableTurn`/`CommandCoordinator`/`Supervisor` modules were deleted, because they duplicated what Temporal provides. Postgres remains the store for what is genuinely store-shaped: leases and fencing tokens, mailbox cursors, world revisions, and rate limits. Effect receipts live in Temporal activity state (`TemporalActivityStateStore`), so a retried `runTurn` activity dedupes a committed effect by `effect.id`; `PostgresPersistence` still implements the same `RuntimeStateStore` contract where a shared/relational receipt store is wanted. Its 32-worker concurrency + hard-fencing proof runs in CI (`integrations/postgres/concurrency.ts`, `postgres-live.yml`).
 
 The runtime also includes an inference layer with OpenAI-compatible Chat Completions and Responses endpoints, streaming and tool-call support, continuation handling, routing, and provider abstraction. This allows agent execution to remain independent of a particular model provider or client surface.
 
@@ -38,7 +38,7 @@ The central invariant — one turn implementation, sandboxed code:
 durableAgentWorkflow (Temporal owns lifecycle + mailbox)
         │  runTurn activity
         ▼
-GatewayAgentEngine.run(messages, context)   ← the single turn body
+GatewayAgentEngine.run(messages, context)   ← reference harness turn body
         │
         ├─ calls the OpenAI-compatible gateway
         └─ executes the model's tool calls via context.executeEffect
@@ -127,7 +127,7 @@ Clients / OpenCode / Pi / Temporal client
         durableAgentWorkflow (Temporal)
                     │  runTurn activity
                     ▼
-        GatewayAgentEngine  ← the one turn body
+        GatewayAgentEngine  ← reference harness
                     │
        ┌────────────┼───────────────┐
        │            │               │

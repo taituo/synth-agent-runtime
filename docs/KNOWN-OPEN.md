@@ -25,12 +25,20 @@ removed only when the closing work lands.
 
 - **Pi is quarantined, not wired.** `PiAgentEngine` and
   `integrations/pi-runtime-bridge/` had no caller and are in
-  `docs/history/museum/`. Re-wiring them as the harness would need the Pi
-  packages (not in this repo) and would have to route turns through the shared
-  `GatewayAgentEngine`/`runTurn` path rather than a second turn body. Until then
-  the provider path is a direct OpenAI-compatible backend. Closing: a
-  `harness-1`-scale change with the Pi session as an `AgentEngine` whose model
-  calls go through the one turn body, plus a live proof.
+  `docs/history/museum/`. Re-wiring needs the Pi packages (not in this repo).
+  **The previous wording of this item was wrong and contradicted
+  `docs/DIRECTION.md`:** it said Pi's model calls should route through the
+  shared `GatewayAgentEngine`/`runTurn` path. That is the layering inversion
+  DIRECTION exists to prevent, and leaving it here would have had the next
+  reader rebuild it. Corrected:
+
+  Pi owns its loop, its model calls, its tool semantics and its context. The
+  adapter uses Synth only for the execution environment, session durability,
+  checkpoints, effects and isolation. Synth does not make the model call on the
+  harness's behalf; the gateway may be an optional transport underneath Pi, never
+  a replacement above it. Closing: the Phase 2/3 seam in DIRECTION —
+  `ExecutionEnvironment` + `HarnessSession`, a compile-level Pi adapter skeleton,
+  then one real coding task, plus a live proof.
 - **`src/workspace/transaction.ts` is uncalled but protected.**
   `WorkspaceTransaction`/`withWorkspaceTransaction` have no caller (test or
   production). The task boundary protects `src/workspace`, so it was kept rather
