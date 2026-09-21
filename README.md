@@ -91,7 +91,7 @@ the right node counts, and cancel a real long loop. See `docs/HARNESS.md`.
 
 PostgreSQL validates the proof atomically against `synth_leases`. An unfenced update is allowed only while the agent row is still at fencing generation `0`; once fenced ownership has begun, legacy/unfenced updates are rejected with `AGENT_FENCE_REQUIRED`.
 
-`PostgresPersistence` is the one shipped `DurabilityProvider`; the in-memory and JSON-file providers were quarantined with the control-plane stack (`docs/history/museum/src/durability/`). The monotonic fenced-generation behaviour is a store property, tested in `test/postgres-control.test.ts` against the real database clock.
+`PostgresPersistence` is the one shipped `DurabilityProvider`; the in-memory and JSON-file providers were quarantined with the control-plane stack (`docs/history/museum/src/durability/`). The monotonic fenced-generation behaviour is a store property. `test/postgres-control.test.ts` is a SQL-shape test against a fake `PgExecutor`: it asserts the statements use `clock_timestamp()` and take no worker-supplied time. The real database clock (and worker clock skew) is exercised by the live concurrency proof in `integrations/postgres/concurrency.ts`.
 
 ### Database-clock leases
 
@@ -168,7 +168,7 @@ Measured under Node v22.20.0 (`node --version`), on commit `HEAD`:
 
 ```text
 npm test  (root suite)
-276 tests: 274 passed / 0 failed / 2 skipped
+277 tests: 275 passed / 0 failed / 2 skipped
 (the 2 skips are the live gVisor boundary proofs; set SYNTH_LIVE_GVISOR=1)
 
 npm test --prefix integrations/temporal  (durable workflow + turn body + graph harness)

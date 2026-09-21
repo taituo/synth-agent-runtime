@@ -37,9 +37,11 @@ current checklist; `docs/KNOWN-OPEN.md` itemises the open work.
 [x] sandbox workspace runs read/write/list + exec in the Pod (live gVisor proof)
 [~] external gateway/provider probe (historical live run; not re-runnable here
     without credentials — see docs/history)
-[~] sustained race/load: proven for the distributed stores directly (32-256
-    concurrent workers against real PostgreSQL). Still open against >= 2 actual
-    service replicas under sustained traffic.
+[~] sustained race/load: proven for the distributed stores directly against
+    real PostgreSQL by `integrations/postgres/concurrency.ts` (the recorded live
+    run used 16 concurrent workers; CI sets `SYNTH_POSTGRES_WORKERS=32`), not at
+    the 256-worker scale a historical benchmark claims. Still open against >= 2
+    actual service replicas under sustained traffic.
 [ ] rolling schema/application upgrade test
 [ ] soak test with forced worker/provider/pod restarts
 [~] production IAM + distributed rate limiting + durable audit — shared rate

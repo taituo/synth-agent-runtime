@@ -215,7 +215,7 @@ test("Postgres effect upsert cannot regress a committed receipt", async () => {
 });
 
 test("schema install takes a transaction-scoped advisory lock before any DDL", async () => {
-  // Regression for a real race found under 256-way concurrent bootstrap on
+  // Regression for a real race found under concurrent bootstrap on
   // live PostgreSQL: every statement in POSTGRES_SCHEMA_SQL is individually
   // "IF NOT EXISTS", but the existence-check-then-create is not atomic
   // against a second session doing the same DDL at the same instant, and

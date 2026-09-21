@@ -41,16 +41,21 @@ This exact scenario was run live against a real PostgreSQL instance for `v1.0.0-
 
 ## Scaling under real load
 
-A benchmark/soak suite (32-256 concurrent workers, 15-45s sustained soaks,
-real PostgreSQL) was run against `v1.0.0-rc.1`. Every contention-critical
-primitive held cleanly through 256-way concurrency: atomic agent creation
-(exactly 1 winner), lease contention, command claim, and project CAS all
-scored 100/100 or better across rounds with 0 errors.
+A benchmark/soak suite (up to 256 concurrent workers, 15-45s sustained soaks,
+real PostgreSQL) was reported run against `v1.0.0-rc.1` in `CHANGELOG.md`.
+Every contention-critical primitive was reported clean through 256-way
+concurrency: atomic agent creation (exactly 1 winner), lease contention,
+command claim, and project CAS all scored 100/100 or better across rounds with
+0 errors. That benchmark harness and its logs are not in this repository, so the
+256-way result is not reproducible here; the repeatable live proof is
+`integrations/postgres/concurrency.ts`, whose recorded run used 16 workers (CI
+sets `SYNTH_POSTGRES_WORKERS=32`) and covers clock skew and hard agent takeover.
 
-A separate partitioned-vs-hot-row comparison at 128 workers, run directly
-against the database (bypassing an `kubectl port-forward` tunnel, which
-was itself a throughput ceiling in an earlier pass — see `CHANGELOG.md`),
-gives the number that matters for real workloads: **~11.8k fenced
+The same reported pass also ran a partitioned-vs-hot-row comparison at 128
+workers directly against the database (bypassing an `kubectl port-forward`
+tunnel, which was itself a throughput ceiling in an earlier pass — see
+`CHANGELOG.md`). It reported the number that matters for real workloads:
+**~11.8k fenced
 writes/s when each worker owns a distinct agent and lease**, the normal
 shape of real usage since fencing is scoped per-agent. Forcing all
 workers to contend for one shared row instead drops throughput to

@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased — docs: label the Postgres SQL-shape proofs against the live clock proof
+
+- **README.md** no longer says the monotonic fenced-generation behaviour is
+  tested in `test/postgres-control.test.ts` "against the real database clock".
+  That test is a SQL-shape test against a fake `PgExecutor` (it asserts the SQL
+  uses `clock_timestamp()` and takes no worker time); the real database clock and
+  worker clock skew are exercised by the live concurrency proof
+  (`integrations/postgres/concurrency.ts`).
+- **docs/RELEASE-GATE.md** and **docs/POSTGRES.md** no longer claim a 256-worker
+  distributed-store proof. The repeatable live proof's recorded run used 16
+  workers (CI sets `SYNTH_POSTGRES_WORKERS=32`); the 32-256 / 128-worker
+  benchmark numbers are a historical claim in `CHANGELOG.md` with no harness or
+  logs in the repo, now labelled as not reproducible here. The same unrecorded
+  `256-way` figure was dropped from the `test/postgres.test.ts` schema-install
+  comment.
+- README's "Tests executed" block re-measured at HEAD under Node 22: root
+  **277** tests (275 pass, 2 live-gVisor skips), Temporal **104/104**,
+  integrations syntax **101** files, gateway **3/3**.
+
 ## Unreleased — the scoring worker runs inside the gVisor boundary
 
 - `src/gym/sandbox-worker.ts`: when a cluster image is configured
