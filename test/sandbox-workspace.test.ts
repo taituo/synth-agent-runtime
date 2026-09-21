@@ -183,3 +183,34 @@ test("a checkpointed sandbox workspace is restored from the blob store into a ne
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("workspace.replace runs in the pod: the edit lands, host RAM is not the medium", async () => {
+  const backend = new FakeSandboxBackend();
+  const workspaceId = "ws_replace" as WorkspaceId;
+  const cache = new MemoryWorkspace({ id: workspaceId });
+  const executor = new SandboxWorkspaceExecutor({ resourceClass, backend, workspaces: new Map([[workspaceId, cache]]) });
+  try {
+    const ctx = context(workspaceId);
+    await executor.execute({ id: "w", kind: "workspace.write", path: "he.js", content: "codePoint = parseInt(hexDigits, 10);\n" }, ctx);
+    const replace = await executor.execute(
+      { id: "p", kind: "workspace.replace", path: "he.js", oldText: "parseInt(hexDigits, 10)", newText: "parseInt(hexDigits, 16)" },
+      ctx,
+    );
+    assert.equal(replace.ok, true, replace.error);
+    const read = await executor.execute({ id: "r", kind: "workspace.read", path: "he.js" }, ctx);
+    assert.equal(new TextDecoder().decode(read.output as Uint8Array), "codePoint = parseInt(hexDigits, 16);\n");
+    assert.ok(backend.calls.readFile >= 1, "replace read the file from the pod");
+    assert.ok(backend.calls.writeFile >= 2, "replace wrote the edited file back to the pod");
+    assert.equal(await cache.readText("he.js"), undefined, "the replace did not run against host RAM");
+
+    // A non-unique old_text is refused rather than silently written.
+    const bad = await executor.execute(
+      { id: "p2", kind: "workspace.replace", path: "he.js", oldText: "not-present", newText: "x" },
+      ctx,
+    );
+    assert.equal(bad.ok, false);
+    assert.match(bad.error ?? "", /occurs 0 times/);
+  } finally {
+    await executor.close();
+  }
+});

@@ -37,7 +37,6 @@ these workflows/activities; it runs no turn loop of its own.
 | `integrations/gym/p2-faults.ts` plain arm | fault-matrix comparison arm (child process) | `role: "control"`, `isolation`; `runner:"local"` refused (`GymUnisolatedScoredRun`) |
 | `src/gym/attempt.ts` (`runGymAttempt`) | the shared turn loop; in-process only when a **plain/dry** arm calls it | inherits the arm's label; the durable arm calls it inside a Temporal activity |
 | `src/gym/turn.ts` (`createGatewayGymTurn`) | a caller of the shared body for the plain arm | inherits the arm's label |
-| `integrations/gym/sandbox.ts` (`localEffectRunner` path) | the unisolated runner | `describeGymRunner` reports `isolation: "unisolated"`, `scoredAllowed: false` |
 
 The scorer itself is not an arm: `src/gym/scoring.ts` runs the isolated verifier
 (worker + permission model + `SYNTH_REQUIRE_ISOLATION`) and is the decision.

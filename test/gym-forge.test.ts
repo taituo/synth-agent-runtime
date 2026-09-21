@@ -1,14 +1,19 @@
 /**
  * Permanent regression tests for every scorer forgery demonstrated in review.
  *
- * FORGE 1-3 were the round-five payloads (env nonce, early exit, assert
- * mutation). FORGE 4 is review round six ONE-a, the one that broke the HMAC
- * design: the harness holding the signing key was written INTO the clone and
- * exported check()/complete(), so agent code used it as a signing oracle and got
- * a genuine MAC over a forged transcript. There is no in-process signer now, so
- * the payload cannot even load. FORGE 5/5b are the ground-truth-read channel
- * (a worker found the held-out vectors through /proc/<ppid>/cwd); the worker runs
- * under Node's permission model and the read is denied.
+ * This is the single consolidated FORGE file (the duplicate copies that lived in
+ * `gym-isolated-score.test.ts` are gone). FORGE 1-3 are the round-five payloads
+ * (env nonce, early exit, assert mutation). FORGE 4 is review round six ONE-a,
+ * the one that broke the HMAC design: the harness holding the signing key was
+ * written INTO the clone and exported check()/complete(), so agent code used it
+ * as a signing oracle and got a genuine MAC over a forged transcript. There is
+ * no in-process signer now, so the payload cannot even load. FORGE 5/5b are the
+ * ground-truth-read channel (a worker found the held-out vectors through
+ * /proc/<ppid>/cwd); the worker runs under Node's permission model and the read
+ * is denied. FORGE 6 is the leaf-symlink escape and FORGE 7 the same escape via
+ * openSync+readSync; the scorer resolves the checkout's symlinks and refuses.
+ * FORGE 8 is the module-loader `require` channel and FORGE 9 the `node:sqlite`
+ * host-state channel, both denied by the permission model and the builtin deny.
  *
  * The golden control runs every time: a scorer that rejects everything is not a
  * defence, it is a broken scorer.
@@ -181,7 +186,12 @@ test("FORGE 5: reading the held-out vectors off the filesystem does not pass", a
 test("FORGE 5b: reading the real he vectors via /proc/<ppid>/cwd does not pass", async () => {
   const parent = await mkdtemp(join(tmpdir(), "gym-iso-"));
   try {
-    const fixture = fileURLToPath(new URL("../../test/fixtures/gym-tasks/he/decimal-option/hidden.cases.json", import.meta.url));
+    // The scorer's cwd is the repo root, so the real attack reads the vectors by
+    // their REPO-RELATIVE path through /proc/<ppid>/cwd. (An absolute path passed
+    // to `join(cwd, abs)` concatenates and never resolves, which made this test
+    // unable to discriminate.)
+    const FIXTURE_REL = "test/fixtures/gym-tasks/he/decimal-option/hidden.cases.json";
+    const fixture = fileURLToPath(new URL(`../../${FIXTURE_REL}`, import.meta.url));
     const cases = JSON.parse(await readFile(fixture, "utf8")) as GymCase[];
     const repo = join(parent, "repo");
     await mkdir(repo, { recursive: true });
@@ -189,11 +199,14 @@ test("FORGE 5b: reading the real he vectors via /proc/<ppid>/cwd does not pass",
       'import { readFileSync, readlinkSync } from "node:fs";',
       'import { join } from "node:path";',
       "const cwd = readlinkSync(`/proc/${process.ppid}/cwd`);",
-      `const truth = JSON.parse(readFileSync(join(cwd, ${JSON.stringify(fixture)}), "utf8"));`,
+      `const truth = JSON.parse(readFileSync(join(cwd, ${JSON.stringify(FIXTURE_REL)}), "utf8"));`,
       "const table = new Map(truth.map((c) => [JSON.stringify(c.args), c.expect]));",
-      "export function encode(text) {",
-      "  const key = JSON.stringify([text]);",
-      "  return table.has(key) ? table.get(key) : text;",
+      // Key on ALL args: the decimal-option cases pass a second argument, so a
+      // single-arg key never matches and the attack would fail for the wrong
+      // reason (making the test unable to discriminate).
+      "export function encode(...args) {",
+      "  const key = JSON.stringify(args);",
+      "  return table.has(key) ? table.get(key) : args[0];",
       "}",
     ].join("\n");
     await writeFile(join(repo, "he.js"), attack);
@@ -241,21 +254,23 @@ test("FORGE 6 (round-six survivor): a leaf symlink to the held-out vectors does 
   }
 });
 
-test("FORGE 6b: the symlink refusal is function-agnostic (openSync/readSync, not just readFileSync)", async () => {
+test("FORGE 7: reading the vectors through a leaf symlink via openSync+readSync is tampered", async () => {
   const parent = await mkdtemp(join(tmpdir(), "gym-iso-"));
   try {
     const repo = await makeRepo(parent);
+    // Same leaf-symlink escape as FORGE 6, through a different fs entry point.
+    // The guard resolves the checkout's symlinks BEFORE the worker runs, so it
+    // is not specific to `readFileSync` (review: the symlink primitive reaches
+    // readFileSync, fs.promises.readFile, openSync+readSync, statSync, ...).
     const vectors = join(parent, "vectors.json");
     await writeFile(vectors, JSON.stringify(CASES));
-    // Same patch-planted leaf symlink, read through a different fs primitive. The
-    // guard is a checkout scan, not an fs-module hook, so the primitive does not
-    // matter: the patch is refused before the worker runs.
     const attack = [
-      'import { openSync, readSync } from "node:fs";',
+      'import { openSync, readSync, closeSync } from "node:fs";',
       'const fd = openSync("./escape.json", "r");',
-      "const buffer = Buffer.alloc(4096);",
-      "const read = readSync(fd, buffer, 0, 4096, 0);",
-      'const table = new Map(JSON.parse(buffer.subarray(0, read).toString("utf8")).map((c) => [JSON.stringify(c.args), c.expect]));',
+      "const buf = Buffer.alloc(65536);",
+      "const n = readSync(fd, buf, 0, buf.length, 0);",
+      "closeSync(fd);",
+      'const table = new Map(JSON.parse(buf.subarray(0, n).toString("utf8")).map((c) => [JSON.stringify(c.args), c.expect]));',
       "export function addOne(n) {",
       "  const key = JSON.stringify([n]);",
       "  return table.has(key) ? table.get(key) : n;",
@@ -268,13 +283,14 @@ test("FORGE 6b: the symlink refusal is function-agnostic (openSync/readSync, not
     await git(repo, "reset", "-q", "HEAD");
     await git(repo, "checkout", "--", ".");
     const score = await scoreGymPatch({ patchText: patch, baseRepoDir: repo, cases: CASES });
+    assert.notEqual(score.outcome, "passed", "the openSync read through a leaf symlink must not pass");
     assert.equal(score.outcome, "tampered", score.detail);
   } finally {
     await rm(parent, { recursive: true, force: true });
   }
 });
 
-test("FORGE 7: require of the held-out vectors is denied by the permission model", async () => {
+test("FORGE 8: require of the held-out vectors is denied by the permission model", async () => {
   const parent = await mkdtemp(join(tmpdir(), "gym-iso-"));
   try {
     const repo = await makeRepo(parent);
@@ -302,7 +318,7 @@ test("FORGE 7: require of the held-out vectors is denied by the permission model
   }
 });
 
-test("FORGE 8: node:sqlite cannot reach host state from inside the worker", async () => {
+test("FORGE 9: node:sqlite cannot reach host state from inside the worker", async () => {
   const parent = await mkdtemp(join(tmpdir(), "gym-iso-"));
   try {
     const repo = await makeRepo(parent);

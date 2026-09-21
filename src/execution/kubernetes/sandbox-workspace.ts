@@ -9,7 +9,7 @@ import { WarmSandboxPool } from "./pool.js";
 import type { SandboxBackend, SandboxIdentity, WarmSandboxLease } from "./types.js";
 import { WorkspaceSynchronizer } from "./workspace-sync.js";
 
-const WORKSPACE_EFFECTS = new Set(["workspace.read", "workspace.write", "workspace.list", "workspace.delete"]);
+const WORKSPACE_EFFECTS = new Set(["workspace.read", "workspace.write", "workspace.replace", "workspace.list", "workspace.delete"]);
 
 export interface SandboxWorkspaceExecutorOptions {
   resourceClass: KubernetesResourceClass;
@@ -101,6 +101,21 @@ export class SandboxWorkspaceExecutor implements Executor {
           if (path === undefined || path === "") return { ok: false, error: workspaceError(WORKSPACE_PATH_ESCAPES, effect.path) };
           const content = typeof effect.content === "string" ? new TextEncoder().encode(effect.content) : effect.content;
           await this.#backend.writeFile(sandbox, path, content);
+          return { ok: true };
+        }
+        case "workspace.replace": {
+          // The gym's `replace_in_file`, executed against the pod's filesystem.
+          const path = this.#relative(effect.path);
+          if (path === undefined || path === "") return { ok: false, error: workspaceError(WORKSPACE_PATH_ESCAPES, effect.path) };
+          const kind = await this.#kind(sandbox, path);
+          if (kind === "missing") return { ok: false, error: workspaceError(WORKSPACE_NOT_FOUND, path) };
+          if (kind === "directory") return { ok: false, error: workspaceError(WORKSPACE_IS_DIRECTORY, path) };
+          const current = new TextDecoder().decode(await this.#backend.readFile(sandbox, path));
+          const occurrences = effect.oldText.length === 0 ? 0 : current.split(effect.oldText).length - 1;
+          if (occurrences !== 1) {
+            return { ok: false, error: `old_text occurs ${occurrences} times in ${path}; it must occur exactly once` };
+          }
+          await this.#backend.writeFile(sandbox, path, new TextEncoder().encode(current.replace(effect.oldText, effect.newText)));
           return { ok: true };
         }
         case "workspace.delete": {

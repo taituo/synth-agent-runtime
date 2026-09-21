@@ -42,3 +42,33 @@ jobs:
             sleep 1
           done
           node scripts/live-proofs.mjs --only=graph-restart,durable-restart,graph-child,graph-continue-as-new,graph-cancel,effect-receipt --timeout=600000
+
+  # The gym anti-cheat and boundary regressions, run explicitly so a future
+  # change to the test glob cannot silently drop them. Unit-level only: the
+  # gVisor pod tests SKIP without a cluster (they are never counted as passes).
+  gym:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install
+      - run: npm run build
+      - name: gym scorer forgeries, hardening and boundary (unit level)
+        run: >-
+          node --test
+          dist/test/gym-forge.test.js
+          dist/test/gym-scoring.test.js
+          dist/test/gym-scoring-hardening.test.js
+          dist/test/gym-patch-paths.test.js
+          dist/test/gym-runner-isolation.test.js
+          dist/test/gym-sandbox-boundary.test.js
+          dist/test/gym-sandbox-rung.test.js
+          dist/test/gym-durable-path.test.js
+          dist/test/sandbox-workspace.test.js
+          dist/test/symlink-target.test.js
+      - name: gym durable-turn activity boundary (temporal)
+        run: |
+          npm install --prefix integrations/temporal
+          integrations/temporal/node_modules/.bin/tsx --test integrations/temporal/test/gym-activities.test.ts

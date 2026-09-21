@@ -46,7 +46,7 @@ fuzz the two places the round-3 review attacked.
 | `test/gym-real-task.test.ts` round 1 | the held-out test FAILS on the materialized `he` bug and PASSES once fixed | run the hidden test directly on each checkout; a vacuous hidden test would return 0 on both |
 | `test/gym-real-task.test.ts` round 2 | golden reverse patch `passed`; partial fix `failed`; visible-test edit `tampered`; top-level `exit(0)` not `passed`; bad patch `errored` | score each real patch through `scoreGymPatch` |
 | `test/gym-patch-paths.test.ts` | 200 seeded patch shapes: every path git touches is in `patchTargetPaths`, both rename sides are exposed, protected paths are flagged | differential against `git apply --numstat -z` |
-| `test/gym-vacuity.test.ts` | a hidden test with no marker or a guessed marker is `errored`; agent-printed forged marker does not rescue a failing test; real marker + correct fix `passed` | each shape scored through `scoreGymPatch` |
+| `test/gym-forge.test.ts` | a hidden test with no marker or a guessed marker is `errored`; agent-printed forged marker does not rescue a failing test; real marker + correct fix `passed` | each shape scored through `scoreGymPatch` |
 
 The real-task round immediately caught a bug in the round's own helper: it
 inherited `NODE_TEST_CONTEXT` from the outer `node --test`, so the child skipped
@@ -73,7 +73,7 @@ isolated verifier:
 | `bf56bca` (before) | `passed` (bug unfixed) | `errored` |
 | isolated verifier (after) | `errored` | `errored` |
 
-Failing-first: `test/gym-vacuity.test.ts` "FORGE 4 (round six ONE-a)" is the
+Failing-first: `test/gym-forge.test.ts` "FORGE 4 (round six ONE-a)" is the
 permanent regression, and it can fail for the real reason — restoring an
 in-clone `gym-hidden-harness.mjs` that exports the signer makes the payload
 `passed` again. The scorer no longer runs a signer in the agent's process: the
@@ -100,7 +100,7 @@ The permission model denied direct reads and `process.getBuiltinModule` reads
 survived: the patch planted `escape.json` as a symlink to the held-out vectors
 file, and the worker read it. Node follows the link before the permission
 decision, so an allowlisted path can still reach outside. Reproduced first as a
-failing regression (`FORGE 6`, `test/gym-vacuity.test.ts`): `passed` 4 of 4 with
+failing regression (`FORGE 6`, `test/gym-forge.test.ts`): `passed` 4 of 4 with
 the bug unfixed before the guard.
 
 Fix: `findEscapingSymlink` walks the applied checkout and resolves every

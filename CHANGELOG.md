@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased — merge `gym-runner`: one sandbox rung, consolidated FORGE attacks
+
+- **One rung for the gym's sandbox arm** (`a6fb152`): `integrations/gym/sandbox.ts`
+  now builds `ExecutionBroker([SandboxWorkspaceExecutor])` instead of the parallel
+  `[SyntheticExecutor, KubernetesExecutor]`, so `workspace.read/write/replace/list`
+  and `process.exec` all execute in the persistent gVisor Pod; the
+  `MemoryWorkspace` is only the seed/checkpoint cache. `SandboxWorkspaceExecutor`
+  gained a `workspace.replace` case (read-modify-write in the Pod, exactly one
+  match), and `brokerEffectRunner.read` decodes pod bytes instead of stringifying
+  them. `test/gym-sandbox-rung.test.ts` pins the executor id
+  (`sandbox-workspace:sandbox-small`), the single persistent pod, and an untouched
+  host sentinel.
+- **Consolidated FORGE attacks** (`4a1a8d9`, `4fa32fc`): the forgery regressions
+  live in `test/gym-forge.test.ts` (FORGE 1-9, including the now-discriminating
+  `/proc/<ppid>/cwd` route and the `openSync` symlink variant);
+  `test/gym-isolated-score.test.ts` keeps only the loop-level test. The gym CI job
+  runs the attack files explicitly.
+- **Verification.** Root **271 tests (269 pass, 0 fail, 2 live-gVisor skips)**;
+  Temporal **104/104**; the live two-arm sandbox attempt (scripted gateway, zero
+  quota) `passed` on both arms (`gvisor`, 358 B patch); the live gVisor boundary
+  suite (sandbox attempt + pod boundary) 3/3 with `SYNTH_LIVE_GVISOR=1`.
+- **Docs.** `docs/KNOWN-OPEN.md` drops the closed "gym sandbox is a parallel
+  implementation" and "agent tool path" items (the opt-in `scored` flag remains);
+  `docs/VERIFICATION.md` / `docs/VERIFICATION-LOG.md` point at
+  `test/gym-forge.test.ts`; `README.md`'s test block states the merged counts.
+
 ## Unreleased — docs: label the Postgres SQL-shape proofs against the live clock proof
 
 - **README.md** no longer says the monotonic fenced-generation behaviour is

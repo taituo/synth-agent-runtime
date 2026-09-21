@@ -52,9 +52,9 @@ already did (a skip is never a pass).
 | Attack (who found it) | Permanent regression test |
 |---|---|
 | A gym patch makes the visible test green without fixing the bug: `process.exit(0)` at import, monkeypatching `assert`, a constant stub | `test/gym-scoring.test.ts` (the three cheat cases); control: "a correct fix passes the held-out vectors" |
-| Gym forgery via the env nonce, an early exit, an assert mutation, or importing an in-scorer signer | `test/gym-vacuity.test.ts` FORGE 1–4 |
-| Reading the held-out vectors off the filesystem, or via `/proc/<ppid>/cwd` | `test/gym-vacuity.test.ts` FORGE 5, 5b |
-| A leaf symlink to the vectors, an intermediate-directory symlink, `require`, `node:sqlite` | `test/gym-vacuity.test.ts` FORGE 6, 6b, 7, 8 |
+| Gym forgery via the env nonce, an early exit, an assert mutation, or importing an in-scorer signer | `test/gym-forge.test.ts` FORGE 1–4 |
+| Reading the held-out vectors off the filesystem, or via `/proc/<ppid>/cwd` | `test/gym-forge.test.ts` FORGE 5, 5b |
+| A leaf symlink to the vectors, an intermediate-directory symlink, `require`, `node:sqlite` | `test/gym-forge.test.ts` FORGE 6, 7, 8, 9 |
 | Tampering hidden as a patch path trick (no `diff --git` header, rename, non-ASCII, `./` prefix, `tests/` dir) | `test/gym-scoring.test.ts`; fuzz `test/gym-patch-paths.test.ts` |
 | Scorer worker reaching host services/state (TCP, unix socket, `process.kill`, `os.userInfo`) | `scripts/scorer-isolation-probe.mjs` (live; exit 2 while any class is reachable) + `docs/KNOWN-OPEN.md` |
 | Symlink escape on the workspace path: absolute target, chain, intermediate symlinked dir, dangling link, legitimate relative in-repo link | `test/symlink-target.test.ts` |
@@ -117,6 +117,6 @@ provider attack script, and the ad-hoc gym probes. The durable ones are encoded
 above as tests; the provider attack's mechanism is covered at unit level by
 `test/provider-config.test.ts`, and the gym capability inventory by
 `scripts/scorer-isolation-probe.mjs`. The gym's scorer attacks were encoded in
-`test/gym-vacuity.test.ts` when the `gym-runner` branch merged into `main`
+`test/gym-forge.test.ts` when the `gym-runner` branch merged into `main`
 (`9fad1dd`); the remaining scorer-isolation gap is the host-boundary entry in
 `docs/KNOWN-OPEN.md`.

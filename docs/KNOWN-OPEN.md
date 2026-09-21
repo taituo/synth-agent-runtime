@@ -6,21 +6,17 @@ removed only when the closing work lands.
 
 ## Runtime and deploy
 
-- **The gym's scored sandbox rung is a parallel implementation, not the runtime
-  rung.** The gym is merged (its durable workflow drives `runTurn`
-  turn-per-activity, `gym-workflows.ts`) and it refuses a scored run on
-  `runner:"local"` (`gym-activities.ts`, `GymUnisolatedScoredRun`). But the
-  gym's sandbox runner (`integrations/gym/sandbox.ts`) builds its own
-  `ExecutionBroker([SyntheticExecutor, KubernetesExecutor], LocalRuntimeStateStore())`:
-  `workspace.read/write/replace/list` are served by the `SyntheticExecutor`
-  (worker RAM) and only `process.exec` reaches the Pod. The runtime rung's
-  `SandboxWorkspaceExecutor` does not implement `workspace.replace`
-  (`sandbox-workspace.ts` `WORKSPACE_EFFECTS` = read/write/list/delete), so the
-  gym's `replace_in_file` cannot simply be pointed at it. Separately,
+- **`assertRungAllowedForScored` is wired but opt-in; the gym uses its own
+  refusal.** The gym's scored sandbox rung is now the runtime rung:
+  `integrations/gym/sandbox.ts` builds
+  `ExecutionBroker([SandboxWorkspaceExecutor])`, so `workspace.read/write/replace/list`
+  and `process.exec` all execute in the persistent Pod (no `SyntheticExecutor`
+  medium), and `SandboxWorkspaceExecutor` implements `workspace.replace`
+  (`sandbox-workspace.ts` `WORKSPACE_EFFECTS` includes it). What remains:
   `runTurn`'s `DurableTurnConfig.scored` refusal (`assertRungAllowedForScored`)
-  is wired but opt-in — no production caller sets `scored`, and the gym uses its
-  own refusal instead. Closing: one rung that serves `workspace.replace`, and
-  route the gym's scored run through it.
+  has no production caller that sets `scored`, and the gym enforces its own
+  `GymUnisolatedScoredRun` at the activity boundary instead. Closing: one shared
+  scored flag across the runtime and gym paths.
 - **Sandbox workspace checkpoints are diffs; huge workspaces still need the git
   transport.** `checkpointSandboxWorkspace` writes the workspace diff
   (`exportArtifact`) to the blob store and restores by digest. A very large
@@ -85,23 +81,6 @@ removed only when the closing work lands.
 
 ## Egress and artifacts
 
-
-## Gym scoring isolation
-
-- **The scoring worker now runs in the gVisor pod; the agent's tool path is the
-  remaining gap.** `src/gym/sandbox-worker.ts` runs the worker one-shot inside
-  the pod (only the applied checkout mounted, no host `/tmp`, DNS-only egress),
-  and the verifier still holds the held-out cases. `scripts/scorer-isolation-probe.mjs`
-  is red on the host worker and green in the pod — Temporal/Postgres, a host
-  unix-socket bind, a verifier signal and host `userInfo` are all blocked — and
-  the golden fix still passes / a wrong fix still fails through the pod.
-  `SYNTH_REQUIRE_ISOLATION=1` runs the pod and refuses (`errored`) when no
-  boundary is configured. Remaining: the agent's own tool execution. The gym's
-  `localEffectRunner` is a labelled, unisolated **control** arm (refused for
-  scored runs), and the runtime sandbox rung's `SandboxWorkspaceExecutor` does
-  not yet support `workspace.replace`, so the gym tools cannot move onto it
-  unchanged. Closing: add `workspace.replace` to the rung and route the agent
-  tool path through the pod. See `docs/SCORER-SANDBOX.md`.
 
 ## Measurement
 
