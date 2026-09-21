@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { KubernetesResourceClass } from "../src/execution/resource-class.js";
 import type { SandboxBackend, SandboxExecRequest, SandboxExecResult, SandboxIdentity } from "../src/execution/kubernetes/types.js";
+import { FileSystemBlobStore } from "../src/index.js";
 import { buildSandboxRunner } from "../integrations/gym/sandbox.js";
 
 /** Stand-in for the executor Pod: an in-memory filesystem plus the exact exec commands issued. */
@@ -131,6 +132,60 @@ test("the gym sandbox runner runs workspace effects (and replace) in the pod, no
 
     await sandbox.close();
     assert.equal(backend.calls.destroy, 1, "close destroys the pod");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a cold sandbox runner restores the checkpointed workspace (work survives a worker restart)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "gym-rung-cp-"));
+  try {
+    const repoDir = join(dir, "repo");
+    const BUGGY = "codePoint = parseInt(hexDigits, 10);\n";
+    const FIXED = "codePoint = parseInt(hexDigits, 16);\n";
+    await mkdir(repoDir, { recursive: true });
+    await writeFile(join(repoDir, "he.js"), BUGGY);
+    const blobs = new FileSystemBlobStore(join(dir, "blobs"));
+
+    // Worker A: the agent edits in the pod, the turn commits, and the workspace
+    // is checkpointed into the blob store before the pod is destroyed.
+    const backendA = new FakeSandboxBackend();
+    const sandboxA = await buildSandboxRunner({ repoDir, image: "unused", backend: backendA, agentId: "agt_cp" });
+    const replaced = await sandboxA.executeEffect({
+      id: "p",
+      kind: "workspace.replace",
+      path: "he.js",
+      oldText: "parseInt(hexDigits, 10)",
+      newText: "parseInt(hexDigits, 16)",
+    });
+    assert.equal(replaced.ok, true, replaced.error);
+    assert.equal(await sandboxA.runner.read("he.js"), FIXED, "the edit is in the pod");
+    const digest = await sandboxA.checkpointWorkspace(blobs);
+    assert.ok(digest, "checkpointing a live pod must return a durable digest");
+    await sandboxA.close();
+
+    // Control: a cold pod WITHOUT the checkpoint starts from the bugged source,
+    // so the test below is discriminating (the loss is observable).
+    const backendCold = new FakeSandboxBackend();
+    const cold = await buildSandboxRunner({ repoDir, image: "unused", backend: backendCold, agentId: "agt_cp" });
+    assert.equal(await cold.runner.read("he.js"), BUGGY, "without a restore the cold pod re-materializes the bugged base");
+    await cold.close();
+
+    // Worker B: a cold worker restores from the digest, and the resumed pod
+    // holds the committed edit. The digest is the content reference in the SAME
+    // store, not process memory.
+    const backendB = new FakeSandboxBackend();
+    const resumed = await buildSandboxRunner({
+      repoDir,
+      image: "unused",
+      backend: backendB,
+      agentId: "agt_cp",
+      restore: { blobStore: blobs, digest: digest! },
+    });
+    assert.equal(await resumed.runner.read("he.js"), FIXED, "the resumed pod must hold the checkpointed edit");
+    const stat = await blobs.stat(digest!);
+    assert.ok(stat && stat.size > 0, "the workspace digest resolves to bytes in the same blob store");
+    await resumed.close();
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

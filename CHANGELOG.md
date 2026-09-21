@@ -99,6 +99,59 @@
   `test/abort.test.ts`; the regression test is
   `integrations/opencode-http-gateway/test/abort.test.ts`.
 
+## Unreleased — sandbox cleanup: per-pod NetworkPolicies cannot be orphaned (defect 6)
+
+- Measured on `tiny`: **20 leaked `synth-sandbox-*-network` NetworkPolicies with
+  zero matching pods** (19 in `synth-sandboxes`, 1 in `synth-audit-gvisor`),
+  despite the earlier `type/name` delete fix. The explicit destroy does delete
+  both objects (re-measured: `backend.create` then `backend.destroy` leaves
+  nothing), so the orphans come from pods that disappear without the destroy
+  path — terminated-pod GC, eviction, or a manual `kubectl delete pod` — which
+  left the policy behind.
+- Fix (mechanism): the per-sandbox NetworkPolicy is now **owned by its Pod**
+  (`metadata.ownerReferences`), so Kubernetes garbage-collects the policy with
+  the pod by any deletion path. `KubectlSandboxBackend.create` reads the pod's
+  uid after apply and passes it to `buildSandboxNetworkPolicy`
+  (`src/execution/kubernetes/kubectl-backend.ts`, `manifests.ts`); explicit
+  destroy still deletes pod and policy together, idempotently.
+- Tests: a headless unit test asserts the ownerReference and the unchanged
+  no-owner shape; a live-gated test (`SYNTH_LIVE_GVISOR=1`) asserts that (1)
+  destroy removes both objects and (2) deleting the pod out of band does not
+  orphan the policy. Failing-first: omitting the owner turns the live test red
+  (`a pod deleted out of band must not orphan its NetworkPolicy`); restored it is
+  green.
+- Leftovers: swept 20 orphaned policies (no matching pod) to zero; the 3
+  remaining had live pods and were kept. `synth-sandboxes` is now empty of
+  `synth-sandbox-*` policies.
+
+## Unreleased — gym durable attempt: the workspace survives a worker SIGKILL (defect 8)
+
+- Defect 8: `checkpointSandboxWorkspace` / `restoreSandboxWorkspace` and the
+  `synth_workspace_checkpoints` table existed but nothing in production called
+  them, so control-plane durability was not work-product durability. The gym's
+  durable attempt now checkpoints the sandbox workspace after each turn and
+  restores it on a cold worker:
+  - **Checkpoint:** `runTurn`
+    (`integrations/temporal/src/gym-activities.ts`) calls
+    `sandbox.checkpointWorkspace(blobs)` -> `checkpointSandboxWorkspace`
+    (`src/execution/kubernetes/sandbox-workspace.ts:261`), which syncs the pod
+    back and writes the workspace diff to the existing blob store; the digest is
+    carried in the checkpoint record (`GymCheckpoint.workspaceDigest`,
+    `src/gym/checkpoint.ts`) whose pointer is the durable reference. One store is
+    used for both the record and the diff — no second store.
+  - **Restore:** a cold worker passes `restore: { blobStore, digest }` to
+    `getPersistentSandboxRunner` (`integrations/gym/sandbox.ts`), which calls
+    `restoreSandboxWorkspace` (`sandbox-workspace.ts:278`) into the cache before
+    the first effect materializes the new Pod. A record without a digest still
+    replays its patch (legacy fallback).
+- Evidence. Unit: `test/gym-sandbox-rung.test.ts` (checkpoint -> cold restore
+  with a fake Pod backend, plus a no-restore control). Live kill/resume
+  (scripted gateway, zero quota): worker A edits then is SIGKILLed mid-turn-2;
+  worker B resumes at activity `attempt=2`, `run_visible_test` reports PASS on
+  the resumed turn, the restored workspace diff decodes to the `he.js` change,
+  and the run scores `passed` 358 B. Disabling the restore makes the same
+  kill/resume `failed` 0 B (failing-first).
+
 ## Unreleased — gym durable shape settled: the gym owns its loop, `durableAgentWorkflow` stays the lifecycle leaf
 
 - `SPEC-super-harness.md` item 1 requires one execution model (Temporal

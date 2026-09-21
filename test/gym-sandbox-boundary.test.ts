@@ -310,6 +310,38 @@ test("the boundary contract rejects a local run (it can read the host vectors)",
   }
 });
 
+/** A fully compliant pod probe: gVisor, host invisible, no host TCP. */
+function compliantPodProbe(): Record<string, unknown> {
+  return {
+    gvisor: true,
+    hostRepo: false,
+    hostCheckout: false,
+    hostTmpSentinel: false,
+    hostVectorsReadable: false,
+    hiddenCases: null,
+    hostTemporal: "DENIED:ECONNREFUSED",
+    hostGateway: "DENIED:ECONNREFUSED",
+    clusterApi: "DENIED:ECONNREFUSED",
+    internet: "DENIED:ECONNREFUSED",
+  };
+}
+
+test("the boundary contract refuses two unsafe runs and allows the compliant pod (A/B/C)", () => {
+  // A: an unisolated host run (gVisor absent, host visible).
+  assert.throws(
+    () => assertFilesystemBoundary({ ...compliantPodProbe(), gvisor: false, hostRepo: true, hostCheckout: true }),
+    /gVisor|must not/,
+  );
+
+  // B: a run that hides the host but is NOT under gVisor. Isolation is the
+  // runtime class, not "looks like a pod", so the contract must still refuse it.
+  assert.throws(() => assertFilesystemBoundary({ ...compliantPodProbe(), gvisor: false }), /gVisor/);
+
+  // C: the legitimate compliant pod is ALLOWED. Without this case the contract
+  // could refuse everything and the two refusals above would prove nothing.
+  assert.doesNotThrow(() => assertFilesystemBoundary(compliantPodProbe()));
+});
+
 test("the gVisor pod cannot see the host, the vectors, or reach host TCP", async (t: TestContext) => {
   if (!liveEnabled()) {
     t.skip("set SYNTH_LIVE_GVISOR=1 and SYNTH_EXECUTOR_IMAGE to run the live sandbox boundary proof");

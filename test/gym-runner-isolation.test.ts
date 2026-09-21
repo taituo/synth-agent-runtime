@@ -64,6 +64,33 @@ test("a scored run is refused on the local arm and allowed on the sandbox arm", 
   assert.throws(() => assertScoredRunnerAllowed("local"), UnisolatedScoredRunError);
 });
 
+test("the scored-rung gate has two refusals and one allow (A/B/C)", () => {
+  // A: the unisolated local runner is refused, with the named error type (a
+  // blanket `throw` somewhere else would not be this contract).
+  assert.throws(
+    () => assertScoredRunnerAllowed("local"),
+    (error: unknown) => {
+      assert.ok(error instanceof UnisolatedScoredRunError, "the refusal is the named UnisolatedScoredRunError");
+      assert.match((error as Error).message, /unisolated/);
+      return true;
+    },
+  );
+
+  // B: a runner value that is not one of the two known kinds is refused loudly.
+  // There is no scored "synthetic" runner on this branch: an unknown value is
+  // never silently treated as the isolated default (which would be a fail-open).
+  assert.throws(() => parseGymRunner("synthetic"), /unknown runner/);
+  assert.throws(() => parseGymRunner("host"), /unknown runner/);
+
+  // C: the gVisor sandbox is ALLOWED — the control that shows the gate is not a
+  // blanket refusal.
+  assert.doesNotThrow(() => assertScoredRunnerAllowed("sandbox"));
+  // The shared scored-rung rule reads `isolated`; there is deliberately no
+  // second `scoredAllowed` flag that could drift out of agreement with it.
+  assert.equal(scoredRungAllowed(describeGymRunner("sandbox"), true), true);
+  assert.equal(describeGymRunner("sandbox").isolated, true);
+});
+
 test("materializing a task does not plant the hidden vectors or the hidden test", async (t: TestContext) => {
   const task = await loadGymTask(HE_TASK);
   let work: string | undefined;

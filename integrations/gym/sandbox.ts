@@ -25,6 +25,9 @@ import {
   MemoryWorkspace,
   SandboxWorkspaceExecutor,
   brokerEffectRunner,
+  checkpointSandboxWorkspace,
+  restoreSandboxWorkspace,
+  type BlobStore,
   type Effect,
   type EffectContext,
   type EffectResult,
@@ -107,6 +110,13 @@ export interface BuildSandboxRunnerOptions {
   kubectlContext?: string;
   runtimeClassName?: string;
   agentId?: string;
+  /**
+   * Seed the cache workspace from a durable checkpoint before the first effect
+   * materializes the Pod. Used on a cold worker (after a SIGKILL) so the resumed
+   * attempt continues from the crashed attempt's committed edits instead of the
+   * bugged source. The digest comes from the existing blob store.
+   */
+  restore?: { blobStore: BlobStore; digest: string };
   /** Test seam: a fake "pod" backend instead of kubectl. */
   backend?: SandboxBackend;
   /** Test seam: override the resource class. */
@@ -121,6 +131,13 @@ export interface SandboxRunner {
    * `process.exec` runs in the pod.
    */
   executeEffect(effect: Effect, minFidelity?: number): Promise<EffectResult>;
+  /**
+   * Durably checkpoint the pod workspace into `blobStore` (sync the pod back,
+   * then write the workspace diff) and return the digest. Undefined when there
+   * is no live pod (no effect ran this turn), so the caller carries the previous
+   * digest forward rather than dropping the reference.
+   */
+  checkpointWorkspace(blobStore: BlobStore): Promise<string | undefined>;
   close(): Promise<void>;
 }
 
@@ -170,6 +187,12 @@ export async function buildSandboxRunner(options: BuildSandboxRunnerOptions): Pr
     ...(options.kubectlContext ? { context: options.kubectlContext } : {}),
   });
   const workspace = new MemoryWorkspace({ source: new LocalDirSource(options.repoDir) });
+  // A cold resume restores the crashed attempt's committed workspace diff into
+  // the cache BEFORE the first effect materializes the Pod. The bytes come from
+  // the blob store by digest, not from host RAM.
+  if (options.restore) {
+    await restoreSandboxWorkspace(options.restore.blobStore, options.restore.digest, workspace);
+  }
   const workspaces = new Map([[workspace.id, workspace]]);
   // The one rung: no SyntheticExecutor. The pod's filesystem is the medium for
   // workspace effects as well as process.exec.
@@ -202,6 +225,10 @@ export async function buildSandboxRunner(options: BuildSandboxRunnerOptions): Pr
   return {
     runner,
     executeEffect: (effect, minFidelity) => broker.execute(effect, context, minFidelity),
+    async checkpointWorkspace(blobStore) {
+      const ref = await checkpointSandboxWorkspace(executor, workspace.id, blobStore);
+      return ref?.digest;
+    },
     async close() {
       await executor.close();
     },
