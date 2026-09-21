@@ -7,7 +7,60 @@ removed only when the closing work lands.
 ## Egress and artifacts
 
 
-## Measurement
+## Scoring-worker isolation
+
+The gym scores an agent patch by running the patched module in a host worker
+(`isolatedScoreGymPatch`, `src/gym/scoring.ts`). The worker is confined by Node's
+permission model plus an explicit `node:sqlite` deny. That is a **guardrail, not
+a security boundary**; the adversarial sweep in `test/gym-forge-channels.test.ts`
+pins every channel it covers and the review's channel inventory names the rest.
+The boundary for a *scored production run* is the gVisor pod
+(`test/gym-sandbox-boundary.test.ts`, live), not this host worker.
+
+Closed and regression-tested (`gym-forge-channels.test.ts`, failing-first for the
+env allowlist, the permission model and the symlink guard): parent env secrets,
+absolute and `/proc` reads, `/etc/passwd`, the fixture tree, `require`/`import`
+outside, the scorer source, leaf/chain/relative/intermediate symlinks to the
+vectors, `process.binding`, `worker_threads`, `module.register`, `node:sqlite`,
+`child_process` and every write.
+
+**Open below is the part of the channel inventory the permission model does not
+cover at all.** None of these currently yields ground truth (the held-out vectors
+are neither in a SQLite file nor on any reachable service, checked), so none is a
+scorer pass today; each is a host-integrity escape and a latent bypass the day
+the vectors become reachable through it. Closing needs an OS boundary
+(dedicated unprivileged user, mount namespace with only the clone, network
+namespace or no host TCP/unix access, seccomp), not another JS-level block. The
+host worker is only used when a deployment does not set
+`SYNTH_REQUIRE_ISOLATION=1`; that flag is a refusal, not a fix.
+
+- **Network egress / DNS / UDP / unix sockets — OPEN.** Node's permission model
+  has no network permission (`node --help` lists no `--allow-net`), so
+  `node:net`/`node:dgram`/`node:dns` reach the host unimpeded. Measured inside the
+  real worker: TCP to `127.0.0.1:8787` **CONNECTED**, `1.1.1.1:443` **CONNECTED**,
+  UDP `send` **SENT**, DNS `localhost` **RESOLVED**, and `net.Server.listen` on an
+  outside unix socket **bound**. `unshare -n` is `Operation not permitted` here,
+  so a network namespace is not available unprivileged. This is an exfiltration
+  channel (it composes with the closed-but-not-inherited-secret concern) and a
+  reach into Temporal/Postgres/gateway listeners. Closing: OS sandbox with a
+  network namespace, or a seccomp policy denying socket/connect.
+- **`node:test` `run({ files })` — OPEN.** It loads and executes a file outside
+  the allow-listed root (the review measured an outside test file; a re-probe
+  produced `events:24` with the outside test enqueued). The loaded code still runs
+  under the permission model, so it cannot read the vectors directly, but it is a
+  loader path the model does not gate. Closing: OS sandbox (as above).
+- **`process.kill` against the verifier — OPEN.** `process.kill(ppid, 0)` succeeds
+  (`killPid1` is `EPERM`, correctly). A worker can SIGKILL the verifier and abort
+  scoring; that is a denial of service, never a pass. Closing: unprivileged
+  uid/pid namespace for the worker.
+- **Host metadata — OPEN.** `os.userInfo().username`, `os.hostname()`,
+  `os.networkInterfaces()`, `os.loadavg()` and `os.homedir()` all describe the
+  host. Fingerprinting only, no score effect. Closing: OS sandbox.
+- **`realpathSync` on an outside path — ALLOWED (metadata only).** It returns the
+  canonical path string; any subsequent read is denied. Recorded so it is not
+  mistaken for a read leak.
+
+
 
 - **The corpus is a smoke test, not a benchmark.** The four `cve-*` items were
   moved to `ambiguous` (a vulnerability report is both `news` and `incident`),

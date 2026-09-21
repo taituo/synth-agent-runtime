@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased — gym adversarial channel sweep: the worker's environment no longer leaks parent secrets
+
+### The scoring worker gets a minimal environment, not the verifier's
+
+- The isolated worker was spawned with `{ ...process.env }` minus `GYM_HIDDEN_*`
+  and `NODE_TEST_CONTEXT`. That still handed agent code every other secret the
+  gym process holds — `SYNTH_GATEWAY_API_KEY`, `OPENROUTER_API_KEY`, arbitrary
+  tokens (measured: `hasSecret: ["SYNTH_GATEWAY_API_KEY","MY_API_TOKEN"]` inside
+  the worker). It now receives a small platform-essential allowlist
+  (`PATH`/`HOME`/`TMPDIR`/`TMP`/`TEMP`/`LANG`/`LC_ALL`/Windows roots) and nothing
+  else. Expected values are still never placed in the worker at all.
+
+### Every channel the worker can use is enumerated and pinned
+
+- `test/gym-forge-channels.test.ts` sweeps the review's channel inventory: env
+  secrets; absolute, `/proc/self/*`, `/proc/<ppid>/*`, `/etc/passwd`, fixture
+  tree, `require`/`import` and scorer-source reads; leaf/chain/relative/
+  intermediate symlinks to the held-out vectors; `process.binding`,
+  `worker_threads`, `module.register`, `node:sqlite`; `child_process` and all
+  writes. Each test asserts the channel is refused while the golden fix still
+  passes; the env, permission-model and symlink guards were each broken to
+  confirm the tests go red for the right reason.
+- The channels Node's permission model does not cover — network (TCP/UDP/DNS/
+  unix sockets), `node:test` `run({files})`, `process.kill` of the verifier, and
+  host metadata — are recorded as open holes with probe evidence in
+  `docs/KNOWN-OPEN.md`. They are a host-integrity escape, not a scorer pass
+  today, and their boundary is the gVisor pod, not this host worker.
+
 ## Unreleased — gym scorer: the in-process signing oracle is removed
 
 ### BREAKING: `scoreGymPatch` takes held-out `cases`, not a `hiddenTestPath`
