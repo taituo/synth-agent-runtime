@@ -113,10 +113,12 @@ export interface TurnRung {
 }
 
 /**
- * Refuse a scored run on an unisolated rung. The gym's `runner:"local"` refusal
- * is the same rule; this extends it to any unscoped synthetic workspace.
+ * Refuse a scored run on an unisolated rung. The gym's activities apply this
+ * same rule (they thread a `scored` flag from the workflow input), so neither
+ * path carries a private copy. The caller supplies only the rung's isolation:
+ * the decision is a property of the rung, not of how it is built.
  */
-export function assertRungAllowedForScored(rung: TurnRung, scored: boolean): void {
+export function assertRungAllowedForScored(rung: Pick<TurnRung, "isolated">, scored: boolean): void {
   if (scored && rung.isolated !== true) {
     throw new Error("UNISOLATED_RUNG_REFUSED: a scored run requires an isolated (sandbox) rung");
   }

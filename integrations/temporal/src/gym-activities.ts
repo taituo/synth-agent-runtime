@@ -34,7 +34,7 @@ import {
   type GymScore,
 } from "../../../src/index.js";
 import { getPersistentSandboxRunner, hasPersistentSandboxRunner, releasePersistentSandboxRunner } from "../../gym/sandbox.js";
-import { buildToEffect } from "./gateway-run-turn.js";
+import { assertRungAllowedForScored, buildToEffect } from "./gateway-run-turn.js";
 import type { DurableToolSpec } from "./contracts.js";
 import type {
   GymActivities,
@@ -62,6 +62,22 @@ function currentAttempt(): number {
     return ActivityContext.current().info.attempt;
   } catch {
     return 1;
+  }
+}
+
+/**
+ * The one scored-rung rule at the activity boundary. The decision is the
+ * runtime's `assertRungAllowedForScored` — the same guard the runtime `runTurn`
+ * applies when it selects a rung — so the gym does not carry a second,
+ * independent refusal that can drift. The refusal is wrapped as a non-retryable
+ * activity failure so a refused scored attempt fails fast instead of parking.
+ * `gymPrepareActivity`, `runTurn` and `gymScoreActivity` all call this.
+ */
+function assertScoredRungAllowed(kind: "local" | "sandbox", scored: boolean): void {
+  try {
+    assertRungAllowedForScored({ isolated: describeGymRunner(kind).isolated }, scored);
+  } catch (error) {
+    throw ApplicationFailure.nonRetryable((error as Error).message, "GymUnisolatedScoredRun");
   }
 }
 
@@ -132,14 +148,7 @@ export function createGymActivities(): GymActivities {
   const gymPrepareActivity = async (input: GymAttemptActivityInput): Promise<GymPreparedAttempt> => {
     const heartbeat = setInterval(heartbeatFor(), 15_000);
     try {
-      const binding = describeGymRunner(input.runner ?? "sandbox");
-      if (!binding.scoredAllowed) {
-        throw ApplicationFailure.nonRetryable(
-          `refusing to score a run on the "${binding.kind}" runner: it is unisolated and model-authored code ` +
-            `can read the held-out vectors on the host. Start the workflow with runner:"sandbox" (gVisor).`,
-          "GymUnisolatedScoredRun",
-        );
-      }
+      assertScoredRungAllowed(input.runner ?? "sandbox", input.scored ?? true);
       const task = await loadGymTask(input.taskDir);
       const materialized = await materializeGymTask({
         task,
@@ -172,14 +181,7 @@ export function createGymActivities(): GymActivities {
     try {
       const { prepared, transcript } = input;
       const attempt = prepared.attempt;
-      const binding = describeGymRunner(attempt.runner ?? "sandbox");
-      if (!binding.scoredAllowed) {
-        throw ApplicationFailure.nonRetryable(
-          `refusing to score a run on the "${binding.kind}" runner: it is unisolated and model-authored code ` +
-            `can read the held-out vectors on the host. Start the workflow with runner:"sandbox" (gVisor).`,
-          "GymUnisolatedScoredRun",
-        );
-      }
+      assertScoredRungAllowed(attempt.runner ?? "sandbox", attempt.scored ?? true);
       const key = prepared.checkpointKey;
       const cold = !hasPersistentSandboxRunner(key);
       const sandbox = await getPersistentSandboxRunner({
@@ -275,12 +277,7 @@ export function createGymActivities(): GymActivities {
 
   const gymScoreActivity = async (input: GymScoreActivityInput): Promise<GymAttemptActivityOutput> => {
     const binding = describeGymRunner(input.prepared.attempt.runner ?? "sandbox");
-    if (!binding.scoredAllowed) {
-      throw ApplicationFailure.nonRetryable(
-        `refusing to score a run on the "${binding.kind}" runner: it is unisolated.`,
-        "GymUnisolatedScoredRun",
-      );
-    }
+    assertScoredRungAllowed(binding.kind, input.prepared.attempt.scored ?? true);
     const task = await loadGymTask(input.prepared.attempt.taskDir);
     const cases = task.hiddenCases ?? [];
     let score: GymScore;

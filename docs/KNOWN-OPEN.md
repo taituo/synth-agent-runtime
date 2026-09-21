@@ -6,17 +6,6 @@ removed only when the closing work lands.
 
 ## Runtime and deploy
 
-- **`assertRungAllowedForScored` is wired but opt-in; the gym uses its own
-  refusal.** The gym's scored sandbox rung is now the runtime rung:
-  `integrations/gym/sandbox.ts` builds
-  `ExecutionBroker([SandboxWorkspaceExecutor])`, so `workspace.read/write/replace/list`
-  and `process.exec` all execute in the persistent Pod (no `SyntheticExecutor`
-  medium), and `SandboxWorkspaceExecutor` implements `workspace.replace`
-  (`sandbox-workspace.ts` `WORKSPACE_EFFECTS` includes it). What remains:
-  `runTurn`'s `DurableTurnConfig.scored` refusal (`assertRungAllowedForScored`)
-  has no production caller that sets `scored`, and the gym enforces its own
-  `GymUnisolatedScoredRun` at the activity boundary instead. Closing: one shared
-  scored flag across the runtime and gym paths.
 - **Sandbox workspace checkpoints are diffs; huge workspaces still need the git
   transport.** `checkpointSandboxWorkspace` writes the workspace diff
   (`exportArtifact`) to the blob store and restores by digest. A very large

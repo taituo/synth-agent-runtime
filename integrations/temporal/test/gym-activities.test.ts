@@ -44,7 +44,25 @@ test("gymPrepareActivity refuses a scored run on runner:local as non-retryable, 
       const e = error as { message?: string; type?: string; nonRetryable?: boolean };
       assert.equal(e.nonRetryable, true, "the refusal must be non-retryable (no park, no retry)");
       assert.equal(e.type, "GymUnisolatedScoredRun");
-      assert.match(e.message ?? "", /unisolated/);
+      // The decision is the runtime's shared guard, not a gym-private copy.
+      assert.match(e.message ?? "", /UNISOLATED_RUNG_REFUSED: a scored run requires an isolated/);
+      return true;
+    },
+  );
+});
+
+test("an unscored attempt passes the isolation gate on runner:local (the control)", async () => {
+  // With the scored flag threaded, `scored:false` marks a labelled, ungraded
+  // control and the shared guard lets it through; it then fails on the missing
+  // task, which proves the isolation gate was not what rejected it. Before the
+  // flag was threaded the gym refused every local run regardless of `scored`.
+  const activities = createGymActivities();
+  await assert.rejects(
+    () => activities.gymPrepareActivity(input({ runner: "local", scored: false }) as never),
+    (error: unknown) => {
+      const message = (error as { message?: string }).message ?? "";
+      assert.doesNotMatch(message, /UNISOLATED_RUNG_REFUSED/, "an unscored local run must pass the scored-rung gate");
+      assert.match(message, /ENOENT|no such file|gym task/i, `expected a task-load failure, got: ${message}`);
       return true;
     },
   );

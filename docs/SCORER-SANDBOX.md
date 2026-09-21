@@ -53,11 +53,13 @@ claim inherits the weakest path it happens to run on.
   path remains only as a labelled, opt-out development mode.
 - **the gym's `localEffectRunner`**: still runs agent tools on the host and is a
   labelled **control** arm (`role:"control"`, `isolation:"unisolated"`), refused
-  for scored runs (`assertScoredRunnerAllowed`). It is not a production path; the
-  gym's `runner:"sandbox"` arm drives the pod. The remaining work is to
-  route the agent's tool execution through the runtime's sandbox rung too (the
-  rung's `SandboxWorkspaceExecutor` does not yet support `workspace.replace`,
-  which the gym tools use — see `docs/KNOWN-OPEN.md`).
+  for scored runs — the drivers pre-flight with `assertScoredRunnerAllowed`, and
+  the activities apply the runtime's shared `assertRungAllowedForScored` with the
+  `scored` flag threaded from the workflow input. It is not a production path:
+  a scored run uses `runner:"sandbox"`, where the gym's tools execute in the pod
+  through the same `SandboxWorkspaceExecutor` the runtime sandbox rung uses
+  (including `workspace.replace`). The runtime turn's own `config.scored` guard
+  covers any runtime caller that selects a rung.
 
 A deployment that requires isolation sets `SYNTH_REQUIRE_ISOLATION=1`: the
 scorer then runs in the pod, or refuses (`errored`, "untrusted context") when no
@@ -151,9 +153,12 @@ can name. Not the boundary.
 2. **Open — Landlock launcher (option B).** Useful for a bare host: a CI-built
    static Landlock launcher restricts the worker's filesystem without a cluster
    (still needs seccomp for network denial). Not built; the pod is the boundary.
-3. **Open — one boundary for the agent's tool path too.** The gym's
-   `localEffectRunner` control arm and the runtime sandbox rung's missing
-   `workspace.replace` are the remaining gap (see `docs/KNOWN-OPEN.md`).
+3. **Met — one boundary for the agent's tool path too.** A scored gym run uses
+   `runner:"sandbox"`, so the agent's `workspace.*` and `process.exec` effects run
+   in the gVisor pod through the same `SandboxWorkspaceExecutor` as the runtime
+   rung (including `workspace.replace`). `localEffectRunner` stays a labelled
+   **control** arm and is refused for scored runs by the shared
+   `assertRungAllowedForScored` (`scored` threaded from the workflow input).
 4. **Acceptance (met for the scoring worker).** `node scripts/scorer-isolation-probe.mjs`
    is red on the host worker and green in the pod: every class is blocked by the
    OS boundary, and the golden fix still passes / a wrong fix still fails

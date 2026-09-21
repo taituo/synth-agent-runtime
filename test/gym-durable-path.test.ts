@@ -65,12 +65,14 @@ test("gym-worker.ts registers the gym workflow and its activity", () => {
   const GYM_ACTIVITIES = readFileSync(repoFile("integrations/temporal/src/gym-activities.ts"), "utf8");
   assert.match(GYM_ACTIVITIES, /const runTurn = async/, "the gym must provide the one-turn runTurn activity");
   assert.match(GYM_ACTIVITIES, /executeEffect:/, "the turn must execute tools through the rung");
-  // The scored-local refusal is enforced at the activity boundary, not only in
-  // the drivers, so a direct workflow start cannot run a scored attempt on the
-  // unisolated host runner. Behaviour is exercised by the temporal suite
-  // (integrations/temporal/test/gym-activities.test.ts); this pins the wiring
-  // in the root suite so a silent removal is caught here too.
-  assert.match(GYM_ACTIVITIES, /GymUnisolatedScoredRun/, "the activity must refuse a scored local run");
+  // The scored-local refusal is enforced at the activity boundary through the
+  // runtime's shared guard, not a gym-private copy, and the scored flag is
+  // threaded from the workflow input. Behaviour is exercised by the temporal
+  // suite (integrations/temporal/test/gym-activities.test.ts); this pins the
+  // wiring in the root suite so a silent removal is caught here too.
+  assert.match(GYM_ACTIVITIES, /assertRungAllowedForScored/, "the activity must apply the runtime's shared scored-rung guard");
+  assert.match(GYM_ACTIVITIES, /GymUnisolatedScoredRun/, "the refusal must stay a non-retryable activity failure");
+  assert.match(GYM_ACTIVITIES, /scored \?\? true/, "the scored flag must be threaded from the attempt input");
   assert.match(GYM_ACTIVITIES, /turnScopedEffectId/, "the turn must scope effect ids per turn (no broker replay)");
 });
 

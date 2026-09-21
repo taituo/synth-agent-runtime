@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased — one scored-rung guard, applied by the gym too
+
+- **`assertRungAllowedForScored` now has production callers.** The gym's durable
+  attempt input carries `scored` (default true; `integrations/gym/run-gym.ts` and
+  `integrations/gym/p2-faults.ts` set it), and `gymPrepareActivity`, `runTurn`
+  and `gymScoreActivity` apply the runtime's shared guard
+  (`integrations/temporal/src/gym-activities.ts`) instead of a private copy. The
+  refusal is still a non-retryable `GymUnisolatedScoredRun` activity failure, but
+  the message and the decision come from the shared guard.
+  `assertRungAllowedForScored` now takes only the rung's isolation, so any caller
+  can apply it.
+- **Failing-first:** an unscored (`scored:false`) local attempt passes the
+  isolation gate (it used to be refused unconditionally) and a scored local
+  attempt is refused with `UNISOLATED_RUNG_REFUSED` — covered in
+  `integrations/temporal/test/gym-activities.test.ts`.
+- **Docs:** `docs/SCORER-SANDBOX.md` no longer says the gym's tool path needs
+  routing through the runtime rung or that `SandboxWorkspaceExecutor` lacks
+  `workspace.replace` (the merge made the tool path the runtime rung);
+  `docs/KNOWN-OPEN.md` drops the closed "opt-in scored flag" item.
+
 ## Unreleased — fixes: a deterministic supervisor proof, honest isolation-probe labels
 
 - **The supervisor live proof no longer races its own samples.**

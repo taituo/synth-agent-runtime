@@ -305,6 +305,9 @@ async function runDurableWorkflow(
     maxTurns,
     deadlineMs,
     runner: runnerKind,
+    // The durable arm grades its patch against the held-out vectors, so it is a
+    // scored run and must be refused on an unisolated runner.
+    scored: true,
     ...(gatewayTimeoutMs ? { gatewayTimeoutMs } : {}),
     ...(retry && retry > 1 ? { retryMaxAttempts: retry } : {}),
     image,

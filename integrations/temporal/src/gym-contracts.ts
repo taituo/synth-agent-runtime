@@ -21,6 +21,15 @@ export interface GymAttemptActivityInput {
    * Kubernetes/gVisor Pod. Both arms of a comparison must use the same value.
    */
   runner?: "local" | "sandbox";
+  /**
+   * Whether this attempt's patch is graded against the held-out vectors. A
+   * scored attempt must run on an isolated runner: the activities apply the
+   * runtime's shared `assertRungAllowedForScored`, so the gym cannot carry a
+   * private copy that drifts from the runtime turn's rule. Defaults to true —
+   * a gym attempt exists to be scored; a false value marks a labelled,
+   * ungraded control (the plain/dry arms), never a production run.
+   */
+  scored?: boolean;
   /** Per-model-request timeout. */
   gatewayTimeoutMs?: number;
   /**

@@ -157,6 +157,8 @@ function workflowInput(args: Args, taskDir: string, workDir: string, baseUrl: st
     maxTurns: args.turns,
     deadlineMs: args.deadlineMs,
     runner: args.runner,
+    // The durable arm grades its patch, so it is a scored run.
+    scored: true,
     gatewayTimeoutMs: args.gatewayTimeoutMs,
     checkpointKey,
     image: args.runner === "sandbox" ? args.image : "",
