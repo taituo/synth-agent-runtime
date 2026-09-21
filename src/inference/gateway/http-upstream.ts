@@ -16,7 +16,12 @@ export class HttpGatewayBackend implements GatewayBackend {
 
   async handle(request: Request): Promise<Response> {
     const source = new URL(request.url);
-    const target = new URL(source.pathname + source.search, ensureSlash(this.options.baseUrl));
+    // Join the base path with the request path. A leading-slash path would
+    // otherwise REPLACE the base path, so a provider mounted under a prefix
+    // (e.g. https://opencode.ai/zen) could never be reached: the /zen prefix
+    // was silently dropped and the upstream returned 404.
+    const base = new URL(ensureSlash(this.options.baseUrl));
+    const target = new URL(`${base.pathname.replace(/\/$/, "")}${source.pathname}${source.search}`, base);
     const headers = new Headers(request.headers);
     // Fetch owns framing/connection headers. Forwarding caller-provided hop-by-hop
     // values can produce invalid upstream requests or connection confusion.
