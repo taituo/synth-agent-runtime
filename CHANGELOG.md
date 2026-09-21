@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased — boundary test: parameterised, with real network controls
+
+- `test/gym-sandbox-boundary.test.ts` no longer hardcodes `/home/tiny/...`,
+  `10.91.1.1` or `10.43.0.1`. Every machine-specific value comes from env with a
+  documented default: `SYNTH_BOUNDARY_HOST_REPO` (default cwd),
+  `SYNTH_BOUNDARY_HOST_TEMPORAL` / `SYNTH_BOUNDARY_HOST_GATEWAY` (default
+  `127.0.0.1:7243` / `127.0.0.1:8787` — the actual listeners; the node IP had
+  none, which is what made the old claims vacuous),
+  `SYNTH_BOUNDARY_CLUSTER_API` (env or derived from the live cluster; empty
+  drops it), `SYNTH_BOUNDARY_INTERNET` (empty drops it), and optional
+  `SYNTH_BOUNDARY_NODE_IP`.
+- The network assertions now have positive controls: each claim first asserts
+  the endpoint IS reachable from the host, so a vacuous denial fails instead of
+  passing. `assertBoundary` is split into `assertFilesystemBoundary` /
+  `assertNetworkDenied` (independent claims), and the rule is exercised with
+  fabricated probes in every suite run — must-refuse reachable, must-refuse a
+  failed positive control, must-succeed denied. A new always-run control starts
+  a listener, proves the probe reports CONNECTED, closes it, and proves it does
+  not, so the control can fail.
+- Failing-first: `SYNTH_BOUNDARY_HOST_REPO` pointing elsewhere → the local test
+  is red ("the local runner sees the host repo"); `SYNTH_BOUNDARY_HOST_TEMPORAL=127.0.0.1:9`
+  → the live positive control is red ("not reachable from the host"); defaults
+  are green on `tiny` (live pod 5/5).
+- README "Tests executed" re-measured: root **290** (288 pass, 2 live skips).
+
 ## Unreleased — final: verified README numbers, durable claim audit
 
 - **README numbers fixed and guarded.** The "Tests executed for this artifact"

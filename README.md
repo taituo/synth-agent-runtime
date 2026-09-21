@@ -168,7 +168,7 @@ Measured under Node v22.20.0 (`node --version`), on commit `HEAD`:
 
 ```text
 npm test  (root suite)
-287 tests: 285 passed / 0 failed / 2 skipped
+290 tests: 288 passed / 0 failed / 2 skipped
 (the 2 skips are the live gVisor boundary proofs; set SYNTH_LIVE_GVISOR=1)
 
 npm test --prefix integrations/temporal  (durable workflow + turn body + graph harness)
