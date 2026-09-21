@@ -105,10 +105,13 @@ export class KubectlSandboxBackend {
             ...resourceClass,
             labels: { ...(resourceClass.labels ?? {}), ...(options.labels ?? {}) },
         });
-        const network = buildSandboxNetworkPolicy(namespace, `${podName}-network`, id, resourceClass.network);
         await this.#apply(pod);
         try {
-            await this.#apply(network);
+            // Construct the policy only after the Pod exists, owned by it: Kubernetes
+            // then reaps the policy whenever the pod is deleted by any path, so a pod
+            // removed out of band cannot orphan its policy.
+            const owner = await this.#podOwner(podName, namespace);
+            await this.#apply(buildSandboxNetworkPolicy(namespace, `${podName}-network`, id, resourceClass.network, owner));
             const wait = await this.#run([
                 "wait",
                 "--for=condition=Ready",
@@ -264,6 +267,20 @@ export class KubectlSandboxBackend {
         const result = await this.#run(deletePodAndPolicyArgs(podName, namespace), undefined, 30_000);
         if (result.code !== 0)
             throw new Error(`kubectl delete failed: ${result.stderr.toString("utf8")}`);
+    }
+    /**
+     * The Pod's ownerReference for its NetworkPolicy. Reading the uid back is one
+     * extra `kubectl get` per sandbox create; it is what lets Kubernetes reap the
+     * policy with the pod (see buildSandboxNetworkPolicy). Refuse to create an
+     * unowned policy rather than fall back to the leak.
+     */
+    async #podOwner(podName, namespace) {
+        const result = await this.#run(["get", "pod", podName, "-n", namespace, "-o", "jsonpath={.metadata.uid}"], undefined, 30_000);
+        const uid = result.stdout.toString("utf8").trim();
+        if (result.code !== 0 || !uid) {
+            throw new Error(`kubectl get pod/${podName} uid failed: ${result.stderr.toString("utf8") || "no uid"}`);
+        }
+        return { apiVersion: "v1", kind: "Pod", name: podName, uid };
     }
     #baseArgs() {
         return this.#context ? ["--context", this.#context] : [];

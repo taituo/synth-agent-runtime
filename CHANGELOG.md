@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased — sandbox cleanup: per-pod NetworkPolicies cannot be orphaned (defect 6)
+
+- Measured on `tiny`: **20 leaked `synth-sandbox-*-network` NetworkPolicies with
+  zero matching pods** (19 in `synth-sandboxes`, 1 in `synth-audit-gvisor`),
+  despite the earlier `type/name` delete fix. The explicit destroy does delete
+  both objects (re-measured: `backend.create` then `backend.destroy` leaves
+  nothing), so the orphans come from pods that disappear without the destroy
+  path — terminated-pod GC, eviction, or a manual `kubectl delete pod` — which
+  left the policy behind.
+- Fix (mechanism): the per-sandbox NetworkPolicy is now **owned by its Pod**
+  (`metadata.ownerReferences`), so Kubernetes garbage-collects the policy with
+  the pod by any deletion path. `KubectlSandboxBackend.create` reads the pod's
+  uid after apply and passes it to `buildSandboxNetworkPolicy`
+  (`src/execution/kubernetes/kubectl-backend.ts`, `manifests.ts`); explicit
+  destroy still deletes pod and policy together, idempotently.
+- Tests: a headless unit test asserts the ownerReference and the unchanged
+  no-owner shape; a live-gated test (`SYNTH_LIVE_GVISOR=1`) asserts that (1)
+  destroy removes both objects and (2) deleting the pod out of band does not
+  orphan the policy. Failing-first: omitting the owner turns the live test red
+  (`a pod deleted out of band must not orphan its NetworkPolicy`); restored it is
+  green.
+- Leftovers: swept 20 orphaned policies (no matching pod) to zero; the 3
+  remaining had live pods and were kept. `synth-sandboxes` is now empty of
+  `synth-sandbox-*` policies.
+
 ## Unreleased — gym durable attempt: the workspace survives a worker SIGKILL (defect 8)
 
 - Defect 8: `checkpointSandboxWorkspace` / `restoreSandboxWorkspace` and the

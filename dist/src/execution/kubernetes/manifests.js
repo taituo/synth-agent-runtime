@@ -120,7 +120,7 @@ export function buildSandboxPod(namespace, podName, sandboxId, resourceClass) {
 function selectorExpression(labels) {
     return { matchLabels: labels ?? {} };
 }
-export function buildSandboxNetworkPolicy(namespace, name, sandboxId, profile) {
+export function buildSandboxNetworkPolicy(namespace, name, sandboxId, profile, owner) {
     const ingress = [];
     const egress = [];
     if (profile.controlPlaneNamespaceSelector || profile.controlPlanePodSelector) {
@@ -165,7 +165,16 @@ export function buildSandboxNetworkPolicy(namespace, name, sandboxId, profile) {
     return {
         apiVersion: "networking.k8s.io/v1",
         kind: "NetworkPolicy",
-        metadata: { namespace, name },
+        metadata: {
+            namespace,
+            name,
+            // The policy is OWNED by its Pod, so Kubernetes garbage-collects it
+            // whenever the pod goes away by any path (GC, eviction, a manual
+            // `kubectl delete pod`), not only when the executor's destroy path runs.
+            // Without this, deleting a pod out of band orphaned its policy
+            // (measured: 20 orphaned `synth-sandbox-*-network` policies on `tiny`).
+            ...(owner ? { ownerReferences: [owner] } : {}),
+        },
         spec: {
             podSelector: { matchLabels: { [LABEL_SANDBOX]: sandboxId } },
             policyTypes: ["Ingress", "Egress"],

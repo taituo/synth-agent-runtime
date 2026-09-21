@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -452,6 +453,22 @@ test("pod+NetworkPolicy delete uses type/name form so both resources are actuall
     assert.ok(!args.includes("pod"), "must not pass bare 'pod' as a resource type followed by extra name-only tokens");
     assert.ok(!args.includes("networkpolicy"), "must not pass bare 'networkpolicy' as a second name under the 'pod' type");
 });
+test("the NetworkPolicy is owned by its Pod so Kubernetes reaps it with the pod", () => {
+    // The explicit destroy deletes pod+policy, but a pod can disappear without it
+    // (terminated-pod GC, eviction, a manual `kubectl delete pod`), which orphaned
+    // the policy (measured: 20 orphaned `synth-sandbox-*-network` policies on
+    // `tiny`, with zero pods). The ownerReference makes the policy a dependent of
+    // its Pod, so Kubernetes removes it whenever the Pod goes away.
+    const cls = DEFAULT_KUBERNETES_RESOURCE_CLASSES[0];
+    const owner = { apiVersion: "v1", kind: "Pod", name: "pod-1", uid: "uid-1" };
+    const owned = buildSandboxNetworkPolicy("test", "network", "sandbox", cls.network, owner);
+    assert.deepEqual(owned.metadata.ownerReferences, [owner]);
+    // Callers that pass no owner keep the previous manifest shape.
+    const unowned = buildSandboxNetworkPolicy("test", "network", "sandbox", cls.network);
+    assert.equal(unowned.metadata.ownerReferences, undefined);
+});
+/** The name a per-sandbox policy always has. */
+const policyName = (podName) => `${podName}-network`;
 test("sandbox exec marks the control-plane workspace safe for git", async () => {
     const dir = await mkdtemp(join(tmpdir(), "kubectl-backend-"));
     try {
@@ -473,4 +490,47 @@ test("sandbox exec marks the control-plane workspace safe for git", async () => 
     finally {
         await rm(dir, { recursive: true, force: true });
     }
+});
+const liveKubernetes = process.env.SYNTH_LIVE_GVISOR === "1";
+const liveNamespace = process.env.SYNTH_KUBERNETES_NAMESPACE ?? "synth-audit-gvisor";
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+test("cleanup is a property: no per-pod NetworkPolicy is left behind", { skip: liveKubernetes ? false : "set SYNTH_LIVE_GVISOR=1 (and SYNTH_KUBERNETES_NAMESPACE) for the live cleanup proof" }, async () => {
+    const kubectl = (...args) => execFileSync("kubectl", args, { encoding: "utf8" });
+    const exists = (resource, name) => {
+        try {
+            kubectl("get", resource, name, "-n", liveNamespace, "-o", "name");
+            return true;
+        }
+        catch {
+            return false;
+        }
+    };
+    const waitGone = async (resource, name, tries = 30) => {
+        for (let i = 0; i < tries; i++) {
+            if (!exists(resource, name))
+                return true;
+            await sleep(2_000);
+        }
+        return !exists(resource, name);
+    };
+    const cls = DEFAULT_KUBERNETES_RESOURCE_CLASSES.find((entry) => entry.id === "sandbox-small");
+    const backend = new KubectlSandboxBackend({ namespace: liveNamespace });
+    // (1) The explicit destroy path deletes both objects; a test that only
+    // checked this would already pass and would miss the orphan mechanism.
+    const a = await backend.create(cls);
+    assert.equal(exists("netpol", policyName(a.podName)), true, "create must apply the per-pod policy");
+    await backend.destroy(a);
+    assert.equal(await waitGone("pod", a.podName), true, "destroy must delete the pod");
+    assert.equal(await waitGone("netpol", policyName(a.podName)), true, "destroy must delete the policy");
+    // (2) The leak: delete the POD out of band (terminated-pod GC, eviction, a
+    // manual `kubectl delete pod`) — nothing calls backend.destroy. The policy
+    // must still go, via its ownerReference.
+    const b = await backend.create(cls);
+    const policy = policyName(b.podName);
+    kubectl("delete", "pod", b.podName, "-n", liveNamespace, "--wait=false");
+    assert.equal(await waitGone("pod", b.podName), true, "the out-of-band pod delete must complete");
+    const policyGone = await waitGone("netpol", policy);
+    if (!policyGone)
+        kubectl("delete", "netpol", policy, "-n", liveNamespace, "--ignore-not-found=true", "--wait=false");
+    assert.equal(policyGone, true, "a pod deleted out of band must not orphan its NetworkPolicy");
 });

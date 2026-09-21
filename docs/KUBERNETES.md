@@ -14,7 +14,11 @@ Generated executor Pods are designed around:
 - no ServiceAccount token mount;
 - no hostPath or Docker socket in the generated executor manifest;
 - bounded CPU/memory/ephemeral storage;
-- explicit NetworkPolicy generation.
+- explicit NetworkPolicy generation. The per-sandbox NetworkPolicy carries an
+  `ownerReference` to its Pod, so Kubernetes garbage-collects it whenever the Pod
+  goes away by any path (terminated-pod GC, eviction, a manual
+  `kubectl delete pod`), not only when the executor's destroy path runs. The
+  explicit destroy still deletes pod and policy together, idempotently.
 
 ## Warm pool lifecycle
 
