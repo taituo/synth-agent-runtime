@@ -31,12 +31,27 @@ replaces it, and the Postgres stores it uses are the only durability it owns.
 
 The runtime expects a Kubernetes `RuntimeClass` named `gvisor` backed by `runsc`.
 Apply `runtimeclass-gvisor.yaml` only after the cluster runtime has been configured
-for the `runsc` handler.
+for the `runsc` handler, and label the node the sandboxes are allowed to run on:
 
 ```bash
+kubectl label node <node> synth.openai.dev/gvisor=true
 kubectl apply -f deploy/kubernetes/runtimeclass-gvisor.yaml
 kubectl get runtimeclass gvisor
 ```
+
+The RuntimeClass carries `scheduling.nodeSelector` for that label, so without the
+label gVisor Pods stay `Pending` — the correct direction to fail in.
+
+Then apply the admission policy that makes the isolation invariant a cluster rule
+rather than something every caller must remember:
+
+```bash
+kubectl apply -f deploy/kubernetes/sandbox-gvisor-admission.yaml
+```
+
+A Pod created in `synth-sandboxes` that omits `runtimeClassName`, or sets it to
+anything other than `gvisor`, is rejected at admission regardless of which caller
+creates it.
 
 ## 2. Build the executor image
 
