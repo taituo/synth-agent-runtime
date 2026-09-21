@@ -64,6 +64,14 @@ removed only when the closing work lands.
   runtime and gym paths on one task queue — `integrations/temporal/src/worker-entry.ts`,
   `docs/TEMPORAL.md` "One worker entry, N replicas".)
 
+- **`replaceInText` (indentation-tolerant `replace_in_file`) is tool semantics
+  living in Synth's execution layer — drift.** `DIRECTION.md` says tool semantics
+  belong to the harness, and `src/execution/text-replace.ts` is called from the
+  execution layer (`src/execution/synthetic.ts`,
+  `src/execution/kubernetes/sandbox-workspace.ts`); not fixed now because Phase 3
+  decides, as a measurement, whether it becomes dead code once a real harness owns
+  the edit or is still needed for the synthetic rung.
+
 ## Egress and artifacts
 
 
