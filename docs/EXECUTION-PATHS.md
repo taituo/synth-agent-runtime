@@ -70,6 +70,15 @@ heartbeat interval (which runs inside a Temporal activity).
 - `src/artifacts/retention.ts` `prune` — no scheduler; a caller decides when to
   run it (post-run step or an operator cron). It is not a turn/effect loop. See
   `docs/KNOWN-OPEN.md` for the still-open automatic-GC wiring.
+  *(This is a library API with unit tests but no production caller; kept, not
+  wired — flagged here rather than silently accepted as wired.)*
+- `src/observability/trace.ts` — an earlier plain `Trace`/`TraceEvent` sink,
+  superseded by OpenTelemetry (`src/observability/otel.ts`). No caller; moved to
+  `docs/history/museum/src/observability/trace.ts` and dropped from the barrel.
+- `scripts/chaos-matrix.mjs` (`npm run chaos:matrix`) — ran
+  `dist/test/chaos.test.js`, which was quarantined to `docs/history/museum/`; the
+  script exited 1 on a missing file and its remaining suites are already in the
+  root `npm test`. Removed.
 
 ## The check
 

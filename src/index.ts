@@ -50,7 +50,6 @@ export * from "./workspace/snapshot-codec.js";
 export * from "./workspace/git-batch.js";
 export * from "./durability/runtime-state.js";
 export * from "./durability/local-runtime-state.js";
-export * from "./observability/trace.js";
 export * from "./postgres/types.js";
 export * from "./postgres/schema.js";
 export * from "./postgres/persistence.js";

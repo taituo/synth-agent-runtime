@@ -11,10 +11,10 @@ import {
 import { recordActivityRetry } from "./metrics.js";
 
 /**
- * Structural mirror of `src/observability/trace.ts` `TraceEvent`/`TraceSink`.
- * Declared locally (not imported) because this integration is a standalone
- * package; a caller can pass the runtime's own `InMemoryTraceSink` /
- * `JsonlTraceSink` directly since the shapes are identical.
+ * Synth's trace event/sink shape, declared locally because this integration is
+ * a standalone package. The runtime's tracing is OpenTelemetry
+ * (`src/observability/otel.ts`); this sink is for callers that want a plain
+ * per-activity event stream instead.
  */
 export interface SynthTraceEvent {
   traceId: string;
