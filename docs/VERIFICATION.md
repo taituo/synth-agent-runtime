@@ -68,6 +68,7 @@ already did (a skip is never a pass).
 | An effect re-executed when a Temporal activity retries | `integrations/temporal/test/gateway-run-turn.test.ts` (dedupe + heartbeat-details round-trip); live `effect-receipt` |
 | `continueAsNew` re-ran the graph from the start and never resumed | `integrations/temporal/test/graph.test.ts` (resume without re-running journaled nodes); live `graph-continue-as-new` |
 | A provider hardwired to opencode, or not selected by config | `test/provider-config.test.ts` |
+| The scoring worker escaping its jail: TCP to Temporal/Postgres, a host unix-socket bind, signalling the verifier, reading host `userInfo` (external review risk #1) | `scripts/scorer-isolation-probe.mjs` — host-effect-aware, red on the host worker and green in the gVisor pod; `test/gym-scoring-hardening.test.ts` (boundary selection + refusal) |
 | A credential committed to the git index | `test/secret-scan.test.ts` |
 | A driver "passing" because it skipped everything | `test/driver-skips.test.ts`; exit-2 semantics in `scripts/live-proofs.mjs` / `scripts/verify.mjs` |
 

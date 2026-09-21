@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased — the scoring worker runs inside the gVisor boundary
+
+- `src/gym/sandbox-worker.ts`: when a cluster image is configured
+  (`SYNTH_EXECUTOR_IMAGE`, or an injected `IsolatedScoreOptions.sandbox`), the
+  scorer materializes the applied checkout into a one-shot gVisor pod and runs
+  `node worker.mjs requests.json results.json` there. Only the checkout is
+  mounted (no host `/tmp`, no `.git`, no `node_modules`), the pod's network
+  policy is DNS-only, and its network/PID namespaces are its own — so the
+  worker cannot reach Temporal/Postgres, bind a host unix socket, signal the
+  verifier, or read host metadata. The verifier still holds the held-out cases
+  and compares the returned values; expected values never enter the pod.
+- `SYNTH_REQUIRE_ISOLATION=1` runs the pod and refuses (`errored`) when no
+  boundary is configured; `SYNTH_SCORER_SANDBOX=0` forces the host path (a
+  labelled development mode). The permission-model deny flags stay on the host
+  path as defence in depth.
+- `scripts/scorer-isolation-probe.mjs` is now boundary-aware: it checks for a
+  host effect (host DB file, host socket file, the verifier PID, the host user)
+  rather than a worker-local value. Red on the host worker, green in the pod.
+- Control passes through the pod: `test/gym-real-task.test.ts` (golden fix
+  passes, wrong fix fails, matrix) and `test/gym-scoring-hardening.test.ts`
+  (config selection, `SYNTH_REQUIRE_ISOLATION` refusal).
+- `docs/SCORER-SANDBOX.md` and `docs/KNOWN-OPEN.md` updated: the scoring-worker
+  boundary is built; the agent's own tool path (gym `localEffectRunner` control
+  arm / `SandboxWorkspaceExecutor` missing `workspace.replace`) is the
+  remaining item.
+
 ## Unreleased — external review: dead weight removed, docs reconciled with the tree
 
 - **Dead weight.** `src/observability/trace.ts` (an earlier plain `Trace` sink,

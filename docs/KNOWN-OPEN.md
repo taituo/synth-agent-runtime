@@ -88,24 +88,20 @@ removed only when the closing work lands.
 
 ## Gym scoring isolation
 
-- **The scoring worker is NOT isolated from the host.** Node's permission model
-  is a guardrail, not a boundary: review round six enumerated six capability
-  classes that escape it. Measured by `scripts/scorer-isolation-probe.mjs`
-  against the real worker: `node:sqlite` is now blocked, but **TCP to temporal
-  `:7243` and postgres `:5432` connect, a unix socket can be bound outside the
-  clone, `process.kill` can signal the verifier, and `os.userInfo` returns host
-  metadata**. So a gym run can reach the very services we measure with and can
-  mutate host state independent of the verdict. Denying builtins one at a time
-  has no finite end. A deployment that requires isolation can set
-  `SYNTH_REQUIRE_ISOLATION=1`, which makes the scorer refuse rather than run on
-  the host — but the real fix is the single boundary below. The agent's own tool
-  path (`localEffectRunner`) is worse: no permission model at all.
-  Closing: run the worker in an OS-level sandbox with only the clone
-  bind-mounted and no host `/tmp` (a mount namespace, `unshare`/`bwrap`, or the
-  existing gVisor rung), so confinement does not depend on a builtin allowlist.
-  Plan and measured feasibility: `docs/SCORER-SANDBOX.md`. Until then, the
-  scorer must not persist expected values, case data or secrets anywhere a path
-  from the worker can name — a SQLite file would reopen the forgery channel.
+- **The scoring worker now runs in the gVisor pod; the agent's tool path is the
+  remaining gap.** `src/gym/sandbox-worker.ts` runs the worker one-shot inside
+  the pod (only the applied checkout mounted, no host `/tmp`, DNS-only egress),
+  and the verifier still holds the held-out cases. `scripts/scorer-isolation-probe.mjs`
+  is red on the host worker and green in the pod — Temporal/Postgres, a host
+  unix-socket bind, a verifier signal and host `userInfo` are all blocked — and
+  the golden fix still passes / a wrong fix still fails through the pod.
+  `SYNTH_REQUIRE_ISOLATION=1` runs the pod and refuses (`errored`) when no
+  boundary is configured. Remaining: the agent's own tool execution. The gym's
+  `localEffectRunner` is a labelled, unisolated **control** arm (refused for
+  scored runs), and the runtime sandbox rung's `SandboxWorkspaceExecutor` does
+  not yet support `workspace.replace`, so the gym tools cannot move onto it
+  unchanged. Closing: add `workspace.replace` to the rung and route the agent
+  tool path through the pod. See `docs/SCORER-SANDBOX.md`.
 
 ## Measurement
 

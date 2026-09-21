@@ -1,46 +1,68 @@
-# Confining the scoring worker: plan for an OS-level boundary
+# Confining the scoring worker: the OS-level boundary
 
-Status: **REQUIRED, NOT BUILT.** The scoring worker is NOT isolated from the
-host. Review round six enumerated six capability classes that escape the Node
-permission model; measured on this host by `scripts/scorer-isolation-probe.mjs`
-against the real worker (2026-09-20):
+Status: **BUILT for the scoring worker** (`src/gym/sandbox-worker.ts`, the
+gVisor pod path). Review round six enumerated six capability classes that escape
+the Node permission model; `scripts/scorer-isolation-probe.mjs` now runs each
+payload through the real worker and checks for a **host effect**, not just a
+worker diagnostic. Measured on this host (2026-09-20), before and after:
 
-| class | measured |
-|---|---|
-| `node:sqlite` | **blocked** (explicit deny, `1a55a4c`) |
-| TCP to temporal `:7243` | **REACHABLE** (`CONNECTED`) |
-| TCP to postgres `:5432` | **REACHABLE** (`CONNECTED`) |
-| unix socket bind outside the clone | **REACHABLE** (`BOUND`) |
-| `node:test` executes an outside file | **UNCONFIRMED** by this payload (reviewer proved it with another) |
-| `process.kill` the verifier (signal 0) | **REACHABLE** (`CAN-SIGNAL-VERIFIER`) |
-| `os.userInfo` host metadata | **REACHABLE** (`tiny:1000`) |
+| class | host worker (before) | gVisor pod (after) |
+|---|---|---|
+| `node:sqlite` writes a host DB | blocked (explicit deny) / host file absent | **blocked** (host file absent) |
+| TCP to temporal `:7243` | **REACHABLE** (`CONNECTED`) | **blocked** (`ECONNREFUSED`) |
+| TCP to postgres `:5432` | refused (no service) | **blocked** (`ECONNREFUSED`) |
+| unix socket bind at a host path | **REACHABLE** (socket on host) | **blocked** (`EACCES`, no host file) |
+| `process.kill` the verifier (host PID) | **REACHABLE** (`CAN-SIGNAL-VERIFIER`) | **blocked** (`ESRCH`, separate PID namespace) |
+| `os.userInfo` host metadata | **REACHABLE** (`tiny:1000`) | **blocked** (`synth:65532`) |
 
-So a gym run can reach local services (temporal, postgres) and mutate host state
-independent of the verdict. The permission model covers fs, `dlopen`, wasi, heap
-snapshots and process reports, which is why it looked like a boundary; it is a
-guardrail, not one. Denying builtins one at a time has no finite end, so an
-OS-level boundary is a **requirement**.
+The host worker is confined by Node's permission model, which covers fs,
+`dlopen`, wasi, heap snapshots and process reports — a guardrail, not a
+boundary. Denying builtins one at a time has no finite end, so the boundary is
+the OS: the worker now runs in the same Kubernetes + gVisor pod the execution
+rung already trusts.
+
+## How it works
+
+`isolatedScoreGymPatch` clones the pinned base and applies the patch on the
+trusted side (tampering and escaping-symlink checks unchanged). When a cluster
+image is configured (`SYNTH_EXECUTOR_IMAGE`; optionally
+`SYNTH_SCORER_NAMESPACE`, `SYNTH_RUNTIME_CLASS`, `SYNTH_KUBERNETES_CONTEXT`, or
+an injected `IsolatedScoreOptions.sandbox`), the applied checkout is
+materialized into a one-shot gVisor pod (no host mounts, no host `/tmp`, no
+`.git`, no `node_modules`) and the worker runs there in batch mode:
+
+```text
+node worker.mjs requests.json results.json     # one-shot in the pod
+```
+
+`requests.json` carries only module/call/args — **never** an expected value —
+and the verifier compares the returned values back on the trusted side. The
+pod's network policy allows DNS egress only, and its network/PID namespaces are
+its own, so it cannot reach Temporal/Postgres, signal the verifier, or read the
+host. `SYNTH_SCORER_SANDBOX=0` forces the host path for local debugging;
+`SYNTH_REQUIRE_ISOLATION=1` refuses (errored) when no boundary is configured.
+The permission-model deny flags remain as defence in depth on the host path.
 
 ## One boundary, both execution paths (scope)
 
 There must be a SINGLE enforced boundary for all agent-controlled execution —
 the scoring worker AND the agent's own tool execution. Otherwise every isolation
-claim inherits the weakest path it happens to run on. Two paths are therefore
-NOT allowed to run untrusted code:
+claim inherits the weakest path it happens to run on.
 
-- **the scorer's host worker** (Node permission model): it escapes — see the
-  table above;
-- **the gym's `localEffectRunner`**: agent tools run on the host as the invoking
-  user with no OS boundary at all. The fault matrix and dry-run use it, and the
-  reviewer read the held-out vectors from it.
+- **the scoring worker**: now runs in the gVisor pod when configured; the host
+  path remains only as a labelled, opt-out development mode.
+- **the gym's `localEffectRunner`**: still runs agent tools on the host and is a
+  labelled **control** arm (`role:"control"`, `isolation:"unisolated"`), refused
+  for scored runs (`assertScoredRunnerAllowed`). It is not a production path; the
+  gym's `runner:"sandbox"` arm drives the pod. The remaining work is to
+  route the agent's tool execution through the runtime's sandbox rung too (the
+  rung's `SandboxWorkspaceExecutor` does not yet support `workspace.replace`,
+  which the gym tools use — see `docs/KNOWN-OPEN.md`).
 
-Both must run in the same gVisor pod (only the clone mounted, no host `/tmp`, no
-network). Until the pod path is wired, a deployment that requires isolation sets
-`SYNTH_REQUIRE_ISOLATION=1`; the scoring worker then refuses (`errored`,
-"untrusted context") rather than running agent code on the host. The gym's local
-runner must adopt the same contract (untrusted-context-not-allowed, explicit
-opt-in only). The gVisor substrate is confirmed: a pod reports
-`uname 4.19.0-gvisor`.
+A deployment that requires isolation sets `SYNTH_REQUIRE_ISOLATION=1`: the
+scorer then runs in the pod, or refuses (`errored`, "untrusted context") when no
+boundary is configured, rather than running agent code on the host. The gVisor
+substrate is confirmed: a pod reports `uname 4.19.0-gvisor`.
 
 ## The problem
 
@@ -82,7 +104,7 @@ provisioning.
 
 ## Options
 
-### A. Route the worker through the gVisor execution rung (recommended)
+### A. Route the worker through the gVisor execution rung (implemented)
 
 The repo already trusts gVisor for agent tool execution. Run the scoring worker
 as a one-shot pod in the same rung: mount only the work dir, no host `/tmp`, no
@@ -104,44 +126,43 @@ unprivileged, no cluster.
 - Cons: needs a build step and a CI-produced artifact (this host has no
   compiler); Linux-only; still need seccomp for network denial.
 
-### C. Keep the guardrail model + builtin denies (interim only)
+### C. The host worker + guardrail model (the fallback)
 
-What is in place today. Acceptable only while it is documented as a guardrail and
-the scorer never persists expected values, case data or secrets anywhere a path
-from the worker can name. Not the durable answer.
+The path used when no cluster image is configured (or `SYNTH_SCORER_SANDBOX=0`).
+Acceptable only while it is documented as a guardrail and the scorer never
+persists expected values, case data or secrets anywhere a path from the worker
+can name. Not the boundary.
 
 ## Staged plan
 
-1. **Now (done):** `node:sqlite` deny, `FORGE 8`, and the guardrail wording in
-   `src/gym/scoring.ts`, `CHANGELOG.md` and `docs/KNOWN-OPEN.md`.
-1b. **Done — batch worker mode (the sandbox enabler).** `WORKER_SOURCE` now runs
-   one-shot when given `<requests.json> <results.json>`: it reads only
-   module/call/args (never expected values), evaluates, writes results, exits.
-   This is what lets the worker run under a one-shot `process.exec` in a pod
-   instead of an interactive fd3 pipe. Pinned by the batch-mode test.
-1c. **Next — pod wiring.** In `isolatedScoreGymPatch`, when a sandbox is
-   configured (`SYNTH_EXECUTOR_IMAGE`/`SYNTH_KUBERNETES_NAMESPACE`/
-   `SYNTH_RUNTIME_CLASS`), materialize the applied checkout into a pod via
-   `KubectlSandboxBackend` (+ `WorkspaceSynchronizer`), write the worker and the
-   requests file, `exec` it in batch mode, read the results file, and compare in
-   the verifier. Reuse the execution rung's network policy (no egress) and mount
-   only `/workspace` — no host `/tmp`. Skip with exit 2 when unconfigured. This
-   is also the path for the agent's own tool execution; the gym-runner fix
-   (`nodeBin` for `run_visible_test`, git `safe.directory=/workspace`) is the
-   same shape.
-2. **Next:** add option B as a CI-built artifact (static Landlock launcher) and
-   make the scorer prefer it; probe for it and fall back with a recorded caveat.
-3. **Or:** add option A behind the existing cluster env (`SYNTH_EXECUTOR_IMAGE`,
-   `SYNTH_RUNTIME_CLASS`, `SYNTH_KUBERNETES_NAMESPACE`), skipping with exit 2 when
-   unconfigured.
-4. **Acceptance:** a regression that opens a host SQLite DB, and any future
-   builtin escape, is blocked by the OS boundary rather than by a new builtin
-   deny. The `FORGE 8` test then passes for a kernel reason, not a flag.
+1. **Done:** `node:sqlite` deny, `FORGE 8`, and the guardrail wording.
+1b. **Done — batch worker mode.** `WORKER_SOURCE` runs one-shot when given
+   `<requests.json> <results.json>`: it reads only module/call/args (never
+   expected values), evaluates, writes results, exits — so it can run under a
+   one-shot `process.exec` in a pod instead of an interactive fd3 pipe.
+1c. **Done — pod wiring (option A).** `src/gym/sandbox-worker.ts` materializes
+   the applied checkout into a one-shot pod via `KubectlSandboxBackend` +
+   `WorkspaceSynchronizer`, writes `worker.mjs` and the requests file, `exec`s
+   the worker in batch mode, reads the results file and compares in the
+   verifier. Network policy is the rung's DNS-only egress; only `/workspace` is
+   mounted. Selected by `SYNTH_EXECUTOR_IMAGE` (or injected
+   `IsolatedScoreOptions.sandbox`); `SYNTH_REQUIRE_ISOLATION=1` refuses when
+   unconfigured; `SYNTH_SCORER_SANDBOX=0` forces the host path.
+2. **Open — Landlock launcher (option B).** Useful for a bare host: a CI-built
+   static Landlock launcher restricts the worker's filesystem without a cluster
+   (still needs seccomp for network denial). Not built; the pod is the boundary.
+3. **Open — one boundary for the agent's tool path too.** The gym's
+   `localEffectRunner` control arm and the runtime sandbox rung's missing
+   `workspace.replace` are the remaining gap (see `docs/KNOWN-OPEN.md`).
+4. **Acceptance (met for the scoring worker).** `node scripts/scorer-isolation-probe.mjs`
+   is red on the host worker and green in the pod: every class is blocked by the
+   OS boundary, and the golden fix still passes / a wrong fix still fails
+   (`test/gym-real-task.test.ts` through the pod).
 
-## Open question
+## Decision
 
-Should the OS boundary be **mandatory** (refuse to score when neither Landlock
-nor gVisor is available, as the scorer already refuses when there is no
-permission model), or best-effort with a recorded caveat? Mandatory is safer and
-consistent with the existing refuse-to-run stance; it costs the ability to score
-on a bare host.
+The boundary is **mandatory when a deployment requires it**:
+`SYNTH_REQUIRE_ISOLATION=1` runs the pod and refuses (`errored`) if none is
+configured, rather than scoring on a bare host. Without that flag the scorer
+uses the pod when `SYNTH_EXECUTOR_IMAGE` is set (the default for any cluster
+deployment) and otherwise the host path, which is documented as a guardrail.
