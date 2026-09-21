@@ -168,14 +168,14 @@ Measured under Node v22.20.0 (`node --version`), on commit `HEAD`:
 
 ```text
 npm test  (root suite)
-271 tests: 269 passed / 0 failed / 2 skipped
+287 tests: 285 passed / 0 failed / 2 skipped
 (the 2 skips are the live gVisor boundary proofs; set SYNTH_LIVE_GVISOR=1)
 
 npm test --prefix integrations/temporal  (durable workflow + turn body + graph harness)
-104 passed / 0 failed
+105 passed / 0 failed
 
 npm run integrations:syntax
-101 TypeScript integration files / 0 syntax diagnostics
+102 TypeScript integration files / 0 syntax diagnostics
 3 shell files / syntax OK
 
 integrations/opencode-http-gateway: npm test

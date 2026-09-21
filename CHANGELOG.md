@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased — final: verified README numbers, durable claim audit
+
+- **README numbers fixed and guarded.** The "Tests executed for this artifact"
+  block said 271/104/101; at HEAD it measures 287 (285 pass, 2 live-gVisor
+  skips) / 105 / 102. `scripts/readme-numbers.mjs` now parses the suites' own
+  TAP/JSON output and compares it to the README, exiting 1 on drift (a first-page
+  number with no current artifact is a finding). `scripts/verify.mjs` and CI run
+  it against the suites they already execute (`core.yml` tees the output).
+- **The adversarial audit is durable.** `scripts/claim-audit.mjs` commits the
+  curated claim→artifact registry (one turn body, turn-per-activity, one worker
+  entry, one scored-rung rule, the pod-boundary tests, the pinned image, effect
+  receipts, the supervisor Schedule, the channel sweep, …) plus reconciliations:
+  every backtick repo path in the current README/docs exists, the README numbers
+  match a run, and `git` tracks no `dist/`. `--live` also runs live proofs. Exit
+  0 holds, 1 a claim has no artifact/failed, 2 a skip. Wired into
+  `scripts/verify.mjs` and CI.
+- **Found and fixed by the new audit:** `docs/RESPONSES.md` cited
+  `test/abort.test.ts`; the regression test is
+  `integrations/opencode-http-gateway/test/abort.test.ts`.
+
 ## Unreleased — gym durable shape settled: the gym owns its loop, `durableAgentWorkflow` stays the lifecycle leaf
 
 - `SPEC-super-harness.md` item 1 requires one execution model (Temporal

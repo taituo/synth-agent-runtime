@@ -13,8 +13,14 @@ jobs:
       - run: npm install
       - name: secret scan (git index)
         run: npm run secret-scan
-      - run: npm test
-      - run: npm run integrations:syntax
+      - name: root suite (captured for the README guard)
+        run: npm test | tee "$RUNNER_TEMP/root.tap"
+      - name: integration syntax (captured for the README guard)
+        run: npm run integrations:syntax | tee "$RUNNER_TEMP/syntax.txt"
+      - name: README numbers match the measured root/syntax suites
+        run: node scripts/readme-numbers.mjs --root-tap="$RUNNER_TEMP/root.tap" --syntax-json="$RUNNER_TEMP/syntax.txt"
+      - name: claim audit (static claims + doc/dist reconciliation)
+        run: node scripts/claim-audit.mjs --root-tap="$RUNNER_TEMP/root.tap" --syntax-json="$RUNNER_TEMP/syntax.txt"
 
   temporal:
     runs-on: ubuntu-latest
@@ -27,7 +33,10 @@ jobs:
       - name: install Temporal integration dependencies
         run: npm install --prefix integrations/temporal
       - run: npm run build --prefix integrations/temporal
-      - run: npm test --prefix integrations/temporal
+      - name: temporal suite (captured for the README guard)
+        run: npm test --prefix integrations/temporal | tee "$RUNNER_TEMP/temporal.tap"
+      - name: README numbers match the measured Temporal suite
+        run: node scripts/readme-numbers.mjs --temporal-tap="$RUNNER_TEMP/temporal.tap"
       - name: install the Temporal CLI
         uses: temporalio/setup-temporal@v0
       # Start a real dev server and run the Temporal-dependent proofs in one

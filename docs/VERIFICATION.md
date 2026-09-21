@@ -34,18 +34,41 @@ is scoutcraft, but these govern evidence:
 ## How to run
 
 ```bash
-npm run verify                  # root + Temporal suites, syntax, secret scan,
-                                # and the Temporal live proofs; exit 0/1/2
+npm run verify                  # root + Temporal suites, syntax, secret scan, the
+                                # README-number guard, the claim audit, and the
+                                # Temporal live proofs; exit 0/1/2
 node scripts/verify.mjs --all-live   # also run every live proof (many skip)
 node scripts/live-proofs.mjs --only=graph-restart   # one proof
 node scripts/live-proofs.mjs --json                 # machine-readable summary
-npm run scorer:isolation-probe                       # scorer capability inventory
+node scripts/claim-audit.mjs          # claims -> artifacts + doc/dist reconciliation
+node scripts/claim-audit.mjs --live   # also run the live proofs (skip = 2)
+node scripts/readme-numbers.mjs       # README's measured numbers vs a real run
+npm run scorer:isolation-probe        # scorer capability inventory
 ```
 
 Exit codes are the skip contract: `0` all selected checks passed, `1` a check
 failed, `2` a check was skipped. `scripts/live-proofs.mjs` and
 `scripts/verify.mjs` both exit `2` on a skip-only run; `scripts/live-proof.mjs`
 already did (a skip is never a pass).
+
+## The claim audit
+
+`scripts/claim-audit.mjs` is the durable form of the rolling adversarial audit
+that used to live only in `/tmp`. It checks a curated registry of capability
+claims against the artifact that backs each (a test, script or code file, plus a
+pinned regex), and three reconciliations:
+
+- every backtick repo path cited by a current `README.md`/`docs/*.md` file
+  exists (historical docs, per `docs/README.md`, and explicitly flagged
+  removed paths are out of scope);
+- the README "Tests executed" numbers match a measured run
+  (`scripts/readme-numbers.mjs`, which parses the suites' own TAP/JSON output);
+- `git` tracks no `dist/` (root or any integration package).
+
+`--live` also runs the live proofs. Exit `0` everything holds, `1` a claim has no
+artifact or a reconciliation broke, `2` a check could not run (a skip is never a
+pass). It runs inside `npm run verify` and in CI (`core.yml`, `test` and
+`temporal` jobs).
 
 ## Demonstrated attacks and their permanent regression tests
 
@@ -71,6 +94,9 @@ already did (a skip is never a pass).
 | The scoring worker escaping its jail: TCP to Temporal/Postgres, a host unix-socket bind, signalling the verifier, reading host `userInfo` (external review risk #1) | `scripts/scorer-isolation-probe.mjs` — host-effect-aware, red on the host worker and green in the gVisor pod; `test/gym-scoring-hardening.test.ts` (boundary selection + refusal) |
 | A credential committed to the git index | `test/secret-scan.test.ts` |
 | A driver "passing" because it skipped everything | `test/driver-skips.test.ts`; exit-2 semantics in `scripts/live-proofs.mjs` / `scripts/verify.mjs` |
+| A first-page number with no current artifact (a stale "Tests executed" block) | `scripts/readme-numbers.mjs` (exit 1 on drift; run by `scripts/verify.mjs` and CI) |
+| A capability claim whose artifact is missing or no longer contains the behaviour | `scripts/claim-audit.mjs` claim registry |
+| A doc citing a file that does not exist (a hallucinated artifact) | `scripts/claim-audit.mjs` path reconciliation |
 
 The control for each family is in the same file (a legitimate fix still passes,
 an in-workspace symlink is kept, a committed effect replays, the golden patch
@@ -112,11 +138,12 @@ the hosted runner) and are run by hand.
 
 ## What still lives outside the repo
 
-`/tmp/opencode` is scratch: the multi-round review prose, the two-fake-server
-provider attack script, and the ad-hoc gym probes. The durable ones are encoded
-above as tests; the provider attack's mechanism is covered at unit level by
-`test/provider-config.test.ts`, and the gym capability inventory by
-`scripts/scorer-isolation-probe.mjs`. The gym's scorer attacks were encoded in
-`test/gym-forge.test.ts` when the `gym-runner` branch merged into `main`
-(`9fad1dd`); the remaining scorer-isolation gap is the host-boundary entry in
-`docs/KNOWN-OPEN.md`.
+`/tmp/opencode` is scratch: the multi-round review prose and the ad-hoc probes.
+The durable parts are now encoded in the repo: the demonstrated attacks as
+regression tests (table above), the gym capability inventory as
+`scripts/scorer-isolation-probe.mjs`, and the rolling audit as
+`scripts/claim-audit.mjs` (claims → artifacts, doc-path and dist
+reconciliations) plus `scripts/readme-numbers.mjs` (the README numbers), both
+wired into `npm run verify` and CI. The gym's scorer attacks live in
+`test/gym-forge.test.ts` / `test/gym-forge-channels.test.ts`; the remaining
+scorer-isolation gap is the host-boundary entry in `docs/KNOWN-OPEN.md`.
